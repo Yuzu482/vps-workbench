@@ -111,7 +111,7 @@ Antigravity 聊天生成时可以补充指令。工具审批卡片显示当前�
 
 ## 构建
 
-在此目录运行 npm ci --ignore-scripts，再运行 pwsh -File ./Build.ps1。构建使用同一工作区的 remote-workbench/vps-chat 共享组件和 windows-terminal 运行时源码。脚本校验缓存的 Electron 44.7.0 归档及两份兼容执行器归档。可通过 -ElectronZip、-CompatibilityArchive、-SubscriptionArchive 指定归档路径。
+从仓库根目录分别运行 `npm ci --ignore-scripts --prefix vps-workbench` 和 `npm ci --ignore-scripts --prefix remote-workbench/vps-chat`，再运行 `pwsh -File ./vps-workbench/Build.ps1`。构建使用同一工作区的共享组件和 `windows-terminal` 运行时源码。脚本校验缓存的 Electron 44.7.0 归档及两份兼容执行器归档。可通过 `-ElectronZip`、`-CompatibilityArchive` 和 `-SubscriptionArchive` 指定归档路径。
 
 发布输出在 `dist/VPS-Workbench-<版本>-win-x64`。DSH 插件由原来的 remote-workbench/vps-chat/Build.ps1 单独打包。运行 npm test 检查独立本机状态、导入、接口授权、订阅终端回执与界面预览。运行 npm run test:desktop 验证打包窗口和工作台交互。
 
@@ -128,4 +128,4 @@ python vps-workbench/tools/restore_history.py .release-history --verify
 python vps-workbench/tools/restore_history.py .release-history --restore VPS-Workbench-0.27.0-win-x64 .release-history/restored-0.27.0
 ```
 
-全新检出时，先安装 `vps-workbench` 的 npm 依赖。桌面测试所需的 Playwright 依赖可通过 `npm ci --ignore-scripts --prefix dsh-terminal-workbench/client/browser-test` 安装。构建所需的两个固定版本兼容包位于同一历史 Release，可用 `gh release download history-2026-11-22 --repo Yuzu482/vps-workbench --pattern '*.tgz' --dir .release-inputs` 下载，再用 `-CompatibilityArchive` 和 `-SubscriptionArchive` 指定。Electron 归档继续由 `Build.ps1` 固定版本和 SHA-256。
+桌面测试所需的 Playwright 依赖可通过 `npm ci --ignore-scripts --prefix dsh-terminal-workbench/client/browser-test` 安装。构建所需的两个固定版本兼容包位于同一历史 Release，可用 `gh release download history-2026-11-22 --repo Yuzu482/vps-workbench --pattern '*.tgz' --dir .release-inputs` 下载，再用 `-CompatibilityArchive` 和 `-SubscriptionArchive` 指定。Electron 归档继续由 `Build.ps1` 固定版本和 SHA-256。
