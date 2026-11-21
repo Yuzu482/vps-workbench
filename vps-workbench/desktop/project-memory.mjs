@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { readModelCatalog } from '../../remote-workbench/vps-chat/client/model-catalog.js';
 import {
   membershipKey, parseProjectMemberships, projectMembershipFor, projectMembershipId, projectMembershipIsolated,
 } from '../../remote-workbench/vps-chat/client/project-folders.js';
 import { memoryJournalKey } from './data.mjs';
 import {
   automaticMemoryPolicy, conversationIsolated, extensionPreferenceKey, extensionsForTurn, projectMemoryNotes, readExtensions,
+  readMemoryExtractionChange,
 } from '../extensions/state.mjs';
 import { readWorkflows, workflowKey, workflowRunKey } from '../workflow-engine/state.mjs';
 import { readWorkflowRun } from '../workflow-engine/runner.mjs';
@@ -35,17 +37,29 @@ function safeText(value, limit) {
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '').trim().slice(0, limit);
 }
 
+function boundedEvidence(value, maxBytes) {
+  value = value.toWellFormed();
+  let bytes = 2;
+  let end = 0;
+  for (const character of value) {
+    bytes += Buffer.byteLength(JSON.stringify(character)) - 2;
+    if (bytes > maxBytes) break;
+    end += character.length;
+  }
+  return value.slice(0, end).trimEnd();
+}
+
 function extractionPrompt(turn) {
   if (typeof turn.prompt !== 'string' || typeof turn.reply !== 'string') return null;
-  const prompt = safeText(turn.prompt, 2500);
-  const reply = safeText(turn.reply.replace(/```[\s\S]*?```/g, '[代码块]'), 1600);
+  const prompt = boundedEvidence(safeText(turn.prompt, 2500), 5000);
+  const reply = boundedEvidence(safeText(turn.reply.replace(/```[\s\S]*?(?:```|$)/g, '[代码块]'), 1600), 2850);
   if (!prompt || !reply) return null;
-  const evidence = JSON.stringify({ prompt, reply });
-  return evidence.length <= 7900 ? evidence : null;
+  // The renderer/source turn can contain arbitrary text. Only these two quoted JSON values are evidence.
+  return JSON.stringify({ prompt, reply });
 }
 
 function readCandidates(reply) {
-  if (typeof reply !== 'string' || reply.length > 8192) return null;
+  if (typeof reply !== 'string' || reply.length > 8192 || Buffer.byteLength(reply) > 8192) return null;
   try {
     const parsed = JSON.parse(reply);
     const candidates = parsed?.memories;
@@ -65,6 +79,7 @@ function journalFrom(raw) {
         !uuid.test(job.sessionId) || !uuid.test(job.turnId) || (job.projectId !== null && typeof job.projectId !== 'string') ||
         !Number.isSafeInteger(job.revision) || !['watching', 'reserved', 'settled'].includes(job.phase) ||
         (Object.hasOwn(job, 'workflowShared') && job.workflowShared !== true) ||
+        (Object.hasOwn(job, 'workflowRunId') && (job.workflowShared !== true || !uuid.test(job.workflowRunId))) ||
         (job.phase === 'reserved' && (!uuid.test(job.taskId) || !uuid.test(job.extractionSessionId)))))
     throw new Error('invalid_memory_journal');
   return value;
@@ -87,6 +102,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
   let worker = Promise.resolve();
   const queued = new Set();
   const watches = new Map();
+  const extractionRoutes = new Map();
   const stop = new AbortController();
 
   function update(change) {
@@ -103,6 +119,18 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
   const state = () => readExtensions(data.preference(extensionPreferenceKey) ?? null);
   const canExecute = () => !stop.signal.aborted && access().mode === 'execute';
   const isProject = (id) => data.projects().some(({ workspaceId }) => workspaceId === id);
+  const extractionChoice = (targetId) => state().memoryExtractionModels.find(choice => choice.targetId === targetId);
+
+  async function checkExtractionChoice(settings, { targetId, model, effort }) {
+    let models;
+    try {
+      const packet = await backend.request({ op: 'models', settings, targetId }, { current: true });
+      if (packet?.ok !== true) return 'memory_extraction_catalog_unavailable';
+      models = readModelCatalog(packet);
+    } catch { return 'memory_extraction_catalog_unavailable'; }
+    const entry = models.find(({ id }) => id === model);
+    return entry && (effort === undefined || entry.efforts.includes(effort)) ? null : 'memory_extraction_model_unavailable';
+  }
 
   function readMembership({ targetId, sessionId }) {
     try {
@@ -180,17 +208,43 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
     if (!eligible(job)) return settle(job);
     const settings = { ...body.settings, provider: 'codex' };
     if (job.phase === 'watching') {
-      const prompt = extractionPrompt(source);
+      let userPrompt = source.prompt;
+      if (job.workflowShared) {
+        let run;
+        try { run = readRun(job.workflowRunId); } catch { return settle(job); }
+        if ((job.workflowRunId && run?.id !== job.workflowRunId) || (run?.projectId ?? null) !== job.projectId ||
+            !run?.rows.some(({ targetId, sessionId, turnId }) =>
+              targetId === job.targetId && sessionId === job.sessionId && turnId === job.turnId)) return settle(job);
+        userPrompt = run.task;
+      }
+      const prompt = extractionPrompt({ prompt: userPrompt, reply: source.reply });
       if (!prompt) return settle(job);
+      const choice = extractionChoice(job.memoryTargetId);
+      const { model, effort } = choice ?? {};
+      function sameChoice() {
+        const latest = extractionChoice(job.memoryTargetId);
+        return latest?.model === model && latest?.effort === effort;
+      }
+      if (choice) {
+        const problem = await checkExtractionChoice(settings, choice);
+        if (!eligible(job) || !sameChoice()) return settle(job);
+        if (problem) {
+          onError(problem === 'memory_extraction_catalog_unavailable'
+            ? '无法读取此 VPS 的 Codex 模型目录，本轮未提炼记忆。'
+            : '此 VPS 已不提供所选的记忆提炼模型或推理强度，请在记忆设置中调整。');
+          return settle(job);
+        }
+      }
       const reserved = { ...job, phase: 'reserved', taskId: randomUUID(), extractionSessionId: randomUUID() };
       await update((previous) => ({ ...previous, jobs: previous.jobs.map((item) =>
         jobKey(item) === jobKey(job) ? reserved : item) }));
       job = reserved;
-      if (!eligible(job)) return settle(job);
+      if (!eligible(job) || !sameChoice()) return settle(job);
       // Reserve the ID before dispatch, so reopening only looks up this receipt.
       const launched = await extractor.request({ op: 'send', settings, targetId: job.memoryTargetId,
         sessionId: job.extractionSessionId,
         turnId: job.taskId, prompt, memoryExtraction: true, workspaceAccess: 'isolated',
+        ...(model === undefined ? {} : { model }), ...(effort === undefined ? {} : { effort }),
         ...(job.projectId === null ? { memoryScope: 'personal' } : {}) }, { current: true });
       if (launched?.ok === false && launched.code !== 'unknown') {
         onError('本轮自动记忆提炼未完成，请检查 VPS 上的 Codex。');
@@ -271,6 +325,18 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
   }
 
   return {
+    async changeExtractionModel(change) {
+      const choice = readMemoryExtractionChange(change);
+      const settings = extractionRoutes.get(choice.targetId);
+      if (!canExecute() || !settings) throw new Error('memory_extraction_target_unavailable');
+      if (choice.model !== undefined) {
+        const problem = await checkExtractionChoice(settings, choice);
+        if (problem) throw new Error(problem);
+      }
+      const result = await data.changeExtensions(change, { canCommit: canExecute });
+      if (!result) throw new Error('memory_extraction_target_unavailable');
+      return result;
+    },
     async request(incoming, { isLive = () => true } = {}) {
       if (Object.hasOwn(incoming, 'workflowFiles')) return changedWorkflowStage;
       let { projectMemory, workflowStage, ...body } = incoming;
@@ -294,10 +360,16 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
         const packet = await backend.request(body, { current: true });
         const route = body.op === 'preset' ? packet?.preset : packet;
         if (packet?.ok === true && route && digest.test(route.targetId)) {
+          const settings = route.settings ?? body.settings;
+          if (settings && digest.test(route.memoryTargetId)) {
+            extractionRoutes.delete(route.memoryTargetId);
+            if (extractionRoutes.size >= 64) extractionRoutes.delete(extractionRoutes.keys().next().value);
+            extractionRoutes.set(route.memoryTargetId, { ...settings, provider: 'codex' });
+          }
           // Reconcile original receipts again after restarting or reconnecting to this exact target.
           for (const job of journal.jobs) if (job.phase !== 'settled' && job.targetId === route.targetId &&
               job.memoryTargetId === route.memoryTargetId)
-            watchSource(job, { settings: route.settings ?? body.settings });
+            watchSource(job, { settings });
         }
         return packet;
       }
@@ -344,7 +416,8 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
             }
           }
           const job = { targetId, sessionId, turnId, projectId, memoryTargetId: scope.targetId,
-            revision: policy?.revision, phase: 'watching', ...(workflow ? { workflowShared: true } : {}) };
+            revision: policy?.revision, phase: 'watching',
+            ...(workflow ? { workflowShared: true, workflowRunId: workflowStage.runId.toLowerCase() } : {}) };
           if (policy?.enabled && !preflight.existingTurn) {
             if (journalUnavailable) return { ...changed, message: '记忆回执不可用。可关闭自动记忆或使用独立会话。' };
             if (await reserveSource(job)) staged = job;

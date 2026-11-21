@@ -445,8 +445,10 @@ class AcpTurn:
                     prefix = "…\n\n"
                     previous = self.reply.items.get("antigravity", "")
                     combined = previous + text[-limit:]
-                    if len(combined) > limit or len(text) > limit:
-                        combined = prefix + combined[-(limit - len(prefix)):]
+                    encoded = combined.encode("utf-16-le", "replace")
+                    if len(encoded) > limit * 2 or len(text) > limit:
+                        suffix_bytes = max(0, limit - len(prefix)) * 2
+                        combined = prefix + encoded[len(encoded) - suffix_bytes:].decode("utf-16-le", "ignore")
                     self.reply.update("antigravity", combined, replace=True)
                 else:
                     self.reply.update("antigravity", text, replace=False)
@@ -704,10 +706,11 @@ def run(privacy, isolation, support, config, reply, workflow=None, extensions=No
 
 
 def load_support(encoded):
+    limit = 50 * 1024
     packed = base64.b64decode(encoded, validate=True)
     decoder = zlib.decompressobj()
-    code = decoder.decompress(packed, 48 * 1024 + 1)
-    if len(code) > 48 * 1024 or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+    code = decoder.decompress(packed, limit + 1)
+    if len(code) > limit or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
         raise ValueError("invalid Antigravity helper")
     scope = {"__name__": "remote_dsh_chat_support"}
     exec(compile(code, "<remote-dsh-chat-support>", "exec"), scope)

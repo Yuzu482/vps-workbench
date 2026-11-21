@@ -2,6 +2,8 @@ export const extensionPreferenceKey = 'dsh-vps-chat:extensions:v1';
 
 const idPattern = /^[a-z][a-z0-9_-]{0,31}$/;
 const targetPattern = /^[a-f0-9]{64}$/;
+const modelPattern = /^[A-Za-z0-9_.:-]{1,100}$/;
+const effortPattern = /^[A-Za-z0-9_-]{1,24}$/;
 const uuidPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const memoryProviders = new Set(['codex', 'claude', 'claude-sdk', 'antigravity']);
 const controls = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/;
@@ -121,6 +123,25 @@ function personalPolicyEntry(value) {
   return Object.freeze({ enabled, revision });
 }
 
+function memoryExtractionEntry(value) {
+  const keys = ['model', 'effort'].filter(key => Object.hasOwn(value ?? {}, key));
+  fields(value, 'targetId', ...keys);
+  const { targetId, model, effort } = value;
+  validateId(targetId, targetPattern);
+  if (keys.includes('model')) validateId(model, modelPattern);
+  if (keys.includes('effort')) {
+    requireValid(model !== undefined);
+    validateId(effort, effortPattern);
+  }
+  return Object.freeze({ ...value });
+}
+
+export function readMemoryExtractionChange(change) {
+  const { op, ...choice } = change ?? {};
+  requireValid(op === 'set-memory-extraction-model');
+  return memoryExtractionEntry(choice);
+}
+
 function isolationEntry(value) {
   fields(value, 'targetId', 'sessionId');
   const { targetId, sessionId } = value;
@@ -170,9 +191,9 @@ function validateList(value, max, validate, identity = item => `${item.targetId 
 function validateState(value) {
   const hasPersonalPolicy = value && Object.hasOwn(value, 'personalMemory');
   const hasProjectState = hasPersonalPolicy || value && projectStateKeys.some(key => Object.hasOwn(value, key));
-  if (hasPersonalPolicy) fields(value, ...baseStateKeys, ...projectStateKeys, 'personalMemory');
-  else if (hasProjectState) fields(value, ...baseStateKeys, ...projectStateKeys);
-  else fields(value, ...baseStateKeys);
+  const hasExtractionModels = value && Object.hasOwn(value, 'memoryExtractionModels');
+  fields(value, ...baseStateKeys, ...(hasProjectState ? projectStateKeys : []), ...(hasPersonalPolicy ? ['personalMemory'] : []),
+    ...(hasExtractionModels ? ['memoryExtractionModels'] : []));
   validateEnabled(value.memoryEnabled);
   const memories = validateList(value.memories, maxManualMemories + maxGeneratedMemories, memoryEntry);
   const generated = memories.filter(note => note.source);
@@ -197,6 +218,11 @@ function validateState(value) {
     isolatedConversations: validateList(hasProjectState ? value.isolatedConversations : [], 2048, isolationEntry, conversationKey),
     automaticMemoryHistory: validateList(hasProjectState ? value.automaticMemoryHistory : [], maxMemoryHistory, sourceEntry, sourceKey),
     personalMemory: personalPolicyEntry(hasPersonalPolicy ? value.personalMemory : { enabled: false, revision: 0 }),
+    memoryExtractionModels: validateList(hasExtractionModels ? value.memoryExtractionModels : [], 256, entry => {
+      const choice = memoryExtractionEntry(entry);
+      requireValid(choice.model !== undefined);
+      return choice;
+    }, choice => choice.targetId),
   });
 }
 
@@ -373,6 +399,12 @@ export function applyExtensionChange(state, change) {
       if (enabled !== next.personalMemory.enabled) {
         next.personalMemory = { enabled, revision: next.personalMemory.revision + 1 };
       }
+      break;
+    }
+    case 'set-memory-extraction-model': {
+      const choice = readMemoryExtractionChange(change);
+      const remaining = next.memoryExtractionModels.filter(({ targetId }) => targetId !== choice.targetId);
+      next.memoryExtractionModels = choice.model === undefined ? remaining : [...remaining, choice];
       break;
     }
     case 'set-conversation-isolation': {

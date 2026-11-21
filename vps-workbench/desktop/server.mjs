@@ -143,6 +143,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
   return {
     origin,
     cookie: { url: origin, name: cookieName, value: ticket, path: '/', httpOnly: true, sameSite: 'strict' },
+    changeMemoryExtractionModel(change) { return chat.changeExtractionModel(change); },
     accessChanged() { if (access().mode === 'browse') host.revokeAccount(); },
     async close() {
       terminal.dispose();

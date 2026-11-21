@@ -106,7 +106,7 @@ export function useWorkflowControls({ store, rpc, readList, connection, remoteEn
           const draft = readWorkflowProposal(turn.reply, {
             requireStageIds: previous?.stages.some(({ agent, agentPreset, fileAccess }) => Boolean(agent || agentPreset || fileAccess)),
           });
-          if (!draft) throw new Error('这条回复未提供可应用的工作流配置。');
+          if (!draft) throw new Error('回复缺少可审阅的工作流配置。请让模型缩短草案，并重新输出一个完整的 vps-workflow 代码块。');
           setProposal({ id: binding.id, revision: binding.revision, draft: preserveWorkflowAgents(previous, draft) });
           setOpen(true);
         } catch (failure) {

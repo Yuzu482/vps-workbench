@@ -200,6 +200,7 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
         const change = await readPacket(request);
         if (change.op === 'accept-automatic-memory' || change.op === 'set-automatic-memory' &&
             !projects.some(({ workspaceId }) => workspaceId === change.projectId)) throw new Error('invalid_preview_change');
+        if (change.op === 'set-memory-extraction-model') return json(response, await chat.changeExtractionModel(change));
         return json(response, await data.changeExtensions(change));
       } catch { return json(response, { ok: false, code: 'invalid_preview_change' }, 400); }
     }

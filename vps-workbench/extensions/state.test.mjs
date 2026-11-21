@@ -56,7 +56,8 @@ const ingressNote = { title: 'Ingress routing', text: 'Ingress uses a private li
 test('preference defaults are immutable and malformed stored content is rejected', () => {
   assert.equal(extensionPreferenceKey, 'dsh-vps-chat:extensions:v1');
   assert.deepEqual(empty(), { servers: [], plugins: [], memories: [], memoryEnabled: false,
-    automaticMemory: [], isolatedConversations: [], automaticMemoryHistory: [], personalMemory: { enabled: false, revision: 0 } });
+    automaticMemory: [], isolatedConversations: [], automaticMemoryHistory: [], personalMemory: { enabled: false, revision: 0 },
+    memoryExtractionModels: [] });
   assert(Object.isFrozen(empty()));
   assert(Object.isFrozen(empty().memories));
   for (const raw of ['', '{', 'null', '{}', '[]', 12, ' '.repeat(2 * 1024 * 1024 + 1)]) {
@@ -65,6 +66,21 @@ test('preference defaults are immutable and malformed stored content is rejected
   const duplicate = server('docs').server;
   assert.throws(() => readExtensions(JSON.stringify({ ...empty(), servers: [duplicate, duplicate] })), invalid);
   assert.throws(() => readExtensions(JSON.stringify({ ...empty(), extra: 1 })), invalid);
+});
+
+test('extraction choices round trip by VPS without changing memory opt-in or revisions', () => {
+  const base = applyAll(empty(), personal(), automatic());
+  const first = { targetId, model: 'one-test-model', effort: 'low' };
+  const second = { targetId: otherTargetId, model: 'another-test-model' };
+  const action = (choice) => ({ op: 'set-memory-extraction-model', ...choice });
+  const next = applyAll(base, action(first), action(second));
+  assert.deepEqual(next, { ...base, memoryExtractionModels: [first, second] });
+  assert.deepEqual(readExtensions(JSON.stringify(next)), next);
+  assert.deepEqual(applyAll(next, action({ targetId })).memoryExtractionModels, [second]);
+  assert.throws(() => applyAll(next, action({ targetId, effort: 'low' })), invalid);
+  assert.throws(() => applyAll(next, action({ targetId, model: undefined })), invalid);
+  assert.throws(() => applyAll(next, action({ targetId, model: 'invalid model' })), invalid);
+  assert.throws(() => readExtensions(JSON.stringify({ ...next, memoryExtractionModels: [first, first] })), invalid);
 });
 
 test('MCP entries are disabled on add and only enabled registry IDs reach their target', () => {
@@ -411,4 +427,19 @@ test('personal-memory settings have an independent switch and show personal sour
   const disconnected = renderToStaticMarkup(React.createElement(Settings, { ...props, memoryTargetId: '' }));
   assert.match(disconnected, /<input(?=[^>]*role="switch")(?=[^>]*aria-label="开启个人自动记忆")(?=[^>]*checked="")[^>]*>/);
   assert.doesNotMatch(disconnected, /Ingress routing/);
+});
+
+test('the memory tab shows only the selected VPS extraction choice and its own settings controls', () => {
+  const Settings = createExtensionSettings(React);
+  const state = applyAll(empty(),
+    { op: 'set-memory-extraction-model', targetId, model: 'fixture-codex', effort: 'low' },
+    { op: 'set-memory-extraction-model', targetId: otherTargetId, model: 'other-vps-model' });
+  const markup = renderToStaticMarkup(React.createElement(Settings, { section: 'memory', state, memoryTargetId: targetId,
+    readMemoryModels: () => [], projects: new Map() }));
+  assert.match(markup, /记忆提炼模型/);
+  assert.match(markup, /提炼推理强度/);
+  assert.match(markup, /value="fixture-codex" selected=""/);
+  assert.match(markup, /value="low" selected=""/);
+  assert.match(markup, /使用 VPS 默认模型/);
+  assert.doesNotMatch(markup, /other-vps-model/);
 });

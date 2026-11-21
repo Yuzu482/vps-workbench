@@ -1,6 +1,9 @@
 export const workflowKey = 'dsh-vps-chat:workflows:v1';
 export const workflowRunKey = 'dsh-vps-chat:workflow-run:v1';
 export const workflowEditPrefix = '根据用户要求提出一份工作流草案。';
+export const maxWorkflowChatLength = 8192;
+
+const proposalLengthGuidance = '请缩短步骤指令后重新生成，或在编辑器中拆分或调整工作流。';
 
 export const workflowProviders = Object.freeze({
   codex: Object.freeze({ label: 'Codex', models: true, mcp: true }),
@@ -245,13 +248,14 @@ export function applyWorkflowChange(records, change) {
 export function createWorkflowEditPrompt(request, draft = null) {
   const goal = workflowText(request, 2000, '工作流编辑要求');
   const prompt = [
-    `${workflowEditPrefix}只返回一个以三个反引号和 vps-workflow 开始、以三个反引号结束的代码块。`,
-    '代码块正文须为 JSON，且只能包含以下字段，须有 1 至 8 个步骤。',
-    '{"name":"工作流名称","stages":[{"id":"s1","name":"步骤名称","provider":"codex","model":"","instruction":"步骤指令"}],"edges":[]}',
+    `${workflowEditPrefix}只返回一个完整的顶层代码块。首行为三个反引号紧接 vps-workflow，末行为三个反引号。`,
+    `正文为占一行的紧凑 JSON，包含 1 至 8 个步骤。整个代码块（含首尾围栏和换行）最多 ${maxWorkflowChatLength} 个 UTF-16 代码单元。常用汉字占 1 个，补充平面字符（如 😀）占 2 个。`,
     '每步的 id 唯一，以英文字母或数字开头，可含字母、数字、下划线或短横线，最多 40 个字符。用 {"from":"s1","to":"s2"} 表示 s2 等待 s1。可并行、分支和汇合，禁止循环或重复连线。',
-    'provider 只允许 codex、claude、claude-sdk、antigravity。“model”填空字符串时使用该执行端的默认模型。只有用户明确指定时才填写模型 ID。',
-    '编辑现有草案时，保留现有步骤 ID 和用户未要求修改的连线、名称、步骤顺序、服务商、模型和指令。',
-    '不要添加密钥、连接信息、命令或额外字段。草案仅供用户审阅。',
+    'provider 只允许 codex、claude、claude-sdk、antigravity。新增步骤时，用户未指定模型就填 "model":""，使用该执行端的默认模型。',
+    '编辑现有草案时保留现有步骤 ID，只修改用户明确要求的字段。保留未指定的名称、步骤顺序、连线、服务商、模型和指令，返回完整草案。',
+    '例如“给审校阶段增加证据位置”只修改 review 的 instruction，将“核对初稿。”改为“核对初稿并标明证据位置。”，并返回完整草案。',
+    '{"name":"写作与审校","stages":[{"id":"write","name":"写作","provider":"codex","model":"","instruction":"写出初稿。"},{"id":"review","name":"审校","provider":"claude","model":"","instruction":"核对初稿并标明证据位置。"}],"edges":[{"from":"write","to":"review"}]}',
+    '仅使用示例中的字段。不要添加密钥、连接信息或命令。草案仅供用户审阅。',
     '用户要求',
     goal,
   ].join('\n');
@@ -259,13 +263,13 @@ export function createWorkflowEditPrompt(request, draft = null) {
   const metadata = validateWorkflowDraft(draft);
   metadata.stages = metadata.stages.map(({ agent, agentPreset, fileAccess, ...stage }) => stage);
   const reference = `${prompt}\n\n当前草案，作为参考\n${JSON.stringify(metadata)}`;
-  if (reference.length > 8192) throw new Error('编辑请求超出聊天长度上限。请缩短本轮要求，或在编辑器中拆分或调整工作流。');
+  if (reference.length > maxWorkflowChatLength) throw new Error(`编辑请求超出聊天长度上限。请缩短本轮要求。${proposalLengthGuidance}`);
   return reference;
 }
 
 export function readWorkflowProposal(reply, { requireStageIds = false } = {}) {
   if (typeof reply !== 'string') return null;
-  const fenceLines = /^ {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r?\n|$)/gm;
+  const fenceLines = /(?:^|(?<=[\r\n])) {0,3}(`{3,}|~{3,})([^\r\n]*)(?:\r\n?|\n|$)/g;
   let fence = null;
   let source = null;
   for (const line of reply.matchAll(fenceLines)) {
@@ -274,8 +278,11 @@ export function readWorkflowProposal(reply, { requireStageIds = false } = {}) {
     if (fence) {
       if (marker[0] !== fence.marker[0] || marker.length < fence.marker.length || info) continue;
       if (fence.proposal) {
-        if (marker.length !== 3 || line.index - fence.start > 8192) throw new Error('工作流草案代码块格式无效或过长。');
-        source = reply.slice(fence.start, line.index);
+        if (line.index + line[0].length - fence.start > maxWorkflowChatLength) {
+          throw new Error(`工作流草案代码块过长（含围栏和换行最多 ${maxWorkflowChatLength} 个 UTF-16 代码单元）。${proposalLengthGuidance}`);
+        }
+        if (marker.length !== 3) throw new Error('工作流草案代码块格式无效。');
+        source = reply.slice(fence.bodyStart, line.index);
       }
       fence = null;
       continue;
@@ -283,9 +290,9 @@ export function readWorkflowProposal(reply, { requireStageIds = false } = {}) {
     const proposal = /^vps-workflow(?:\s|$)/u.test(info);
     if (proposal && source !== null) throw new Error('回复须只包含一个工作流草案代码块。');
     if (proposal && (marker !== '```' || info !== 'vps-workflow')) throw new Error('工作流草案代码块格式无效。');
-    fence = { marker, proposal, start: line.index + line[0].length };
+    fence = { marker, proposal, start: line.index, bodyStart: line.index + line[0].length };
   }
-  if (fence?.proposal) throw new Error('工作流草案代码块不完整。');
+  if (fence?.proposal) throw new Error(`工作流草案代码块不完整，结束围栏可能被截断。${proposalLengthGuidance}`);
   if (source === null) return null;
   let value;
   try { value = JSON.parse(source); } catch { throw new Error('工作流草案须使用有效的 JSON。'); }

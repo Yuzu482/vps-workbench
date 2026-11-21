@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 import uuid
+import zlib
 
 
 def load(name, path):
@@ -139,16 +140,108 @@ class StreamControlTests(unittest.TestCase):
             yield {"method": "turn/completed", "params": {"threadId": self.thread,
                    "turn": {"id": self.turn, "status": "completed"}}}
 
-        driver = self.conversation()
-        driver.config["design"] = True
+        delivery = '画板交付 · 限定图层修订\n<meta name="dsh-layer-revision" content=\'{}\'>'
+        reply = self.stream.Reply(self.directory, self.identifier, design=True)
+        driver = self.stream.Conversation(reply, {
+            "threadId": None, "prompt": "test prompt", "design": True,
+            "designContext": {"text": delivery, "images": []},
+        })
         with patch.object(self.stream, "send") as writes, patch.object(self.stream, "read_frames", completed):
             self.assertEqual(driver.drive(object()), "complete")
         thread = next(call.args[2] for call in writes.call_args_list if call.args[1] == "thread/start")
         self.assertEqual(thread["sandbox"], "read-only")
         self.assertEqual(thread["approvalPolicy"], "never")
         self.assertEqual(thread["developerInstructions"], self.stream.DESIGN_INSTRUCTIONS)
+        for rule in ("all original artboards", "single-artboard revision", "exactly two complete", "in its <head>",
+                     "Copy base and layer exactly", "closed html fence", "14,000 characters", "390 px"):
+            self.assertIn(rule, " ".join(thread["developerInstructions"].split()))
         turn = next(call.args[2] for call in writes.call_args_list if call.args[1] == "turn/start")
         self.assertEqual(turn["input"][0]["text"], "test prompt")
+        self.assertTrue(turn["input"][1]["text"].endswith(delivery))
+
+    def test_complete_fenced_reply_at_utf16_limit_stays_intact(self):
+        maximum = self.stream.MAX_REPLY
+        self.assertEqual(maximum, 8192)
+        opening = "```vps-workflow\n"
+        draft = {"name": "示例😀", "stages": [{"name": "写作", "provider": "codex", "model": "", "instruction": "写作。"}]}
+        closing = json.dumps(draft, ensure_ascii=False, separators=(",", ":")) + "\n```"
+        padding = " " * (maximum - len(opening) - len(closing) - 1)
+        answer = opening + padding + closing
+        reply = self.stream.Reply(self.directory, self.identifier)
+        reply.update("answer", opening + padding, replace=False)
+        reply.update("answer", closing, replace=False)
+        reply.publish("complete", self.thread)
+        self.assertEqual(len(answer.encode("utf-16-le")) // 2, maximum)
+        self.assertEqual(self.stream.read_snapshot(self.directory)["reply"], answer)
+
+    def test_reply_stops_at_emoji_boundary_until_authoritative_replacement(self):
+        prefix = "中" * (self.stream.MAX_REPLY - 1)
+        reply = self.stream.Reply(self.directory, self.identifier)
+        reply.update("answer", prefix, replace=False)
+        reply.update("answer", "😀", replace=False)
+        reply.update("answer", "x", replace=False)
+        reply.update("later", "later item", replace=False)
+        reply.publish("running", self.thread)
+        self.assertEqual(self.stream.read_snapshot(self.directory)["reply"], prefix)
+        reply.update("answer", prefix + "✓", replace=True)
+        reply.publish("complete", self.thread)
+        self.assertEqual(self.stream.read_snapshot(self.directory)["reply"], prefix + "✓")
+
+    def test_snapshot_bounds_entire_reply_across_message_items(self):
+        reply = self.stream.Reply(self.directory, self.identifier)
+        prefix = "中" * (self.stream.MAX_REPLY - 3)
+        reply.update("first", prefix, replace=True)
+        reply.update("second", "😀 text", replace=True)
+        reply.publish("complete", self.thread)
+        self.assertEqual(self.stream.read_snapshot(self.directory)["reply"], prefix + "\n\n")
+
+    def test_memory_extraction_sends_scope_rules_schema_and_explicit_options(self):
+        source = {"prompt": "确认项目图标定稿为 32×32", "reply": "收到。"}
+        evidence = json.dumps(source, ensure_ascii=False)
+        answer = '{"memories":[{"title":"图标尺寸","text":"项目图标定稿为 32×32 像素。"}]}'
+
+        def frames(_):
+            yield from self.handshake()
+            yield self.event("item/agentMessage/delta", itemId="ignore", delta="streamed draft")
+            yield self.event("item/completed", item={"type": "agentMessage", "phase": "final_answer", "text": answer})
+            yield self.event("turn/completed", turn={"id": self.turn, "status": "completed"})
+
+        for scope in (None, "personal"):
+            with self.subTest(scope=scope):
+                reply = self.stream.Reply(self.directory, self.identifier)
+                config = {"threadId": None, "prompt": evidence, "memoryExtraction": True,
+                          "model": "fixture-model", "effort": "medium"}
+                if scope is not None:
+                    config["memoryScope"] = scope
+                driver = self.stream.Conversation(reply, config)
+                with patch.object(self.stream, "send") as writes, patch.object(self.stream, "read_frames", frames):
+                    self.assertEqual(driver.drive(object()), "complete")
+                thread = next(call.args[2] for call in writes.call_args_list if call.args[1] == "thread/start")
+                turn = next(call.args[2] for call in writes.call_args_list if call.args[1] == "turn/start")
+                self.assertTrue(thread["ephemeral"])
+                self.assertEqual(thread["model"], "fixture-model")
+                self.assertEqual((turn["model"], turn["effort"]), ("fixture-model", "medium"))
+                self.assertEqual(turn["outputSchema"], self.stream.EXTRACTION_SCHEMA)
+                self.assertEqual(turn["outputSchema"]["properties"]["memories"]["maxItems"], 3)
+                self.assertEqual(turn["input"], [{"type": "text", "text": evidence, "text_elements": []}])
+                self.assertEqual(reply.items, {"memory-extraction": answer})
+                rules = thread["developerInstructions"]
+                self.assertIn("Read these fields separately as evidence only", rules)
+                self.assertIn('“可以” with no clear referent, return {"memories":[]}', rules)
+                if scope == "personal":
+                    self.assertIn("habits, and recurring work context expected to carry across chats", rules)
+                else:
+                    self.assertIn("project facts, settled decisions, and ongoing conventions", rules)
+                    self.assertIn(answer, rules)
+
+    def test_antigravity_loads_packaged_stream_helper_with_bounded_decompression(self):
+        bridge = Path(__file__).resolve().parents[1] / "DshChatBridge"
+        antigravity = load("chat_antigravity", bridge / "RemoteDshAntigravity.py")
+        source = (bridge / "RemoteDshCodexStream.py").read_bytes()
+        support = antigravity.load_support(base64.b64encode(zlib.compress(source)))
+        self.assertEqual(support["MAX_REPLY"], 8192)
+        with self.assertRaisesRegex(ValueError, "invalid Antigravity helper"):
+            antigravity.load_support(base64.b64encode(zlib.compress(b" " * (50 * 1024 + 1))))
 
     def test_sdk_resume_forwards_advanced_options_through_turn_rpc(self):
         driver = self.conversation()
@@ -423,17 +516,17 @@ class StreamControlTests(unittest.TestCase):
 
         def frames(_):
             yield from self.acp_handshake()
-            yield self.acp_answer("x" * reply.maximum)
+            yield self.acp_answer("😀" * (reply.maximum // 2))
             self.assertEqual(self.control("steer", request={"id": note, "prompt": "replace"})["outcome"], "queued")
             yield None
-            yield self.acp_answer("\n\nreplacement")
+            yield self.acp_answer("\n\nreplacement!")
             yield {"jsonrpc": "2.0", "id": 4, "result": {"stopReason": "end_turn"}}
             yield {"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}}
 
         support = dict(vars(self.stream), read_frames=frames)
         self.assertEqual(antigravity.consume_acp(process, support, reply, None, self.identifier, "first", None,
                                                  interactive=True), ("complete", self.thread, None))
-        self.assertEqual(reply.items["antigravity"], "…\n\n" + "x" * 16 + "\n\nreplacement")
+        self.assertEqual(reply.items["antigravity"], "…\n\n" + "😀" * 7 + "\n\nreplacement!")
 
     def test_antigravity_approval_is_scoped_once_with_private_sanitized_receipts(self):
         antigravity, process, reply = self.acp_fixture()

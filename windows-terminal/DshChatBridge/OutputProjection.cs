@@ -53,7 +53,7 @@ internal static class OutputProjection
                 .Take(8 - activity.Count).Select(item => new Activity(item.Title, "")));
         }
         if (state == "failed") activity.Add(new Activity("VPS 执行失败", "请检查 VPS 上的 Codex 登录、运行环境和出口设置。"));
-        return new(state, Visible(reply, 8192), activity.ToArray());
+        return new(state, Visible(reply, CodexStream.MaxChatReply), activity.ToArray());
     }
 
     private static bool MatchesCodexThread(string output, Guid? expected, Func<Guid, bool>? allowsThread)
@@ -109,9 +109,9 @@ internal static class OutputProjection
                 {
                     switch (BridgeProtocol.Text(part, "type"))
                     {
-                        case "text" when answer.Length < 8192 && BridgeProtocol.Text(part, "text") is string text && text.Length > 0:
+                        case "text" when BridgeProtocol.Text(part, "text") is string text && text.Length > 0:
                             if (answer.Length > 0) answer.Append("\n\n");
-                            answer.Append(Visible(text, Math.Max(0, 8192 - answer.Length)));
+                            answer.Append(Visible(text, text.Length));
                             break;
                         case "tool_use" when activity.Count < 8 && BridgeProtocol.Text(part, "name") is "Read" or "Glob" or "Grep":
                             activity.Add(new Activity("只读工具", BridgeProtocol.Text(part, "name")!));
@@ -128,7 +128,7 @@ internal static class OutputProjection
         if (state == "failed") activity.Add(new Activity("VPS 执行失败", "请核对远端运行环境、Claude Code 认证和预期出口。"));
         string reply = state == "complete" && parsed.LastOrDefault(item => item.Kind == ChatItemKind.Assistant) is ChatItem final
             ? final.Text : answer.ToString();
-        return new(state, Visible(reply, 8192), activity.ToArray(), Model: model);
+        return new(state, Visible(reply, CodexStream.MaxChatReply), activity.ToArray(), Model: model);
     }
 
     internal static string Visible(string text, int limit)

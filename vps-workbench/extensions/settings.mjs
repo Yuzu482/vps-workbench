@@ -1,4 +1,5 @@
 import { automaticMemoryPolicy } from './state.mjs';
+import { effortName } from '../../remote-workbench/vps-chat/client/model-catalog.js';
 
 const styles = `
   .vc-extension-settings {display:grid; gap:10px}
@@ -143,7 +144,73 @@ export function createExtensionSettings(React) {
               h('p', { className: 'vc-extension-preview' }, prompt.text))))))));
   }
 
-  function MemorySettings({ state, submit, targetId, memoryTargetId, projects, selectedProject, disabled }) {
+  function MemoryExtractionModel({ state, memoryTargetId, readMemoryModels, submit, disabled }) {
+    const saved = state.memoryExtractionModels.find(({ targetId }) => targetId === memoryTargetId);
+    const savedModel = saved?.model ?? '';
+    const savedEffort = saved?.effort ?? '';
+    const [model, setModel] = React.useState(savedModel);
+    const [effort, setEffort] = React.useState(savedEffort);
+    const [models, setModels] = React.useState(null);
+    const [loading, setLoading] = React.useState(false);
+    const [error, setError] = React.useState('');
+    const request = React.useRef(null);
+    React.useEffect(() => {
+      setModel(savedModel);
+      setEffort(savedEffort);
+    }, [savedModel, savedEffort]);
+    React.useEffect(() => () => request.current?.abort(), []);
+    const ready = Boolean(memoryTargetId && readMemoryModels);
+    const selected = models?.find(({ id }) => id === model);
+    const offeredEfforts = selected?.efforts ?? [];
+    const available = !model || Boolean(selected && (!effort || offeredEfforts.includes(effort)));
+    const dirty = model !== savedModel || effort !== savedEffort;
+
+    async function load() {
+      const controller = new AbortController();
+      request.current?.abort();
+      request.current = controller;
+      setLoading(true);
+      setError('');
+      setModels(null);
+      try {
+        const result = await readMemoryModels(controller.signal);
+        if (!controller.signal.aborted) setModels(result);
+      } catch {
+        if (!controller.signal.aborted) setError('无法读取此 VPS 的 Codex 模型目录。');
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+
+    function save() {
+      return submit({ op: 'set-memory-extraction-model', targetId: memoryTargetId,
+        ...(model ? { model } : {}), ...(effort ? { effort } : {}) });
+    }
+
+    return h('section', { className: 'vc-settings-group' },
+      h('h4', null, '记忆提炼模型'),
+      h('p', { className: 'vc-settings-description' }, '个人和项目自动记忆共用此 VPS 的提炼设置，聊天模型单独设置。'),
+      field('Codex 模型', { value: model, disabled: disabled || !ready || loading || (!models && !model),
+        onChange: event => { setModel(event.target.value); setEffort(''); } }, 'select', [
+        h('option', { key: '', value: '' }, '使用 VPS 默认模型'),
+        model && !selected ? h('option', { key: model, value: model }, models ? `${model}（当前不可用）` : model) : null,
+        ...Array.from(models ?? [], ({ id, displayName }) => h('option', { key: id, value: id }, displayName)),
+      ]),
+      field('提炼推理强度', { value: effort, disabled: disabled || !ready || loading || (!offeredEfforts.length && !effort),
+        onChange: event => setEffort(event.target.value) }, 'select', [
+        h('option', { key: '', value: '' }, '使用模型默认强度'),
+        effort && !offeredEfforts.includes(effort) ? h('option', { key: effort, value: effort },
+          models ? `${effortName(effort)}（当前不可用）` : effortName(effort)) : null,
+        ...offeredEfforts.map(id => h('option', { key: id, value: id }, effortName(id))),
+      ]),
+      !ready ? h('p', { className: 'vc-settings-description' }, '连接 VPS 并切换为 VPS 执行后可调整提炼模型。') : null,
+      models?.length === 0 ? h('p', { role: 'status' }, '此 VPS 没有返回可选的 Codex 模型。') : null,
+      error ? h('p', { className: 'vc-settings-inline-error', role: 'alert' }, error) : null,
+      actions(button(loading ? '正在读取模型目录…' : '读取 Codex 模型目录', load, disabled || !ready || loading),
+        button('保存提炼设置', save, disabled || !ready || loading || !dirty || !available, true)));
+  }
+
+  function MemorySettings({ state, submit, targetId, memoryTargetId, readMemoryModels, projects, selectedProject, disabled }) {
     const [draft, setDraft] = React.useState(null);
     const [automaticProject, setAutomaticProject] = React.useState(selectedProject);
     React.useEffect(() => setAutomaticProject(selectedProject), [selectedProject]);
@@ -220,6 +287,7 @@ export function createExtensionSettings(React) {
         !memoryTargetId ? h('p', null, '连接 VPS 后可设置自动项目记忆。') : null),
       draft?.source && draft.projectId !== null ? draftForm : null,
       automaticNotes.map(noteCard),
+      h(MemoryExtractionModel, { state, memoryTargetId, readMemoryModels, submit, disabled }),
       h('section', { className: 'vc-settings-group' },
         toggle('随消息发送手动记忆', state.memoryEnabled,
           enabled => submit({ op: 'set-memory-enabled', enabled }), disabled, {
@@ -245,11 +313,15 @@ export function createExtensionSettings(React) {
       request.current = true;
       setError('');
       setPending(true);
+      let op;
       try {
-        await change(typeof action === 'function' ? await action() : action);
+        const update = typeof action === 'function' ? await action() : action;
+        op = update.op;
+        await change(update);
         return true;
       } catch {
-        setError(section === 'plugins' ? '无法保存插件设置，请检查清单格式、内容长度及插件 ID。' : '无法保存，请检查设置内容和长度后重试。');
+        setError(op === 'set-memory-extraction-model' ? '无法保存记忆提炼设置。请核对 VPS 连接和 Codex 模型目录，或恢复默认。'
+          : section === 'plugins' ? '无法保存插件设置，请检查清单格式、内容长度及插件 ID。' : '无法保存，请检查设置内容和长度后重试。');
         return false;
       } finally {
         request.current = false;

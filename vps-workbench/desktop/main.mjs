@@ -197,6 +197,7 @@ async function start() {
   ipcMain.handle('workbench:extensions', (event, change) => {
     trustedRenderer(event);
     if (change?.op === 'accept-automatic-memory') throw new Error('invalid_extension_change');
+    if (change?.op === 'set-memory-extraction-model') return runtime.changeMemoryExtractionModel(change);
     if (change?.op === 'set-automatic-memory' && !data.projects().some(({ workspaceId }) => workspaceId === change.projectId))
       throw new Error('invalid_project');
     return data.changeExtensions(change);

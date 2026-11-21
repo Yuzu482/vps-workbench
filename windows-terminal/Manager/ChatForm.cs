@@ -501,7 +501,8 @@ class ChatForm : Form
         try
         {
             if (entry is null && IsSubscription(entry)) entry = EnsureSubscriptionDraft();
-            string prompt = string.IsNullOrWhiteSpace(composer.Text) && attachments.Count != 0 ? "请查看本轮附件。" : composer.Text;
+            string prompt = string.IsNullOrWhiteSpace(composer.Text) && attachments.Count != 0
+                ? "逐份查看附件。列出文件名和一个要点，标明无法读取的附件。" : composer.Text;
             bool sharedDraft = entry?.Conversation is not null && (entry.Conversation.NativeProfile || entry.Conversation.ClaudeAccountSourceId is not null) && entry.Turns.Count == 0;
             string project = sharedDraft ? workspace.Text.Trim() : entry?.Conversation?.Workspace ?? workspace.Text.Trim();
             string address = sharedDraft ? ipv4.Text.Trim() : entry?.Conversation?.ExpectedIpv4 ?? ipv4.Text.Trim();

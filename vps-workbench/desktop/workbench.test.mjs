@@ -10,7 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createWorkbenchRouteReader } from '../../remote-workbench/vps-chat/host/account-view.js';
 import { openAppData } from './data.mjs';
 import { readWorkflows, workflowKey, workflowRunKey } from '../workflow-engine/state.mjs';
-import { createWorkflowRunner } from '../workflow-engine/runner.mjs';
+import { createWorkflowRunner, workflowStagePrompt } from '../workflow-engine/runner.mjs';
 import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
 import { importWorkbenchSnapshot } from './migrate.mjs';
 import { startWorkbenchServer } from './server.mjs';
@@ -634,6 +634,27 @@ test('parallel workflow dispatch uses the existing authenticated desktop bridge 
     runner.dispose();
   } finally {
     await app.close();
+  }
+});
+
+test('setup example brief and reviewer both receive the original facts and flag the missing registration channel', () => {
+  const workflow = createSetupExample('codex', 'fixture-codex');
+  const previousReply = '可以通过邮箱报名。';
+  const run = { workflow, task: setupExampleTask, rows: [{ reply: previousReply }, { reply: '' }] };
+  for (const [index, stage] of workflow.stages.entries()) {
+    for (const fact of ['首次到访的读者', '免费报名', '60 分钟']) {
+      assert.ok(setupExampleTask.includes(fact));
+      assert.ok(stage.instruction.includes(fact));
+    }
+    assert.match(stage.instruction, /原始用户任务/u);
+    assert.match(stage.instruction, /报名渠道写为「待确认」/u);
+    assert.equal(stage.agent.memory, 'isolated');
+    const prompt = workflowStagePrompt(run, index);
+    assert.ok(prompt.indexOf(setupExampleTask) < prompt.indexOf(stage.instruction));
+    if (index === 1) {
+      assert.match(stage.instruction, /逐项核对/u);
+      assert.ok(prompt.includes(`> ${previousReply}`));
+    }
   }
 });
 

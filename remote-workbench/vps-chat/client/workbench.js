@@ -1401,6 +1401,14 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       return result;
     }
 
+    async function readMemoryModels(signal) {
+      if (!remoteEnabled || !ready || !memoryTargetId || !connection?.hostKeyConfirmed) {
+        throw new Error('请连接并确认当前 VPS 后读取记忆提炼模型。');
+      }
+      const settings = { ...connection, provider: 'codex' };
+      return readModelCatalog(await rpc('models', { settings, targetId: memoryTargetId }, signal));
+    }
+
     async function providerUpdate(provider, signal) {
       if (provider === subscriptionProvider) {
         const preset = {
@@ -2325,6 +2333,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         } } : null,
         extensionSettings: ExtensionSettings && extensions ? { Component: ExtensionSettings, props: {
           ...extensions, targetId: connection?.provider === 'codex' ? scope : '', memoryTargetId, projects, selectedProject,
+          readMemoryModels: remoteEnabled && ready && memoryTargetId ? readMemoryModels : undefined,
           mcpTargetId: connection?.provider === 'codex' || connection?.provider === 'antigravity' ? scope : '',
           mcpProvider: connection?.provider,
         } } : null,

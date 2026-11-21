@@ -433,8 +433,10 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       });
       await settingsPanel.getByText('个人自动记忆', { exact: true }).click();
       await personalMemory.and(settingsPanel.locator('input:not(:checked)')).waitFor();
-      await settingsPanel.getByRole('combobox').selectOption('');
+      await settingsPanel.getByRole('combobox', { name: /^项目/ }).selectOption('');
       assert.equal(await settingsPanel.getByRole('switch', { name: '开启此项目的自动记忆', exact: true }).isDisabled(), true);
+      assert.equal(await settingsPanel.getByRole('combobox', { name: /^Codex 模型/ }).inputValue(), '');
+      assert.equal(await settingsPanel.getByRole('combobox', { name: /^提炼推理强度/ }).inputValue(), '');
       await settingsPanel.getByRole('button', { name: '添加记忆', exact: true }).click();
       await settingsPanel.getByLabel('标题', { exact: true }).fill(reference.title);
       await settingsPanel.getByLabel('内容', { exact: true }).fill(reference.text);

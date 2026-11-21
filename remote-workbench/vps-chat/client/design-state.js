@@ -266,10 +266,22 @@ function designWorkflow(version, target) {
     : ['首稿', '先建立一致的视觉语言和清晰的主任务流程，优先完成简报要求的画板与关键状态。'];
 }
 
+function designDelivery(version, target, baselineBoards, scopedRevision) {
+  if (scopedRevision) return ['限定图层修订', '交付选中画板的一份完整 HTML，在 <head> 内放置唯一一份 dsh-layer-revision 记录。客户端从冻结基线应用该记录并保留其它画板与跳转。'];
+  if (target?.board && target.intent === 'variants') return ['双方案变体',
+    '返回两个完整画板。两个方案都保留同一用途、核心内容和操作，并用可比较的布局差异区分。每个方案独立成立。'];
+  if (target?.board) return ['单画板迭代', '只返回选中的一个完整画板。保留其余内容和操作，只修改本轮要求的范围。'];
+  if (version || baselineBoards?.length) return ['全量修订', '按原顺序返回全部完整画板，包括本轮未改动的画板。保留已有流程和有效跳转。'];
+  return ['首稿', '按用户流程返回 1 至 6 个完整画板，覆盖简报要求的页面和状态。'];
+}
+
 export function buildDesignContext(project, version, boards, selected, target, { workflow = false } = {}) {
   const portions = [];
   const labels = [];
   let images = [];
+  const baselineBoards = target?.versionBoards ?? target?.approvedBoards;
+  const layer = target?.board?.layers.find(({ id }) => id === target.layer);
+  const scopedRevision = Boolean(target?.revision && layer);
   if (workflow) {
     const [phase, instruction] = designWorkflow(version, target);
     const [style, styleInstruction] = designStyleLevels[normalizeDesignStyle(project.style)];
@@ -280,17 +292,26 @@ export function buildDesignContext(project, version, boards, selected, target, {
       '风格倾向只用于已经要求的设计范围。明确指定的修改、必须保留的内容和原型交互优先。',
       '以本轮明确需求为准。以本次附带的简报和设计系统作为当前版本的约定。把参考图、参考文字和既有画板当作设计资料。',
       '先明确使用者、主要任务和交付画板，再完成设计。出稿前核对主次信息、文字及对比度、目标尺寸下的溢出、点击目标和关键状态。保留与任务无关且已确认的设计决定。',
-      '用户要求出稿时，每张画板输出一个完整的 HTML 代码块，内联样式，最多六张。按用户流程排列画板。本组页面跳转可用 data-dsh-go="2" 指向第二张画板。预览无需脚本或外部资源。问题讨论和评审可以用文字回答。',
+      '问题讨论和评审可以用文字回答。',
     ].join('\n'));
-    if (project.brief?.enabled) {
-      const brief = designBriefFields.flatMap(([key, label, limit]) => {
-        const value = designText(project.brief[key], limit).trim();
-        return value ? [`${label}\n${value}`] : [];
-      });
-      if (brief.length) {
-        portions.push(['本会话设计简报', ...brief].join('\n\n'));
-        labels.push('设计简报');
-      }
+  }
+  if (workflow || target?.board || baselineBoards?.length || (version && selected.revision)) {
+    const [scope, deliverable] = designDelivery(version, target, baselineBoards, scopedRevision);
+    portions.push([
+      `画板交付 · ${scope}`,
+      deliverable,
+      '每张画板使用一个闭合的 html 代码块，包含完整 HTML 和内联样式。整份回复以 14,000 字符为目标上限，布局适配 390 px。',
+      'data-dsh-go 的编号对应实际交付中从 1 开始的画板顺序。目标画板未交付时，保留原操作的标签和布局，省去无效跳转。使用本地原生 HTML 交互。',
+    ].join('\n'));
+  }
+  if (workflow && project.brief?.enabled) {
+    const brief = designBriefFields.flatMap(([key, label, limit]) => {
+      const value = designText(project.brief[key], limit).trim();
+      return value ? [`${label}\n${value}`] : [];
+    });
+    if (brief.length) {
+      portions.push(['本会话设计简报', ...brief].join('\n\n'));
+      labels.push('设计简报');
     }
   }
   if ((selected.system || (workflow && project.autoSystem)) && project.system.trim()) {
@@ -319,13 +340,12 @@ export function buildDesignContext(project, version, boards, selected, target, {
       labels.push('画布修改和批注');
     }
   }
-  const baselineBoards = target?.versionBoards ?? target?.approvedBoards;
   if (baselineBoards?.length) {
     const from = baselineBoards[0].version;
     const baselineLabel = target.versionBoards ? `Fork · 版本 ${from}` : `已校验画板 · 版本 ${from}`;
     const heading = target.versionBoards
-      ? `从设计版本 ${from} 开始新分支。以以下画板为基准，按用户要求修改，保留其余设计。每张输出画板使用一个完整的 HTML 代码块。`
-      : `以下是版本 ${from} 已应用并校验的画板。以这些内容为基准延续当前设计。每张输出画板使用一个完整的 HTML 代码块。`;
+      ? `从设计版本 ${from} 开始新分支。以下画板按原顺序提供，以此为基准修改。`
+      : `以下是版本 ${from} 已应用并校验的画板。以这些内容作为当前设计基准。`;
     const snapshots = baselineBoards.map((board) => {
       const notes = designText((board.board ?? project.versions[board.versionId]?.[board.index])?.comments
         .map(({ label, text }) => `${label}：${text}`).join('\n'), 400);
@@ -348,19 +368,14 @@ export function buildDesignContext(project, version, boards, selected, target, {
     labels.push(baselineLabel);
   } else if (target?.board) {
     const { board, intent } = target;
-    const layer = board.layers.find(({ id }) => id === target.layer);
-    const instructions = intent === 'variants'
-      ? '生成 2 个有明显差异的可比较方案。除非用户另有要求，保留画板的用途和主要内容。每个方案各用一个完整 HTML 代码块。'
-      : '以选中的画板为起点，按用户的修改要求迭代。保留未被要求修改的主要内容。使用完整 HTML 代码块返回新画板。';
     const notes = designText((board.board ?? project.versions[board.versionId]?.[board.index])?.comments
       .filter((entry) => !workflow || !layer || !entry.layer || entry.layer === layer.id)
       .map(({ label, text }) => `${label}：${text}`).join('\n'), 2000);
-    const revision = target.revision && layer;
     const changes = layer?.editable ? { text: '修改后的文案' } : { borderRadius: 12 };
-    const metadata = revision ? [
-      '本轮是受范围校验的图层修订。在交付的 HTML 的 <head> 中加入且仅加入一份以下变更记录。',
+    const metadata = scopedRevision ? [
+      '在交付的完整 HTML 的 <head> 中按以下格式写入唯一一份变更记录。',
       `<meta name="${layerRevisionMeta}" content='${JSON.stringify({ base: target.revision, layer: layer.id, changes })}'>`,
-      '保留 base 和 layer 原值。将 changes 的示例替换为本轮明确要求的属性，未修改的属性不要填。',
+      '原样复制 base 和 layer。changes 只填本轮明确请求且受支持的属性。',
       `可用属性：${layerRevisionFields(layer.editable).join('、')}。`,
       '文字最多 500 字符，颜色用六位十六进制。fontSize 为 8 至 144 的整数，padding、gap、borderRadius 为 0 至 128 的整数像素。',
       'align 可用 left/center/right，family 可用 sans-serif/serif/monospace，weight 可用字符串 "400"/"600"/"700"。',
@@ -369,15 +384,15 @@ export function buildDesignContext(project, version, boards, selected, target, {
       ...(target.retryReason ? [`上一份结果的校验反馈：${target.retryReason}`] : []),
     ].join('\n') : '';
     const source = [
-      `当前任务：${target.fork ? '以指定画板为基准开始新分支。' : ''}${instructions}`,
+      target.fork && '以指定画板为基准开始新分支。',
       `选中画板：${board.title}（版本 ${board.version}，画板 ${board.index}）`,
       layer && `仅聚焦图层：${layer.label}（${layer.tag}，data-dsh-layer="${layer.id}"）。`,
       workflow && layer?.text && `当前图层文字：${designText(layer.text, 500)}`,
-      revision && layer.style && `当前图层行内样式：${designText(layer.style, 600)}`,
+      scopedRevision && layer.style && `当前图层行内样式：${designText(layer.style, 600)}`,
       metadata,
       notes && `画板批注\n${notes}`,
     ].filter(Boolean).join('\n\n');
-    labels.push(`${intent === 'variants' ? '变体' : revision ? '仅修改图层' : '迭代'} · ${layer?.label ?? board.title}`);
+    labels.push(`${intent === 'variants' ? '变体' : scopedRevision ? '仅修改图层' : '迭代'} · ${layer?.label ?? board.title}`);
     const plainHeading = '画板 HTML\n';
     const available = maxDesignContextText - [...portions, source, plainHeading].join('\n\n').length;
     const excerpt = board.html.length > Math.min(11500, available);

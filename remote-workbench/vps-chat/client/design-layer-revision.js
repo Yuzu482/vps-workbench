@@ -45,12 +45,19 @@ function validSnapshot(snapshot) {
 function findMetadata(reply) {
   const metadata = [];
   for (const source of extractHtmlFences(reply, Infinity)) {
-    const head = parse(source, { scriptingEnabled: false }).childNodes
-      .find(({ tagName }) => tagName === 'html')?.childNodes.find(({ tagName }) => tagName === 'head');
-    for (const node of head?.childNodes ?? []) {
+    const nodes = [parse(source, { scriptingEnabled: false, sourceCodeLocationInfo: true })];
+    while (nodes.length) {
+      const node = nodes.pop();
+      for (const child of node.childNodes ?? []) nodes.push(child);
+      if (node.content) nodes.push(node.content);
       if (node.tagName !== 'meta' || !node.attrs.some(({ name, value }) =>
         name === 'name' && value.toLowerCase() === layerRevisionMeta)) continue;
-      metadata.push(node.attrs.find(({ name }) => name === 'content')?.value);
+      const location = node.sourceCodeLocation;
+      const head = node.parentNode?.tagName === 'head' ? node.parentNode.sourceCodeLocation : null;
+      // The HTML parser can move a meta tag into an implicit or already closed head.
+      const inHead = location && head?.startTag && head.endTag &&
+        location.startOffset >= head.startTag.endOffset && location.endOffset <= head.endTag.startOffset;
+      metadata.push({ inHead, content: node.attrs.find(({ name }) => name === 'content')?.value });
     }
   }
   return metadata;
@@ -94,15 +101,16 @@ export function readLayerRevision(projectKey, turn) {
   let proposal;
   try {
     const metadata = findMetadata(turn.reply);
-    proposal = metadata.length === 1 && typeof metadata[0] === 'string' && metadata[0].length <= 4096
-      ? JSON.parse(metadata[0]) : null;
+    const record = metadata[0];
+    proposal = metadata.length === 1 && record.inHead && typeof record.content === 'string' && record.content.length <= 4096
+      ? JSON.parse(record.content) : null;
   } catch {
     return rejectRevision('模型返回的图层修改记录无法解析。请用相同范围重试。');
   }
   if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal) ||
       Object.keys(proposal).length !== 3 || !Object.hasOwn(proposal, 'base') ||
       !Object.hasOwn(proposal, 'layer') || !Object.hasOwn(proposal, 'changes')) {
-    return rejectRevision('模型未返回一份有效的图层修改记录。请重试，或重新选择「迭代此画板」。');
+    return rejectRevision('请在完整 HTML 的 <head> 中返回唯一一份有效的图层修改记录，或重新选择「迭代此画板」。');
   }
   if (proposal.base !== snapshot.base || proposal.layer !== snapshot.layer) {
     return rejectRevision('模型返回的图层或基线与本轮选择不一致。请用相同范围重试。');

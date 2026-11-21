@@ -169,6 +169,7 @@ internal static class Program
                 string chatDirectory = Path.Combine(directory, "chat-receipts");
                 int chatStarts = 0, chatQueries = 0, chatOutputs = 0, uploads = 0; Guid nativeId = Guid.NewGuid(), malformedId = Guid.Empty;
                 Guid? observedSharedSource = null, observedAuthSource = null;
+                string? sentAttachmentPrompt = null;
                 var observed = new Dictionary<Guid, (Guid Session, bool Claude)>(); var queries = new Dictionary<Guid, int>();
                 ChatUploadRunner upload = (conversation, turn, files) =>
                 {
@@ -187,6 +188,8 @@ internal static class Program
                         string json = System.Text.Encoding.UTF8.GetString(payload!); int sessionIndex = Array.IndexOf(argv, "--chat-session");
                         Check(json.Contains("--isolation-code") && sessionIndex >= 0, "Chat skipped selected isolation policy");
                         bool claude = argv.Contains("--chat-prompt");
+                        if (argv.Contains("--chat-turn"))
+                            sentAttachmentPrompt = claude ? argv[Array.IndexOf(argv, "--chat-prompt") + 1] : argv[^1];
                         int sourceIndex = Array.IndexOf(argv, "--chat-auth-source");
                         if (sourceIndex >= 0) observedSharedSource = Guid.Parse(argv[sourceIndex + 1]);
                         Guid session = claude ? Guid.Parse(argv[sessionIndex + 1]) : nativeId;
@@ -237,9 +240,11 @@ internal static class Program
                     Check(chatStarts == 1 && ChatField<RichTextBox>(chat, "transcript").Text.Contains("模拟回复") && ChatField<TextBox>(chat, "composer").Text == "等待中的草稿", "Chat failed to recover the original result and keep the draft");
                     string attachmentPath = Path.Combine(directory, "fixture-attachment.txt"); File.WriteAllText(attachmentPath, "fixture attachment");
                     ChatField<List<ChatAttachment>>(chat, "attachments").Add(ChatAttachments.Read(attachmentPath, 1));
-                    ChatField<TextBox>(chat, "composer").Text = "继续第二轮";
+                    const string typed = "  继续第二轮  ";
+                    ChatField<TextBox>(chat, "composer").Text = typed;
                     Fire(ChatField<Button>(chat, "send")); await WaitForChat(chat);
                     Check(chatStarts == 2 && uploads == 1 && !ChatField<Button>(chat, "send").Enabled, "Second turn did not upload once or allowed replay");
+                    Check(sentAttachmentPrompt?.StartsWith(typed + "\n\n本轮附加文件", StringComparison.Ordinal) == true, "Explicit attachment prompt lost the original spaces");
                     Fire(ChatField<Button>(chat, "refresh")); await WaitForChat(chat);
                     Check(ChatField<RichTextBox>(chat, "transcript").Text.Contains("继续第二轮"), "Second turn was not shown");
                     malformedId = observed.Keys.Last();
@@ -273,9 +278,12 @@ internal static class Program
                     Check(ChatField<TextBox>(chat, "composer").Text == "Claude 未发送草稿" && ChatField<List<ChatAttachment>>(chat, "attachments").Count == 0,
                         "Claude draft was lost or inherited Codex attachments");
                     ChatField<CheckBox>(chat, "outerOnly").Checked = false; ChatField<CheckBox>(chat, "capture").Checked = true;
-                    ChatField<TextBox>(chat, "composer").Text = "Claude 测试"; Fire(ChatField<Button>(chat, "send")); await WaitForChat(chat);
+                    ChatField<List<ChatAttachment>>(chat, "attachments").Add(ChatAttachments.Read(Path.Combine(directory, "fixture-attachment.txt"), 1));
+                    ChatField<TextBox>(chat, "composer").Clear(); Fire(ChatField<Button>(chat, "send")); await WaitForChat(chat);
                     Fire(ChatField<Button>(chat, "refresh")); await WaitForChat(chat);
                     Check(chatStarts == 3 && ChatField<RichTextBox>(chat, "transcript").Text.Contains("Claude 模拟回复"), "Claude backend was not rendered");
+                    Check(uploads == 2 && sentAttachmentPrompt?.StartsWith("逐份查看附件。列出文件名和一个要点，标明无法读取的附件。\n\n本轮附加文件", StringComparison.Ordinal) == true,
+                          "Attachment-only turn did not use the default review prompt");
                     Check(ChatField<ComboBox>(chat, "provider").SelectedIndex == 1 && ChatField<ComboBox>(chat, "provider").Text == "Claude", "Selected Claude backend was not retained");
                     Check(ChatField<Label>(chat, "selectedProvider").Visible && ChatField<Label>(chat, "selectedProvider").Text == "Claude", "Selected backend label was not visible");
                     Check(ChatField<Label>(chat, "selectedClaudeAuth").Visible && ChatField<Label>(chat, "selectedClaudeAuth").Text == "API 密钥", "Selected Claude API mode label was not visible");

@@ -45,8 +45,12 @@ test('model proposals are parsed from one valid fence and never contain extra fi
   assert.throws(() => readWorkflowProposal(fence(draft), { requireStageIds: true }), /保留的步骤使用原有 ID/);
   assert.deepEqual(readWorkflowProposal(fence(canonical), { requireStageIds: true }), canonical);
   assert.equal(readWorkflowProposal(`\`\`\`\`markdown\n${fence(draft)}\n\`\`\`\``), null);
+  assert.equal(readWorkflowProposal(fence(canonical).replace(/^/gm, '> ')), null);
   assert.throws(() => readWorkflowProposal(`${fence(draft)}\n${fence(draft)}`), /只包含一个/);
-  assert.throws(() => readWorkflowProposal('```vps-workflow\n{}'), /不完整/);
+  for (const closing of ['', '`', '``', '``…', '```…']) {
+    assert.throws(() => readWorkflowProposal(`\`\`\`vps-workflow\n${JSON.stringify(canonical)}\n${closing}`),
+      /不完整.*缩短步骤指令.*拆分或调整工作流/u);
+  }
   assert.throws(() => readWorkflowProposal(fence({ ...draft, command: 'ignored' })), /字段|名称/);
   const prompt = createWorkflowEditPrompt(' 调整第二步 ', draft);
   assert.ok(prompt.startsWith(workflowEditPrefix));
@@ -54,6 +58,54 @@ test('model proposals are parsed from one valid fence and never contain extra fi
   assert.ok(prompt.endsWith(JSON.stringify(canonical)));
   const long = { ...draft, stages: Array(8).fill({ ...draft.stages[0], instruction: '\\'.repeat(1200) }) };
   assert.throws(() => createWorkflowEditPrompt('调整第二步', long), /缩短本轮要求/);
+});
+
+test('proposal length counts both fence lines and non-ASCII UTF-16 code units', () => {
+  const value = graph(['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8'], []);
+  for (const stage of value.stages.slice(0, -1)) stage.instruction = '证'.repeat(1000);
+  const last = value.stages.at(-1);
+  last.instruction = '📝';
+  last.instruction += '据'.repeat(8192 - fence(value).length);
+  const exact = fence(value);
+  assert.equal(exact.length, 8192);
+  assert.equal([...exact].length, 8191);
+  assert.deepEqual(readWorkflowProposal(exact), value);
+  assert.throws(() => readWorkflowProposal(`${exact}\n`), /过长.*缩短步骤指令.*拆分或调整工作流/u);
+
+  last.instruction = last.instruction.slice(0, -2);
+  const crlf = fence(value).replaceAll('\n', '\r\n');
+  assert.equal(crlf.length, 8192);
+  assert.deepEqual(readWorkflowProposal(crlf), value);
+  last.instruction += '据';
+  assert.throws(() => readWorkflowProposal(fence(value).replaceAll('\n', '\r\n')), /过长/u);
+
+  last.instruction += '据'.repeat(8180 - JSON.stringify(value).length);
+  assert.equal(JSON.stringify(value).length, 8180);
+  assert.throws(() => readWorkflowProposal(fence(value)), /过长.*缩短步骤指令.*拆分或调整工作流/u);
+});
+
+test('the partial edit example returns the full draft and review applies only to the original revision', () => {
+  const original = { name: '写作与审校', stages: [
+    { id: 'write', name: '写作', provider: 'codex', model: '', instruction: '写出初稿。' },
+    { id: 'review', name: '审校', provider: 'claude', model: '', instruction: '核对初稿。' },
+  ], edges: [{ from: 'write', to: 'review' }] };
+  const configured = { ...original, stages: [{ ...original.stages[0], agent }, original.stages[1]] };
+  const records = applyWorkflowChange([], { op: 'save', id, revision: null, draft: configured });
+  const prompt = createWorkflowEditPrompt('给审校阶段增加证据位置', configured);
+  assert.match(prompt, /只返回一个完整的顶层代码块.*\n.*紧凑 JSON.*8192 个 UTF-16/u);
+  assert.match(prompt, /新增步骤时，用户未指定模型就填 "model":""/u);
+  assert.match(prompt, /“给审校阶段增加证据位置”只修改 review 的 instruction/u);
+  assert.ok(prompt.endsWith(JSON.stringify(original)));
+
+  const example = prompt.split('\n').find((line) => line.startsWith('{"name"'));
+  const proposed = readWorkflowProposal(`\`\`\`vps-workflow\n${example}\n\`\`\``, { requireStageIds: true });
+  const expectedStage = { ...original.stages[1], instruction: '核对初稿并标明证据位置。' };
+  assert.deepEqual(proposed, { ...original, stages: [original.stages[0], expectedStage] });
+  const reviewed = preserveWorkflowAgents(records[0], proposed);
+  const change = { op: 'save', id, revision: 1, draft: reviewed };
+  const updated = applyWorkflowChange(records, change);
+  assert.deepEqual(updated, [{ id, revision: 2, ...configured, stages: [configured.stages[0], expectedStage] }]);
+  assert.throws(() => applyWorkflowChange(updated, change), /工作流已变更/u);
 });
 
 test('stage Agent snapshots validate MCP refs for Codex and Antigravity and preserve bounded manifest text', () => {
@@ -729,17 +781,44 @@ test('plugin instructions stay intact ahead of bounded parent replies', () => {
   const run = { workflow: g, task: '任'.repeat(4000), rows: [{ reply: '📝'.repeat(4096) }, { reply: '短答复' }, { reply: '' }] };
   const plugin = '插件'.repeat(1100);
   const prompt = workflowStagePrompt(run, 2, plugin);
-  assert.match(prompt, new RegExp(`指{1200}\\n\\n${plugin}\\n\\n前置步骤`));
-  assert.match(prompt, /…\n\n前置步骤「short」\(short\).*\n短答复$/u);
+  assert.match(prompt, new RegExp(`指{1200}\\n\\n${plugin}\\n\\n以任务`));
+  assert.match(prompt, /前置步骤「long」\(long\) 的回复（本次截断）\n> 📝+…/u);
+  assert.match(prompt, /前置步骤「short」\(short\) 的回复（引用资料）\n> 短答复$/u);
   assert.ok(prompt.length === 8192 || prompt.length === 8191);
   assert.doesNotMatch(prompt, /[\uD800-\uDFFF]/u);
 
   const empty = { ...run, rows: run.rows.map(() => ({ reply: '' })) };
   const room = 8192 - workflowStagePrompt(empty, 2, 'p').length + 1;
-  assert.equal(workflowStagePrompt(run, 2, 'p'.repeat(room)), workflowStagePrompt(empty, 2, 'p'.repeat(room)));
-  assert.equal(workflowStagePrompt(run, 2, 'p'.repeat(room)).length, 8192);
+  const noRoom = workflowStagePrompt(run, 2, 'p'.repeat(room));
+  assert.equal(noRoom.length, 8192);
+  assert.match(noRoom, /「long」\(long\) 的回复（本次截断）\n\n\n前置步骤「short」\(short\) 的回复（本次截断）\n$/u);
+  assert.doesNotMatch(noRoom, /📝|短答复/u);
   assert.throws(() => workflowStagePrompt(run, 2, 'p'.repeat(room + 1)), /超出聊天长度上限/);
   assert.throws(() => workflowStagePrompt(run, 0, 'p'.repeat(8192)), /超出聊天长度上限/);
+});
+
+test('stage handoff quotes both replies and labels only text clipped by this handoff', () => {
+  const workflow = graph(['source', 'review', 'join'], [['source', 'join'], ['review', 'join']]);
+  const rows = [{ reply: '证据：草稿第 1 页\r\n原文省略…' }, { reply: '待核实的证据 📝' }, { reply: '' }];
+  const run = { workflow, task: '整理审校结果', rows };
+  const prompt = workflowStagePrompt(run, 2, 'p');
+  assert.match(prompt, /整理审校结果[\s\S]*执行 join[\s\S]*以任务和当前步骤指令确定本阶段的交付。先给出结论和证据位置，再列出待确认事项/u);
+  assert.match(prompt, /若证据缺失、冲突或在本次交接中截断，请说明缺口并完成已有证据支持的部分/u);
+  assert.match(prompt, /（引用资料）\n> 证据：草稿第 1 页\r\n> 原文省略…[\s\S]*（引用资料）\n> 待核实的证据 📝$/u);
+  assert.doesNotMatch(prompt, /（本次截断）/u);
+
+  const exactPlugin = 'p'.repeat(8192 - prompt.length + 1);
+  const exact = workflowStagePrompt(run, 2, exactPlugin);
+  assert.equal(exact.length, 8192);
+  assert.doesNotMatch(exact, /（本次截断）/u);
+  const clipped = workflowStagePrompt(run, 2, `${exactPlugin}p`);
+  assert.ok(clipped.length <= 8192);
+  assert.match(clipped, /「source」\(source\) 的回复（本次截断）[\s\S]*「review」\(review\) 的回复（引用资料）/u);
+  assert.doesNotMatch(clipped, /[\uD800-\uDFFF]/u);
+
+  const missing = workflowStagePrompt({ ...run, rows: [rows[0], { reply: '' }, rows[2]] }, 2);
+  assert.match(missing, /「review」\(review\) 的回复（没有回复）\n$/u);
+  assert.doesNotMatch(missing, /（本次截断）/u);
 });
 
 test('the exact DAG schema rejects ambiguous legacy records, invalid endpoints, duplicates and cycles', () => {

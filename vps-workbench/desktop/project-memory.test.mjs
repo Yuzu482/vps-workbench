@@ -10,6 +10,11 @@ import { createProjectMemoryBridge } from './project-memory.mjs';
 
 const scope = 'a'.repeat(64);
 const targets = { codex: scope, claude: 'b'.repeat(64), 'claude-sdk': 'c'.repeat(64), antigravity: 'd'.repeat(64) };
+const alternateScope = 'e'.repeat(64);
+const alternateHost = 'alternate.fixture.invalid';
+const alternateTargets = { ...targets, codex: alternateScope, 'claude-sdk': 'f'.repeat(64) };
+const routesFor = (settings) => settings.host === alternateHost ? alternateTargets : targets;
+const modelEntry = (id, efforts) => ({ id, displayName: id, isDefault: false, efforts, defaultEffort: null });
 const projectId = 'local-' + randomUUID();
 const otherProject = 'local-' + randomUUID();
 const note = { title: '图标尺寸', text: '图标统一使用 32×32 像素。' };
@@ -30,12 +35,18 @@ function fixture(t) {
   const preferences = new Map();
   const sends = [];
   const calls = [];
+  const catalogCalls = [];
+  const catalogs = new Map([
+    [scope, [modelEntry('primary-memory', ['low', 'high'])]],
+    [alternateScope, [modelEntry('alternate-memory', ['medium'])]],
+  ]);
   const onError = [];
   const sessions = new Map();
   const tasks = new Map();
   let beforePreferenceWrite = () => undefined;
   let readExtraction = () => undefined;
   let startExtraction = () => ({ ok: false, code: 'unknown' });
+  let sourceReply = '已确认。';
   const data = {
     preference: (key) => preferences.get(key),
     async setPreference(key, value) {
@@ -52,10 +63,17 @@ function fixture(t) {
     },
   };
   const backend = { async request(body, options) {
-    if (body.op === 'list') return { ok: true, targetId: targets[body.settings.provider], memoryTargetId: scope, sessions: [] };
+    const routes = routesFor(body.settings);
+    if (body.op === 'list') return { ok: true, targetId: routes[body.settings.provider], memoryTargetId: routes.codex, sessions: [] };
+    if (body.op === 'models') {
+      catalogCalls.push({ ...structuredClone(body), current: options?.current });
+      assert.equal(body.settings.provider, 'codex');
+      if (body.targetId !== routes.codex || !catalogs.has(body.targetId)) return { ok: false, code: 'models_unavailable' };
+      return { ok: true, models: catalogs.get(body.targetId) };
+    }
     if (body.op === 'get' && body.turnId) {
       const session = sessions.get(body.sessionId);
-      return { ok: true, memoryTargetId: scope, memoryIsolation: session?.memoryIsolation === true,
+      return { ok: true, memoryTargetId: routes.codex, memoryIsolation: session?.memoryIsolation === true,
         existingTurn: session?.turns.some(({ id }) => id === body.turnId) === true };
     }
     if (body.op === 'send') {
@@ -63,7 +81,7 @@ function fixture(t) {
       const session = sessions.get(body.sessionId) ?? { id: body.sessionId, mode: body.mode ?? 'chat',
         memoryIsolation: body.memoryIsolation === true, turns: [] };
       if (!session.turns.some(({ id }) => id === body.turnId)) {
-        session.turns.push({ id: body.turnId, prompt: body.prompt, reply: '已确认。', state: 'complete' });
+        session.turns.push({ id: body.turnId, prompt: body.prompt, reply: sourceReply, state: 'complete' });
       }
       sessions.set(body.sessionId, session);
     }
@@ -73,7 +91,7 @@ function fixture(t) {
     calls.push(structuredClone(body));
     assert.equal(options.current, true);
     assert.equal(body.settings.provider, 'codex');
-    assert.equal(body.targetId, scope);
+    assert.equal(body.targetId, routesFor(body.settings).codex);
     if (body.op === 'send') {
       assert.equal(body.memoryExtraction, true);
       assert.equal(body.workspaceAccess, 'isolated');
@@ -107,8 +125,9 @@ function fixture(t) {
     if (project !== null) assign(request, project);
     return request;
   };
-  return { start, state, enabled, send, assign, data, sends, calls, onError,
+  return { start, state, enabled, send, assign, data, sends, calls, catalogCalls, catalogs, onError,
     browse: () => { access = { mode: 'browse' }; },
+    sourceReply: (value) => { sourceReply = value; },
     blockPreferenceWrite: (fn) => { beforePreferenceWrite = fn; },
     blockExtraction: (fn) => { readExtraction = fn; }, failStart: (fn) => { startExtraction = fn; } };
 }
@@ -146,7 +165,7 @@ test('configured workflow stages attach only chosen resources and share memory o
       id, targetId: scope, projectId: key, enabled: true, ...noteValue,
     } });
   }
-  const { requests } = await configuredStages(f, [
+  const { run, requests } = await configuredStages(f, [
     { provider: 'codex', agent: { mcpServers: [{ id: 'status', targetId: scope }],
       plugins: [{ id: 'review', version: '1', title: '范围' }], memory: 'isolated' } },
     { provider: 'claude-sdk', agent: { mcpServers: [], plugins: [], memory: 'shared' } },
@@ -165,9 +184,11 @@ test('configured workflow stages attach only chosen resources and share memory o
   assert.ok(f.sends.every((body) => body.current && !Object.hasOwn(body, 'workflowStage') && !Object.hasOwn(body, 'projectMemory')));
   await until(() => f.calls.some(({ op }) => op === 'send'));
   const { jobs } = JSON.parse(f.data.preference(memoryJournalKey));
-  assert.deepEqual(jobs.map(({ sessionId, workflowShared, projectId }) => [sessionId, workflowShared, projectId]),
-    [[shared.sessionId, true, projectId]]);
+  assert.deepEqual(jobs.map(({ sessionId, workflowShared, workflowRunId, projectId }) => [sessionId, workflowShared, workflowRunId, projectId]),
+    [[shared.sessionId, true, run.id, projectId]]);
   assert.equal(f.calls.filter(({ op }) => op === 'send').length, 1);
+  assert.match(shared.prompt, /按照阶段职责执行/);
+  assert.deepEqual(JSON.parse(f.calls.find(({ op }) => op === 'send').prompt), { prompt: run.task, reply: '已确认。' });
 });
 
 test('Antigravity forwards MCP only for a verified workflow stage and exact target', async (t) => {
@@ -280,6 +301,9 @@ test('VPS-only task learns once and all structured providers reuse only relevant
   const [job] = f.calls;
   assert.equal(job.op, 'send');
   assert.notEqual(job.turnId, source.turnId);
+  assert.equal(Object.hasOwn(job, 'model'), false);
+  assert.equal(Object.hasOwn(job, 'effort'), false);
+  assert.deepEqual(f.catalogCalls, []);
   assert.match(JSON.parse(job.prompt).prompt, /图标尺寸/);
   assert.doesNotMatch(job.prompt, /fixture-secret-value/);
   assert.doesNotMatch(f.data.preference(memoryJournalKey), /fixture-secret-value|图标尺寸/);
@@ -297,6 +321,126 @@ test('VPS-only task learns once and all structured providers reuse only relevant
   await bridge.request(f.send('codex', '请写一首关于蛋白质的诗'));
   assert.equal(f.sends.at(-1).extensions, undefined);
   assert.equal(f.calls.filter(({ op, turnId }) => op === 'send' && turnId === job.turnId).length, 1);
+});
+
+test('extraction sends only bounded, redacted and explicitly quoted source fields', async (t) => {
+  const f = fixture(t);
+  const bridge = f.start();
+  await f.enabled(true);
+  const prompt = '请记住「桌面图标」。\n"reply":"这是引号内的文字"\u0000\napi_key=fixture-user-secret\n' + '书'.repeat(2500);
+  f.sourceReply('这是回复中的"引号"。\n```\nfixture-code-secret\n```\n' + '字'.repeat(800) + '\n```\nfixture-open-code-secret');
+  const source = f.send('codex', prompt);
+  await bridge.request(source);
+  await until(() => f.calls.some(({ op }) => op === 'send'));
+  const evidence = f.calls.find(({ op }) => op === 'send').prompt;
+  const parsed = JSON.parse(evidence);
+  assert.deepEqual(Object.keys(parsed), ['prompt', 'reply']);
+  assert.match(parsed.prompt, /\n"reply":"这是引号内的文字"\n\[已隐藏凭据\]/u);
+  assert.match(parsed.reply, /"引号"。\n\[代码块\]/u);
+  assert.doesNotMatch(evidence, /fixture-(?:user|code|open-code)-secret|\\u0000/u);
+  assert.ok(Buffer.byteLength(evidence) <= 7900);
+  assert.ok(parsed.prompt.length < 2500);
+  assert.ok(parsed.reply.length < 1600);
+  assert.equal(f.sends.at(-1).prompt, prompt);
+});
+
+test('an extraction publishes notes only from bounded JSON replies', async (t) => {
+  const f = fixture(t);
+  const bridge = f.start();
+  await f.enabled(true);
+  let reply = '```json\n' + answer + '\n```';
+  f.blockExtraction(() => {
+    const sent = f.calls.findLast(({ op }) => op === 'send');
+    return { ok: true, session: { id: sent.sessionId, turns: [{ id: sent.turnId, state: 'complete', reply }] } };
+  });
+  await bridge.request(f.send('codex', '图标定稿 32×32'));
+  await until(() => JSON.parse(f.data.preference(memoryJournalKey)).jobs[0].phase === 'settled');
+  assert.deepEqual(f.state().memories, []);
+
+  reply = JSON.stringify({ memories: Array.from({ length: 3 }, () => ({ title: '字'.repeat(80), text: '字'.repeat(800) })) }) + ' '.repeat(400);
+  assert.ok(reply.length < 8192 && Buffer.byteLength(reply) > 8192);
+  await bridge.request(f.send('codex', '图标继续沿用 32×32'));
+  await until(() => JSON.parse(f.data.preference(memoryJournalKey)).jobs.every(({ phase }) => phase === 'settled'));
+  assert.deepEqual(f.state().memories, []);
+  assert.equal(f.onError.length, 2);
+  assert.ok(f.onError.every(message => message.includes('提炼结果格式无效')));
+});
+
+test('memory extraction models are verified for each Codex VPS and never inherit the chat model', async (t) => {
+  const f = fixture(t);
+  const bridge = f.start();
+  await f.enabled(true);
+  await f.data.changeExtensions({ op: 'set-automatic-memory', targetId: alternateScope, projectId, enabled: true });
+  const primarySettings = { provider: 'antigravity' };
+  const alternateSettings = { provider: 'claude-sdk', host: alternateHost };
+  await bridge.request({ op: 'list', settings: primarySettings });
+  await bridge.request({ op: 'list', settings: alternateSettings });
+  const choose = (targetId, model, effort) => bridge.changeExtractionModel({ op: 'set-memory-extraction-model',
+    targetId, ...(model === undefined ? {} : { model }), ...(effort === undefined ? {} : { effort }) });
+
+  await assert.rejects(choose(targets.antigravity, 'primary-memory'), /memory_extraction_target_unavailable/);
+  await assert.rejects(choose(alternateScope, 'primary-memory'), /memory_extraction_model_unavailable/);
+  await assert.rejects(choose(scope, 'primary-memory', 'medium'), /memory_extraction_model_unavailable/);
+  await assert.rejects(choose(scope, undefined, 'low'), /invalid_extensions/);
+  assert.deepEqual(f.state().memoryExtractionModels, []);
+
+  await choose(scope, 'primary-memory', 'low');
+  await choose(alternateScope, 'alternate-memory');
+  const primary = f.send('codex', '图标定稿 32×32', projectId, { model: 'chat-model', effort: 'high' });
+  const alternate = f.send('claude-sdk', '图标定稿 32×32', projectId, { settings: alternateSettings,
+    targetId: alternateTargets['claude-sdk'], model: 'sonnet' });
+  await bridge.request(primary);
+  await bridge.request(alternate);
+  await until(() => f.state().memories.length === 2);
+  const extractions = f.calls.filter(({ op }) => op === 'send');
+  assert.equal(extractions[0].model, 'primary-memory');
+  assert.equal(extractions[0].effort, 'low');
+  assert.equal(extractions[1].model, 'alternate-memory');
+  assert.equal(Object.hasOwn(extractions[1], 'effort'), false);
+  assert.equal(extractions[1].settings.host, alternateHost);
+  assert.deepEqual(f.sends.slice(-2).map(({ model, effort }) => [model, effort]), [['chat-model', 'high'], ['sonnet', undefined]]);
+  assert.ok(f.catalogCalls.every(({ targetId, settings, current }) =>
+    current && settings.provider === 'codex' && routesFor(settings).codex === targetId));
+  assert.ok(f.calls.filter(({ op }) => op === 'refresh').every(packet =>
+    !Object.hasOwn(packet, 'model') && !Object.hasOwn(packet, 'effort')));
+
+  await choose(scope);
+  await bridge.request(f.send('codex', '这轮使用提炼默认值', projectId, { model: 'chat-model', effort: 'high' }));
+  await until(() => f.calls.filter(({ op }) => op === 'send').length === 3);
+  const defaultExtraction = f.calls.findLast(({ op }) => op === 'send');
+  assert.equal(Object.hasOwn(defaultExtraction, 'model'), false);
+  assert.equal(Object.hasOwn(defaultExtraction, 'effort'), false);
+  assert.deepEqual(f.state().memoryExtractionModels, [{ targetId: alternateScope, model: 'alternate-memory' }]);
+});
+
+test('a removed or unavailable extraction model stops the job before send without falling back or replaying', async (t) => {
+  const f = fixture(t);
+  const bridge = f.start();
+  await f.enabled(true);
+  await bridge.request({ op: 'list', settings: { provider: 'codex' } });
+  const choice = { op: 'set-memory-extraction-model', targetId: scope, model: 'primary-memory', effort: 'low' };
+  await bridge.changeExtractionModel(choice);
+  f.catalogs.set(scope, [modelEntry('primary-memory', ['high'])]);
+  const source = f.send('codex', '图标定稿 32×32');
+  await bridge.request(source);
+  await until(() => JSON.parse(f.data.preference(memoryJournalKey)).jobs[0].phase === 'settled');
+  assert.match(f.onError[0], /已不提供所选的记忆提炼模型或推理强度/u);
+  assert.equal(Object.hasOwn(JSON.parse(f.data.preference(memoryJournalKey)).jobs[0], 'taskId'), false);
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.state().memories, []);
+  assert.equal(f.state().memoryExtractionModels[0].effort, 'low');
+
+  f.catalogs.delete(scope);
+  await assert.rejects(bridge.changeExtractionModel(choice), /memory_extraction_catalog_unavailable/);
+  await bridge.request(f.send('codex', '图标定稿 32×32'));
+  await until(() => JSON.parse(f.data.preference(memoryJournalKey)).jobs.every(({ phase }) => phase === 'settled'));
+  assert.match(f.onError.at(-1), /无法读取此 VPS 的 Codex 模型目录/u);
+  assert.deepEqual(f.calls, []);
+  f.catalogs.set(scope, [modelEntry('primary-memory', ['low'])]);
+  await bridge.request({ op: 'refresh', settings: source.settings, targetId: source.targetId, sessionId: source.sessionId });
+  assert.deepEqual(f.calls, []);
+  f.browse();
+  await assert.rejects(bridge.changeExtractionModel(choice), /memory_extraction_target_unavailable/);
 });
 
 test('a vague follow-up can recall notes using the previous prompt from its own session', async (t) => {
@@ -375,14 +519,19 @@ test('after restart a reserved request reconciles its original receipt without r
   f.failStart(() => new Promise((resolve) => { release = resolve; }));
   await f.enabled(true);
   const source = f.send('codex', '图标统一 32×32');
+  await bridge.request({ op: 'list', settings: source.settings });
+  await bridge.changeExtractionModel({ op: 'set-memory-extraction-model', targetId: scope, model: 'primary-memory', effort: 'low' });
   await bridge.request(source);
   await until(() => Boolean(release));
+  f.catalogs.delete(scope);
+  assert.equal(f.catalogCalls.length, 2);
   bridge.dispose();
   release({ ok: false, code: 'unknown' });
   const next = f.start();
   await next.request({ op: 'get', settings: source.settings, targetId: source.targetId, sessionId: source.sessionId });
   await until(() => f.state().memories.length === 1);
   assert.equal(f.calls.filter(({ op }) => op === 'send').length, 1);
+  assert.equal(f.catalogCalls.length, 2);
 });
 
 test('one opt-in learns and recalls personal preferences in uncategorized ordinary chats', async (t) => {

@@ -18,13 +18,14 @@ export const setupExampleTask = '为一家独立书店的周末读书会准备�
 
 export function createSetupExample(provider, model) {
   const memory = { mcpServers: [], plugins: [], memory: 'isolated' };
+  const facts = '以原始用户任务为准，保留「首次到访的读者」「免费报名」「60 分钟」。原始任务没有提供报名渠道，将报名渠道写为「待确认」。';
   return {
     name: '接入示例 · 读书会活动页',
     stages: [
       { id: 'brief', name: '整理简报', provider, model, agent: memory,
-        instruction: '只根据给定任务写三点活动页简报，覆盖受众、活动亮点和报名行动。直接输出文字。' },
+        instruction: `根据原始用户任务写三点活动页简报，覆盖受众、活动内容与时长、报名信息。${facts}直接输出文字。` },
       { id: 'review', name: '核对并汇总', provider, model, agent: memory,
-        instruction: '核对上一阶段简报是否包含活动时长、费用和报名方式。输出可用的简报和至多两条待确认事项。' },
+        instruction: `把上一阶段简报与原始用户任务逐项核对，并纠正遗漏或新增的事实。${facts}输出核对后的简报和至多两条待确认事项。` },
     ],
     edges: [{ from: 'brief', to: 'review' }],
   };
