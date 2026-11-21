@@ -244,7 +244,11 @@ export function createWorkflowPanel(React, { icon } = {}) {
     readFileTarget, saveAttachments, readArtifacts }) {
     const titleId = React.useId();
     const memoryProjectErrorId = React.useId();
+    const draftTitleId = React.useId();
+    const draftDescriptionId = React.useId();
     const dialog = React.useRef(null);
+    const draftDialog = React.useRef(null);
+    const stayButton = React.useRef(null);
     const closeButton = React.useRef(null);
     const cancelExit = React.useRef(null);
     const closeCallback = React.useRef(onClose);
@@ -262,6 +266,8 @@ export function createWorkflowPanel(React, { icon } = {}) {
     const [fileBusy, setFileBusy] = React.useState(false);
     const [closing, setClosing] = React.useState(false);
     const [confirmDelete, setConfirmDelete] = React.useState(false);
+    const [transition, setTransition] = React.useState(null);
+    const [transitionError, setTransitionError] = React.useState('');
     const [editError, setEditError] = React.useState('');
     const [proposalError, setProposalError] = React.useState(null);
     const [runError, setRunError] = React.useState('');
@@ -286,6 +292,13 @@ export function createWorkflowPanel(React, { icon } = {}) {
         if (element.open) element.close();
       };
     }, [open]);
+    React.useLayoutEffect(() => {
+      if (!transition || !open) return undefined;
+      const element = draftDialog.current;
+      element.showModal();
+      stayButton.current.focus();
+      return () => { if (element.open) element.close(); };
+    }, [transition, open]);
     React.useLayoutEffect(() => {
       setCatalogs({});
       const requests = catalogRequests.current;
@@ -330,6 +343,43 @@ export function createWorkflowPanel(React, { icon } = {}) {
       setEditing(null);
       setConfirmDelete(false);
       setEditError('');
+    }
+
+    function requestTransition(trigger, description, proceed) {
+      if (writeRequest.current || fileRequest.current || transition) return;
+      if (working) {
+        setTransitionError('');
+        setTransition({ trigger, description, proceed });
+      } else proceed();
+    }
+
+    function closeTransition(restoreFocus = false) {
+      draftDialog.current.close();
+      setTransition(null);
+      if (restoreFocus) transition?.trigger.focus({ preventScroll: true });
+    }
+
+    function stay() {
+      if (!writeRequest.current) closeTransition(true);
+    }
+
+    function discardAndContinue() {
+      if (writeRequest.current) return;
+      closeTransition();
+      choose(selected?.id ?? null);
+      transition.proceed();
+    }
+
+    async function saveAndContinue() {
+      if (!working || writeRequest.current) return;
+      if (stale) {
+        setTransitionError('工作流已在别处更新或删除，请保留草稿，或放弃修改后读取已保存版本。');
+        return;
+      }
+      const saved = await write({ op: 'save', ...working }, { transition: true });
+      if (!saved) return;
+      closeTransition();
+      transition.proceed(saved.find(({ id }) => id === working.id));
     }
 
     function create() {
@@ -459,11 +509,12 @@ export function createWorkflowPanel(React, { icon } = {}) {
       }
     }
 
-    async function write(request, currentProposal) {
-      if (writeRequest.current || fileRequest.current) return;
+    async function write(request, { currentProposal, transition: savingBeforeTransition = false } = {}) {
+      if (writeRequest.current || fileRequest.current) return null;
       writeRequest.current = true;
       setWriteBusy(true);
       if (currentProposal) setProposalError(null);
+      else if (savingBeforeTransition) setTransitionError('');
       else setEditError('');
       try {
         const change = request.op === 'save'
@@ -472,10 +523,13 @@ export function createWorkflowPanel(React, { icon } = {}) {
         const saved = await onChange(change);
         choose(change.op === 'save' ? change.id : saved[0]?.id ?? null, change.op === 'save' && !currentProposal ? activeStage : 0);
         if (currentProposal && activeProposal.current === currentProposal) onDismissProposal();
+        return saved;
       } catch (error) {
         const message = messageOf(error, '无法更新工作流。');
         if (currentProposal) setProposalError({ proposal: currentProposal, message });
+        else if (savingBeforeTransition) setTransitionError(message);
         else setEditError(message);
+        return null;
       } finally {
         writeRequest.current = false;
         setWriteBusy(false);
@@ -527,6 +581,17 @@ export function createWorkflowPanel(React, { icon } = {}) {
     return h('dialog', { ref: dialog, className: 'vc-workflow-dialog vc-popup-motion', 'aria-labelledby': titleId,
       onCancel: (event) => { event.preventDefault(); dismiss(); } },
     h('style', null, workflowPanelStyles),
+    h('dialog', { ref: draftDialog, className: 'vc-settings vc-conversation-dialog vc-popup-motion',
+      'aria-labelledby': draftTitleId, 'aria-describedby': draftDescriptionId,
+      onCancel(event) { event.preventDefault(); event.stopPropagation(); stay(); } },
+    h('div', { className: 'vc-workflow-draft-confirm' },
+      h('h2', { id: draftTitleId }, '工作流有未保存的修改'),
+      h('p', { id: draftDescriptionId, className: 'vc-workflow-note' }, `${transition?.description ?? ''}前请选择如何处理当前草稿。`),
+      alert(transitionError),
+      h('div', { className: 'vc-dialog-actions' },
+        button('留在当前', stay, { ref: stayButton, disabled: writeBusy }),
+        button('放弃修改', discardAndContinue, { disabled: writeBusy }),
+        button('保存并继续', saveAndContinue, { primary: true, disabled: writeBusy })))),
     h('header', { className: 'vc-workflow-header' },
       h('h2', { id: titleId }, proposal ? '确认工作流提案' : '工作流'),
       actions(fileBusy ? h('span', { className: 'vc-workflow-note', role: 'status' }, '正在更新文件授权…')
@@ -536,21 +601,29 @@ export function createWorkflowPanel(React, { icon } = {}) {
     h('div', { className: 'vc-workflow-body', 'data-proposal': Boolean(proposal) },
       proposal ? h(Proposal, { key: `${proposal.id}:${proposal.revision}`, proposal, busy: writeBusy || fileBusy, isRevision: proposal.revision != null, moduleCatalog,
         error: proposalError?.proposal === proposal ? proposalError.message : '',
-        onAccept: () => write({ op: 'save', id: proposal.id, revision: proposal.revision, draft: proposal.draft }, proposal),
+        onAccept: (event) => requestTransition(event.currentTarget, '接受工作流提案',
+          () => write({ op: 'save', id: proposal.id, revision: proposal.revision, draft: proposal.draft }, { currentProposal: proposal })),
         onDismiss: () => { setProposalError(null); onDismissProposal(); },
       }) : h(React.Fragment, null,
         h('section', { className: 'vc-workflow-pane vc-workflow-edit-pane', 'aria-label': '工作流配置' },
           h('div', { className: 'vc-workflow-command-row' },
-            field('已保存的工作流', h('select', { value: selected?.id ?? '', disabled: writeBusy,
-              onChange: (event) => choose(event.target.value || null) },
+            field('已保存的工作流', h('select', { value: selected?.id ?? '', disabled: writeBusy || fileBusy,
+              onChange(event) {
+                const id = event.target.value || null;
+                requestTransition(event.currentTarget, '切换工作流', () => choose(id));
+              } },
             h('option', { value: '', disabled: true }, working ? '新工作流' : workflows.length ? '选择工作流' : '没有已保存的工作流'),
             workflows.map(({ id, name }) => h('option', { key: id, value: id }, name)))),
-            button('新建工作流', create, { primary: !draft, disabled: writeBusy })),
+            button('新建工作流', (event) => requestTransition(event.currentTarget, '新建工作流', create),
+              { primary: !draft, disabled: writeBusy || fileBusy })),
           actions(
-            button('在聊天中创建', () => editInChat(null), { disabled: writeBusy }),
-            selected && button('在聊天中编辑', () => editInChat(selected), { disabled: writeBusy })),
+            button('在聊天中创建', (event) => requestTransition(event.currentTarget, '在聊天中创建工作流', () => editInChat(null)),
+              { disabled: writeBusy || fileBusy }),
+            selected && button('在聊天中编辑', (event) => requestTransition(event.currentTarget, '在聊天中编辑工作流',
+              (saved) => editInChat(saved ?? selected)), { disabled: writeBusy || fileBusy })),
           stale && alert('工作流已在别处更新或删除。当前草稿仍保留。'),
-          stale && actions(button('读取已保存版本', () => choose(selected?.id ?? null), { disabled: writeBusy })),
+          stale && actions(button('读取已保存版本', (event) => requestTransition(event.currentTarget, '读取已保存版本',
+            () => choose(selected?.id ?? null)), { disabled: writeBusy || fileBusy })),
           alert(editError),
           draft && h(React.Fragment, null,
             h('div', { className: 'vc-workflow-edit-name' },
@@ -568,7 +641,8 @@ export function createWorkflowPanel(React, { icon } = {}) {
               onChange: (next) => update({ ...draft, stages: draft.stages.map((item, position) => position === activeStage ? next : item) }),
               onMove: linear ? (next) => moveStage(activeStage, next) : null, onDelete: deleteStage }),
             selected && !confirmDelete && actions(
-              button('删除工作流', () => setConfirmDelete(true), { disabled: writeBusy || stale })),
+              button('删除工作流', (event) => requestTransition(event.currentTarget, '删除工作流',
+                () => setConfirmDelete(true)), { disabled: writeBusy || fileBusy || stale })),
             confirmDelete && actions(
               h('span', null, `删除「${selected?.name ?? draft.name}」？`),
               button('确认删除', () => write({ op: 'delete', id: selected.id, revision: selected.revision }),

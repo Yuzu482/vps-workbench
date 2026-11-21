@@ -26,6 +26,8 @@ export const workflowPanelStyles = `
 .vc-workflow-pane + .vc-workflow-pane {border-inline-start:1px solid var(--vc-line); background:var(--vc-surface)}
 .vc-workflow-edit-pane {gap:12px}
 .vc-workflow-actions {display:flex; flex-wrap:wrap; align-items:center; gap:6px}
+.vc-workflow-draft-confirm {display:grid; gap:14px}
+.vc-workflow-dialog .vc-workflow-draft-confirm h2 {font-size:16px}
 .vc-workflow-title-row {display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px}
 .vc-workflow-proposal-name {display:grid; gap:4px}
 .vc-workflow-command-row {
