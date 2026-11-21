@@ -15,6 +15,9 @@
 /dsh-terminal-workbench/client/browser-test/*
 !/dsh-terminal-workbench/client/browser-test/package.json
 !/dsh-terminal-workbench/client/browser-test/package-lock.json
+!/dsh-terminal-workbench/native/
+/dsh-terminal-workbench/native/*
+!/dsh-terminal-workbench/native/sessions.py
 
 node_modules/
 dist/
