@@ -1,0 +1,2 @@
+# Keep remote Python helpers within the same byte limits on Windows checkouts.
+* text=auto eol=lf

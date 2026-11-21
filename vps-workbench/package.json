@@ -1,0 +1,22 @@
+{
+  "name": "vps-workbench",
+  "version": "0.27.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "preview": "node desktop/preview-server.mjs",
+    "sync:desktop": "pwsh -NoProfile -File ./Sync-Local.ps1",
+    "test": "node --test terminal/subscription-host.test.mjs desktop/workbench.test.mjs desktop/project-memory.test.mjs desktop/preview.test.mjs preview/fixtures/fixtures.test.mjs resource-library/assets.test.mjs extensions/state.test.mjs agent-presets/state.test.mjs workflow-engine/workflow.test.mjs ../remote-workbench/vps-chat/host/workbench-route.test.mjs",
+    "test:desktop": "node --test --test-concurrency=1 desktop/electron.test.mjs desktop/setup-desktop.test.mjs desktop/workflow-desktop.test.mjs"
+  },
+  "devDependencies": {
+    "@novnc/novnc": "1.7.0",
+    "entities": "4.5.0",
+    "esbuild": "0.28.2",
+    "marked": "18.0.11",
+    "parse5": "7.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "ws": "8.23.0"
+  }
+}

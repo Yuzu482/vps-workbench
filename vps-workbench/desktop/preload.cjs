@@ -1,0 +1,33 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('vpsWorkbench', {
+  bootstrap: () => ipcRenderer.invoke('workbench:bootstrap'),
+  setPreference: (key, value) => ipcRenderer.invoke('workbench:set-preference', key, value),
+  setAccess: (access) => ipcRenderer.invoke('workbench:set-access', access),
+  changeExtensions: (change) => ipcRenderer.invoke('workbench:extensions', change),
+  changeWorkflows: (change) => ipcRenderer.invoke('workbench:workflows', change),
+  saveWorkflowAttachments: (files) => ipcRenderer.invoke('workbench:workflow-attachments', files),
+  changeAgentPresets: (change) => ipcRenderer.invoke('workbench:agent-presets', change),
+  onExtensionsChanged(callback) {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('workbench:extensions-changed', listener);
+    return () => ipcRenderer.removeListener('workbench:extensions-changed', listener);
+  },
+  onLocalStatus(callback) {
+    const listener = (_event, message) => callback(message);
+    ipcRenderer.on('workbench:local-status', listener);
+    return () => ipcRenderer.removeListener('workbench:local-status', listener);
+  },
+  writeClipboard: (value) => ipcRenderer.invoke('workbench:write-clipboard', value),
+  addProject: () => ipcRenderer.invoke('workbench:add-project'),
+  removeProject: (id) => ipcRenderer.invoke('workbench:remove-project', id),
+  importHistory: () => ipcRenderer.invoke('workbench:import-history'),
+  edit: (command) => ipcRenderer.invoke('workbench:edit', command),
+  quit: () => ipcRenderer.invoke('workbench:quit'),
+  setChromeTheme: (colors) => ipcRenderer.invoke('workbench:chrome-theme', colors),
+  onProjectsChanged(callback) {
+    const listener = (_event, projects) => callback(projects);
+    ipcRenderer.on('workbench:projects', listener);
+    return () => ipcRenderer.removeListener('workbench:projects', listener);
+  },
+});

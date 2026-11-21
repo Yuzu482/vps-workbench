@@ -1,0 +1,57 @@
+{
+  "name": "dsh-vps-chat-workbench",
+  "version": "0.25.2",
+  "private": true,
+  "type": "module",
+  "description": "DSH Desktop conversations executed by Codex, Claude Code, or Antigravity on a pinned SSH host",
+  "main": "./host/index.js",
+  "exports": {
+    ".": "./host/index.js",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "host/index.js",
+    "host/RemoteClaudeAccount.py",
+    "client/client.js",
+    "client/account-player.mjs",
+    "helper/*.exe",
+    "helper/*.dll",
+    "helper/*.json",
+    "helper/*.py",
+    "helper/dsh-claude-sdk-worker.mjs",
+    "helper/relay/*.exe",
+    "helper/relay/*.dll",
+    "helper/relay/*.json",
+    "licenses/marked.txt",
+    "licenses/entities.txt",
+    "licenses/parse5.txt",
+    "licenses/parse5-entities.txt",
+    "licenses/noVNC-LICENSE.*",
+    "licenses/pako.txt",
+    "licenses/ws.txt",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@novnc/novnc": "1.7.0",
+    "entities": "4.5.0",
+    "esbuild": "0.28.2",
+    "marked": "18.0.11",
+    "parse5": "7.3.0",
+    "ws": "8.23.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "dsh-desktop-workbenches",
+        "@deepseek-ai/dsh-api-workspace-controller"
+      ]
+    }
+  }
+}

@@ -1,0 +1,313 @@
+import { randomBytes } from 'node:crypto';
+import { watch as watchDirectory } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
+import { buildWebAssets, webSourceDirectories } from './web-assets.mjs';
+import { accessDenied, defaultAccess, permitsChat, permitsTerminal, validAccess } from './access.mjs';
+import { createProjectMemoryBridge } from './project-memory.mjs';
+import { applyExtensionChange, extensionPreferenceKey, readExtensions } from '../extensions/state.mjs';
+import { membershipKey, parseProjectMemberships } from '../../remote-workbench/vps-chat/client/project-folders.js';
+import { readWorkflowRun } from '../workflow-engine/runner.mjs';
+import { readWorkflows } from '../workflow-engine/state.mjs';
+import { decodeWorkflowAttachments } from './workflow-attachments.mjs';
+import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
+
+const previewPort = 47823;
+const previewPrefix = '/__preview/';
+const chatPrefix = '/dsh-vps-chat/api/';
+const terminalPrefix = '/dsh-terminal-workbench/api/';
+const sampleArtifact = Buffer.from('# 阶段示例结果\n\n这是本地预览中的示例产物。\n');
+const sampleArtifactPath = 'docs/阶段结果.md';
+
+function previewArtifacts({ path, after, offset }) {
+  const entry = { path: sampleArtifactPath, size: sampleArtifact.length };
+  if (path === undefined) return { ok: true, files: !after || entry.path > after ? [entry] : [], truncated: false };
+  if (path === sampleArtifactPath && (offset === undefined || offset < entry.size)) {
+    const data = sampleArtifact.subarray(offset ?? 0).toString('base64');
+    return { ok: true, file: { ...entry, data, ...(offset === undefined ? {} : { offset, revision: 'a'.repeat(64) }) } };
+  }
+  return { ok: false, code: 'workflow_output_unavailable', message: '示例产物已不可用。' };
+}
+const nativeSource = new URL('./preview-native.js', import.meta.url);
+const mime = new Map([
+  ['index.html', 'text/html; charset=utf-8'],
+  ['workbench.css', 'text/css; charset=utf-8'],
+  ['renderer.js', 'text/javascript; charset=utf-8'],
+  ['markdown-worker.js', 'text/javascript; charset=utf-8'],
+  ['app-icon.png', 'image/png'],
+]);
+const headers = {
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Content-Security-Policy': [
+    "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:", "font-src 'self' data:", "frame-src 'self' about: blob:",
+    "object-src 'none'", "base-uri 'none'", "form-action 'none'", "connect-src 'self'",
+  ].join('; '),
+};
+
+function reply(response, status, type, content) {
+  response.writeHead(status, { ...headers, 'Content-Type': type }).end(content);
+}
+
+function json(response, value, status = 200) {
+  reply(response, status, 'application/json; charset=utf-8', JSON.stringify(value));
+}
+
+async function readPacket(request) {
+  if (request.headers['content-type'] !== 'application/json') throw new Error('invalid_content_type');
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of request) {
+    length += chunk.length;
+    if (length > 2 * 1024 * 1024) throw new Error('body_too_large');
+    chunks.push(chunk);
+  }
+  const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  if (!value || typeof value.op !== 'string') throw new Error('invalid_packet');
+  return value;
+}
+
+async function buildPreview(instance) {
+  const [desktop, source] = await Promise.all([buildWebAssets(), readFile(nativeSource)]);
+  const index = Buffer.from(desktop.files.get('index.html')).toString('utf8');
+  if (!index.includes('</head>')) throw new Error('Preview entry requires the shared document head.');
+  const document = index.replace('<title>VPS 工作台</title>', '<title>VPS 工作台 · 界面预览</title>')
+    .replace('</head>', `  <meta name="workbench-revision" content="${desktop.manifest.revision}">\n` +
+      `    <meta name="workbench-preview-instance" content="${instance}">\n` +
+      `    <script src="${previewPrefix}native.js"></script>\n  </head>`);
+  return { ...desktop, source, document };
+}
+
+export async function startPreview({ port = previewPort, watch = true, log = () => {} } = {}) {
+  const instance = randomBytes(8).toString('hex');
+  let current = await buildPreview(instance);
+  let access = defaultAccess;
+  const fixtures = createPreviewFixtures();
+  let projects = fixtures.projects;
+  const token = randomBytes(24).toString('base64url');
+  const clients = new Set();
+  const watchers = [];
+  const workflowRuns = new Map();
+  const workflowApprovals = new Map();
+  const attachments = new Map();
+  const data = {
+    preference: (key) => fixtures.preferences[key],
+    setPreference: async (key, value) => { fixtures.preferences[key] = value; },
+    projects: () => projects,
+    readWorkflowAttachments: async (refs) => refs.map(({ digest, name, size }) => {
+      const content = attachments.get(digest);
+      if (content?.length !== size) throw new Error('preview_attachment_missing');
+      return { name, data: content.toString('base64') };
+    }),
+    changeExtensions: async (change, { canCommit = () => true } = {}) => {
+      if (!canCommit()) return null;
+      const state = applyExtensionChange(readExtensions(fixtures.preferences[extensionPreferenceKey] ?? null), change);
+      fixtures.preferences[extensionPreferenceKey] = JSON.stringify(state);
+      return state;
+    },
+  };
+  const chat = createProjectMemoryBridge({
+    data, backend: { request: fixtures.chat }, extractor: { request: fixtures.extractMemory }, access: () => access,
+    readRun: (id) => workflowRuns.get(id),
+    readSavedWorkflow: (id, runId) => {
+      const approved = workflowApprovals.get(runId);
+      return approved?.id === id ? approved : null;
+    },
+    onChange: (state) => {
+      for (const client of clients) client.write('event: extensions\ndata: ' + JSON.stringify(state) + '\n\n');
+    },
+  });
+  let origin;
+  let authority;
+  let closed = false;
+  let timer;
+  let building = false;
+  let queued = false;
+
+  function refresh() {
+    clearTimeout(timer);
+    timer = setTimeout(rebuild, 150);
+  }
+
+  async function rebuild() {
+    if (building) { queued = true; return; }
+    building = true;
+    try {
+      const next = await buildPreview(instance);
+      if (closed) return;
+      const changed = next.manifest.revision !== current.manifest.revision || !next.source.equals(current.source);
+      current = next;
+      if (changed) {
+        for (const client of clients) client.write('event: reload\ndata: ' + next.manifest.revision + '\n\n');
+        log('界面已更新 ' + next.manifest.revision.slice(0, 12));
+      }
+    } catch (error) {
+      log('界面构建失败，预览继续显示上次成功的版本。\n' + error.message);
+    } finally {
+      building = false;
+      if (queued && !closed) { queued = false; refresh(); }
+    }
+  }
+
+  const server = createServer(async (request, response) => {
+    if (request.socket.remoteAddress !== '127.0.0.1' || request.headers.host !== authority ||
+        (request.headers.origin && request.headers.origin !== origin)) {
+      return json(response, { ok: false, code: 'preview_origin_required' }, 403);
+    }
+    const { method, url } = request;
+    if (method === 'GET') {
+      if (url === previewPrefix + 'state') {
+        return json(response, { preferences: fixtures.preferences, projects, access });
+      }
+      if (url === previewPrefix + 'revision') return json(response, current.manifest);
+      if (url === previewPrefix + 'native.js') return reply(response, 200, mime.get('renderer.js'), current.source);
+      if (url === previewPrefix + 'changes') {
+        response.writeHead(200, { ...headers, 'Content-Type': 'text/event-stream; charset=utf-8' });
+        clients.add(response);
+        response.on('close', () => clients.delete(response));
+        response.write(`event: revision\ndata: ${current.manifest.revision}:${instance}\n\n`);
+        return;
+      }
+      if (url === chatPrefix + 'token' && request.headers['x-dsh-vps-chat'] === '1') {
+        return json(response, { ok: true, token });
+      }
+      if (url === terminalPrefix + 'bootstrap' && request.headers['x-rtw-bootstrap'] === '1') {
+        return json(response, { token });
+      }
+      if (url === '/') return reply(response, 200, mime.get('index.html'), current.document);
+      const name = url?.slice(1);
+      if (name !== 'index.html' && mime.has(name)) return reply(response, 200, mime.get(name), current.files.get(name));
+    }
+
+    if (method === 'POST' && url === previewPrefix + 'access' && request.headers.origin === origin) {
+      try {
+        const { op, ...next } = await readPacket(request);
+        if (op !== 'set-access' || !validAccess(next)) throw new Error('invalid_access');
+        access = next;
+        return json(response, access);
+      } catch {
+        return json(response, { ok: false, code: 'invalid_access' }, 400);
+      }
+    }
+    if (method === 'POST' && request.headers.origin === origin && url === previewPrefix + 'extensions') {
+      try {
+        const change = await readPacket(request);
+        if (change.op === 'accept-automatic-memory' || change.op === 'set-automatic-memory' &&
+            !projects.some(({ workspaceId }) => workspaceId === change.projectId)) throw new Error('invalid_preview_change');
+        return json(response, await data.changeExtensions(change));
+      } catch { return json(response, { ok: false, code: 'invalid_preview_change' }, 400); }
+    }
+    if (method === 'POST' && request.headers.origin === origin && url === previewPrefix + 'workflow-run') {
+      try {
+        const packet = await readPacket(request);
+        if (packet.op !== 'save-workflow-run') throw new Error('invalid_preview_workflow');
+        const snapshot = readWorkflowRun(packet.value);
+        if (![2, 3, 4].includes(snapshot?.version)) throw new Error('invalid_preview_workflow');
+        const approved = packet.approval ? readWorkflows(JSON.stringify([packet.approval]))[0] : null;
+        if (approved && snapshot.workflowId !== approved.id) throw new Error('invalid_preview_workflow');
+        workflowApprovals.set(snapshot.id, approved);
+        workflowRuns.delete(snapshot.id);
+        workflowRuns.set(snapshot.id, snapshot);
+        if (workflowRuns.size > 16) {
+          const oldest = workflowRuns.keys().next().value;
+          workflowRuns.delete(oldest);
+          workflowApprovals.delete(oldest);
+        }
+        return json(response, { ok: true });
+      } catch { return json(response, { ok: false, code: 'invalid_preview_workflow' }, 400); }
+    }
+    if (method === 'POST' && request.headers.origin === origin && url === previewPrefix + 'workflow-attachments') {
+      try {
+        const packet = await readPacket(request);
+        if (packet.op !== 'save-workflow-attachments') throw new Error('invalid_preview_attachments');
+        const items = decodeWorkflowAttachments(packet.files);
+        const refs = items.map(({ bytes, ...ref }) => { attachments.set(ref.digest, bytes); return ref; });
+        return json(response, refs);
+      } catch { return json(response, { ok: false, code: 'invalid_preview_attachments' }, 400); }
+    }
+    if (method === 'POST' && request.headers.origin === origin && url === previewPrefix + 'projects') {
+      try {
+        const packet = await readPacket(request);
+        if (packet.op === 'set-memberships') {
+          if (typeof packet.targetId !== 'string' || !/^[a-f0-9]{64}$/.test(packet.targetId) ||
+              (packet.value !== null && typeof packet.value !== 'string')) throw new Error('invalid_preview_projects');
+          parseProjectMemberships(packet.value);
+          const key = membershipKey(packet.targetId);
+          if (packet.value === null) delete fixtures.preferences[key];
+          else fixtures.preferences[key] = packet.value;
+          return json(response, { ok: true });
+        }
+        if (packet.op !== 'set-projects' || !Array.isArray(packet.projects) || packet.projects.length > 100 ||
+            packet.projects.some(({ workspaceId, title }) => typeof workspaceId !== 'string' || workspaceId.length > 100 ||
+              typeof title !== 'string' || !title.trim() || title.length > 100)) throw new Error('invalid_preview_projects');
+        projects = packet.projects;
+        return json(response, { ok: true });
+      } catch { return json(response, { ok: false, code: 'invalid_preview_projects' }, 400); }
+    }
+    if (method === 'POST' && (url === chatPrefix + 'rpc' || url === terminalPrefix + 'rpc')) {
+      const isChat = url === chatPrefix + 'rpc';
+      const tokenHeader = isChat ? 'x-dsh-vps-chat-token' : 'x-rtw-token';
+      if (request.headers[tokenHeader] !== token) return json(response, { ok: false, code: 'preview_token_required' }, 403);
+      try {
+        const packet = await readPacket(request);
+        if (!(isChat ? permitsChat : permitsTerminal)(access, packet.op)) return json(response, accessDenied, 403);
+        if (isChat && packet.op === 'workflow-artifacts') {
+          return json(response, await readWorkflowArtifacts(packet, {
+            readRun: () => workflowRuns.get(packet.workflowRunId), backend: { request: previewArtifacts },
+          }));
+        }
+        return json(response, isChat ? await chat.request(packet, {
+          isLive: () => !closed && !request.aborted && !response.destroyed,
+        }) : fixtures.terminal(packet));
+      } catch {
+        return json(response, { ok: false, code: 'invalid_preview_request', message: '预览暂时无法处理此请求。' }, 400);
+      }
+    }
+    return json(response, { ok: false, code: 'preview_route_unavailable' }, 404);
+  });
+  server.on('upgrade', (_request, socket) => socket.destroy());
+  await new Promise((accept, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', accept);
+  });
+  authority = `127.0.0.1:${server.address().port}`;
+  origin = `http://${authority}`;
+
+  async function close() {
+    if (closed) return;
+    closed = true;
+    chat.dispose();
+    clearTimeout(timer);
+    for (const watcher of watchers) watcher.close();
+    for (const client of clients) client.end();
+    await new Promise((done) => { server.close(done); server.closeAllConnections(); });
+  }
+
+  if (watch) {
+    try {
+      for (const directory of webSourceDirectories) {
+        const watcher = watchDirectory(directory, { recursive: true }, (_event, name) => {
+          if (!name || /(?:\.(?:[cm]?js|css|html|png)|package\.json)$/i.test(name)) refresh();
+        });
+        watcher.on('error', (error) => log('预览文件监听已停止：' + error.message));
+        watchers.push(watcher);
+      }
+    } catch (error) {
+      await close();
+      throw error;
+    }
+  }
+  return { origin, close };
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  const preview = await startPreview({ log: console.log });
+  console.log(`VPS 工作台 · 界面预览 ${preview.origin}/`);
+  for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void preview.close(); });
+}

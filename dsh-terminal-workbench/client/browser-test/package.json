@@ -1,0 +1,12 @@
+{
+  "name": "dsh-terminal-browser-fixture",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": { "test": "node ../build.cjs && node --test renderer.test.cjs background-bridge.test.cjs" },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright-core": "1.64.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}

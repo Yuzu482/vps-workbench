@@ -1,0 +1,5 @@
+- insert:
+    - id: dsh-vps-chat-workbench
+      name: dsh-vps-chat-workbench
+      config:
+        root: !!js dshHomePath('vps-chat-workbench')

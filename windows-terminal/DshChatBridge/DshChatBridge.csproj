@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>DshVpsChatBridge</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Core/Core.csproj" />
+    <Content Include="../RemoteTask.py;../RemoteTaskStart.py;../RemoteTaskStatus.py;../RemoteCodexPrivacy.py;../RemoteCodexIsolate.py"
+             Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="RemoteDshCodexStream.py;RemoteDshClaudeSdk.py;RemoteDshAntigravity.py;RemoteDshExtensions.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="RemoteDshSetup.py;RemoteWorkflowFiles.py;RemoteWorkflowArtifacts.py" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../RemoteNativeSafety.py;../RemoteNativeSession.py;../../dsh-terminal-workbench/native/sessions.py"
+             Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../remote-workbench/vps-chat/claude-sdk/worker.mjs" Link="dsh-claude-sdk-worker.mjs"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../DshCatalog/RemoteDshCodexCatalog.py" Link="RemoteDshCodexCatalog.py"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

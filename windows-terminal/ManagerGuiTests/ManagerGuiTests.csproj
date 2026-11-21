@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><UseWindowsForms>true</UseWindowsForms></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Core/Core.csproj" />
+    <Compile Include="../Manager/TaskManagerForm.cs" Link="TaskManagerForm.cs" />
+    <Compile Include="../Manager/ChatForm.cs" Link="ChatForm.cs" />
+    <Compile Include="../Manager/ConnectionForm.cs" Link="ConnectionForm.cs" />
+    <Compile Include="../Manager/PrivacyOptionsForm.cs" Link="PrivacyOptionsForm.cs" />
+    <Content Include="../RemoteTask*.py" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../RemoteCodexPrivacy.py" Link="RemoteCodexPrivacy.py" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../RemoteCodexIsolate.py" Link="RemoteCodexIsolate.py" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../RemoteNativeSafety.py" Link="RemoteNativeSafety.py" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../RemoteNativeSession.py" Link="RemoteNativeSession.py" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../RemoteClaudeShared.py" Link="RemoteClaudeShared.py" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../RemoteChatFiles.py" Link="RemoteChatFiles.py" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

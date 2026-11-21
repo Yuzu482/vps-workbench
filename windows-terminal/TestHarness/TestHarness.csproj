@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><AssemblyName>BridgeHarness</AssemblyName></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../terminal-bridge/PtyCore/PtyCore.csproj" />
+    <ProjectReference Include="../../terminal-bridge/Bridge/Bridge.csproj" />
+    <ProjectReference Include="../Core/Core.csproj" />
+  </ItemGroup>
+</Project>
