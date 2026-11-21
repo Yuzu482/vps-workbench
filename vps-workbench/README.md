@@ -1,10 +1,10 @@
 # VPS 工作台
 
-Windows 独立应用。对话、设计、账号设置和工具切换沿用现有工作台组件。应用窗口和数据由本项目管理，模型执行及账号网页在 VPS 上启动。
+Windows 独立应用。可选「VPS SSH」和「本机 SDK」两个执行位置。VPS 可使用现有对话、设计、工作流和账号管理。本机可通过 Windows 上的 Codex SDK 进行文本对话。
 
 ## 启动与导入
 
-打开发行目录中的 **VPS Workbench.exe**。整个发行目录可以复制到其他位置。运行需要 Windows x64、.NET 10 Runtime、Windows OpenSSH 和 Python 3.11。Python 默认检测当前用户的 Python 3.11 安装目录，也可通过 VPS_WORKBENCH_PYTHON 指定完整的 python.exe 路径。
+打开发行目录中的 **VPS Workbench.exe**。整个发行目录可以复制到其他位置。运行需要 Windows x64。VPS SSH 使用 .NET 10 Runtime、Windows OpenSSH 和 Python 3.11。Python 默认检测当前用户的 Python 3.11 安装目录，也可通过 VPS_WORKBENCH_PYTHON 指定完整的 python.exe 路径。
 
 - 在「VPS 设置」里选择已经在 VPS 上配置的执行端，并核对 SSH 主机指纹。
 - 在顶部「本地项目 → 添加目录…」登记目录。应用本机保存归类关系。
@@ -23,6 +23,16 @@ Windows 独立应用。对话、设计、账号设置和工具切换沿用现有
 Codex 转场的 01 字层按窗口像素准备一次，展开与主题替换由同一个时间轴控制。Claude 染色对扩散前沿使用模糊滤镜，细枝和液滴用矢量路径和局部渐变绘制。
 
 Antigravity 的周期表随可用宽高等比缩放。转场中调整窗口大小时，工作台直接显示切换后的完整界面。
+
+## 本机 SDK
+
+标题栏下方的两个位置按钮用于打开各自的历史。「新建位置」决定下一次从侧栏点新建对话时使用哪个位置。紧凑设计画布可从「文件」菜单访问这些操作。已存在的会话沿用创建时的配置，VPS 会话的 SSH 指纹和中继要求继续生效。
+
+打开「本机 SDK → 配置」，选择 Windows 上的只读工作目录、模型和推理档位。首版使用包内官方 Codex SDK 和 CLI 0.166.0，以启动时环境变量 `VPS_WORKBENCH_LOCAL_CODEX_API_KEY` 接收本机 OpenAI API 密钥。通过可信本机启动器注入有权使用的密钥，避免写入命令行、源码或长期 Shell 配置。工作台只显示凭据是否已配置。模型开通情况和网络连通以实际对话为准。
+
+本机 Codex 请求使用官方 OpenAI API 端点和 Windows 网络。子进程使用私有 Codex 状态、受限环境与 Windows 只读沙箱。系统级管理策略继续适用。本机配置、SDK 原生线程与回执在工作台数据目录的 `local-sdk/` 中，凭据只在本机进程中传递。SSH 连接与导入继续使用原有会话目录。
+
+本机支持纯文本发送、流式 Markdown、停止和历史续聊。停止会取消本机 SDK 流。如果缺少完成或失败回执，原轮保持待确认，可查询原回执或新建对话。已完成的历史可在应用重启后打开。同一轮次的重试核对原回执。仅浏览模式可以查看历史和编辑草稿。附件、远端账号页、SSH 终端、设计、工作流、VPS MCP 和自动记忆在 VPS SSH 中使用。
 
 ## VPS 连接
 
@@ -111,9 +121,11 @@ Antigravity 聊天生成时可以补充指令。工具审批卡片显示当前�
 
 ## 构建
 
-从仓库根目录分别运行 `npm ci --ignore-scripts --prefix vps-workbench` 和 `npm ci --ignore-scripts --prefix remote-workbench/vps-chat`，再运行 `pwsh -File ./vps-workbench/Build.ps1`。构建使用同一工作区的共享组件和 `windows-terminal` 运行时源码。脚本校验缓存的 Electron 44.7.0 归档及两份兼容执行器归档。可通过 `-ElectronZip`、`-CompatibilityArchive` 和 `-SubscriptionArchive` 指定归档路径。
+从仓库根目录分别运行 `npm ci --ignore-scripts --prefix vps-workbench` 和 `npm ci --ignore-scripts --prefix remote-workbench/vps-chat`，再运行 `pwsh -File ./vps-workbench/Build.ps1`。构建使用同一工作区的共享组件和 `windows-terminal` 运行时源码。脚本校验缓存的 Electron 44.7.0 归档及两份兼容执行器归档。`Build.ps1` 和 `Sync-Local.ps1 -StageOnly` 都可通过 `-ElectronZip`、`-CompatibilityArchive` 和 `-SubscriptionArchive` 指定归档路径。Codex SDK、Windows CLI 及平台包完整性由 npm lockfile 固定，包内保留许可证与原生资源声明。
 
 发布输出在 `dist/VPS-Workbench-<版本>-win-x64`。DSH 插件由原来的 remote-workbench/vps-chat/Build.ps1 单独打包。运行 npm test 检查独立本机状态、导入、接口授权、订阅终端回执与界面预览。运行 npm run test:desktop 验证打包窗口和工作台交互。
+
+验收暂存包时，将 `VPS_WORKBENCH_TEST_EXE` 指向暂存目录中的可执行文件再运行桌面测试。测试使用隔离的数据目录、模拟回复与只读沙箱探针。启用前记录当前版本的可执行文件和数据目录，等任务完成或确认可按原回执查询后，保留旧版本目录和数据的本机备份。需要回滚时，先关闭候选版并另外保留启用后产生的记录，再从旧版目录启动；需要恢复旧数据快照时，可先将其复制到单独目录并通过 `VPS_WORKBENCH_DATA_DIR` 启动旧版核对。
 
 ## Git 与历史版本
 

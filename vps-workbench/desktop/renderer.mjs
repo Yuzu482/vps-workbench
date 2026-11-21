@@ -2,6 +2,8 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { createWorkbench } from '../../remote-workbench/vps-chat/client/workbench.js';
 import { menuIcon } from '../../remote-workbench/vps-chat/client/menu-icons.js';
+import { createMarkdownReply } from '../../remote-workbench/vps-chat/client/markdown.js';
+import { readPreferences } from '../../remote-workbench/vps-chat/client/workbench-preferences.js';
 import { setWorkbenchStorage } from '../../remote-workbench/vps-chat/client/workbench-storage.js';
 import { createResourceLibrary } from '../resource-library/index.mjs';
 import { createStandaloneSubscriptionView } from '../terminal/subscription-view.mjs';
@@ -22,9 +24,14 @@ import { createStreamingMarkdownParser, stabilizeStreamingRecord } from './strea
 import { useWorkflowControls } from './workflow-controls.mjs';
 import { SetupGuide } from './setup-guide.mjs';
 import { setupConnectionKey } from './setup-state.mjs';
+import { createLocalWorkspace } from '../local-ui/index.mjs';
 
 const h = React.createElement;
 const native = window.vpsWorkbench;
+const locations = [['ssh-vps', 'VPS SSH'], ['local-sdk', '本机 SDK']];
+const newLocationKey = 'dsh-vps-chat:desktop-new-location:v1';
+const viewLocationKey = 'dsh-vps-chat:desktop-view-location:v1';
+const readLocation = (value) => value === 'local-sdk' ? value : 'ssh-vps';
 const writeClipboard = (text) => native.writeClipboard(text);
 const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
 const updateTheme = () => { document.documentElement.dataset.theme = systemTheme.matches ? 'dark' : 'light'; };
@@ -140,7 +147,14 @@ try {
     onThemeReveal: (element, progress) => element.dispatchEvent(
       new CustomEvent('workbench:theme-reveal', { detail: progress })),
   });
+  const LocalWorkspace = createLocalWorkspace(React, { icon: menuIcon,
+    MarkdownReply: createMarkdownReply(React, CodeBlock, createStreamingMarkdownParser()) });
   function DesktopApp() {
+    const [newLocation, setNewLocation] = React.useState(() => readLocation(values.get(newLocationKey)));
+    const [location, setLocation] = React.useState(() => readLocation(values.get(viewLocationKey)));
+    const [visited, setVisited] = React.useState(() => new Set([location]));
+    const [localNew, setLocalNew] = React.useState(0);
+    const [sshNew, setSshNew] = React.useState(0);
     const [resourcesOpen, setResourcesOpen] = React.useState(false);
     const [access, setAccess] = React.useState(initialAccess);
     const [extensions, setExtensions] = React.useState(startingExtensions);
@@ -152,6 +166,21 @@ try {
     const editingExtensions = React.useRef(false);
     const [accessPending, setAccessPending] = React.useState(false);
     const saving = React.useRef(false);
+    function openLocation(next) {
+      if (next === location) return;
+      setVisited((previous) => previous.has(next) ? previous : new Set([...previous, next]));
+      setLocation(next);
+      void saveLocalPreference(viewLocationKey, next).catch(reportChromeError);
+    }
+    function changeNewLocation(next) {
+      setNewLocation(next);
+      void saveLocalPreference(newLocationKey, next).catch(reportChromeError);
+    }
+    function startChat() {
+      openLocation(newLocation);
+      if (newLocation === 'local-sdk') setLocalNew((epoch) => epoch + 1);
+      else setSshNew((epoch) => epoch + 1);
+    }
     async function changeAccess(next) {
       if (saving.current) return;
       saving.current = true;
@@ -189,13 +218,29 @@ try {
       setAgentItems(updated);
       return updated;
     }
+    const sshVisible = location === 'ssh-vps';
+    const appearance = readPreferences();
     return h(React.Fragment, null,
-      h(DesktopChrome, { native, projectCatalog, onError: reportChromeError, onOpenResources: () => setResourcesOpen(true) }),
-      h(Workbench, { projectCatalog, terminalView, resourcesOpen, setResourcesOpen, access, accessPending, changeAccess,
+      h(DesktopChrome, { native, projectCatalog, location, newLocation, locations, openLocation, changeNewLocation,
+        onError: reportChromeError,
+        onOpenResources: () => setResourcesOpen(true) }),
+      h('div', { className: 'desktop-location-bar' },
+        h('div', { role: 'group', 'aria-label': '打开会话历史', className: 'desktop-location-tabs' },
+          locations.map(([id, label]) => h('button', { key: id, type: 'button',
+            'aria-pressed': id === location, onClick: () => openLocation(id) }, label))),
+        h('label', null, '新建位置',
+          h('select', { value: newLocation, onChange: (event) => changeNewLocation(event.target.value) },
+            locations.map(([id, label]) => h('option', { key: id, value: id }, label))))),
+      visited.has('ssh-vps') ? h(Workbench, { projectCatalog, terminalView, resourcesOpen, setResourcesOpen,
+        access, accessPending, changeAccess, visible: sshVisible, active: sshVisible, newChatRequest: sshNew,
+        onNewChat: newLocation === 'local-sdk' ? startChat : undefined,
         extensions: { state: extensions, change: changeExtensions, busy: extensionsBusy },
         agentPresets: { items: agentItems, change: changeAgentPresets, error: agentPresetError },
         workflowStore: { items: workflowItems, change: changeWorkflows, initialRun: initialWorkflowRun,
-          saveRun: saveWorkflowRun, saveAttachments: saveWorkflowAttachments, error: workflowError } }));
+          saveRun: saveWorkflowRun, saveAttachments: saveWorkflowAttachments, error: workflowError } }) : null,
+      visited.has('local-sdk') ? h(LocalWorkspace, { native, active: !sshVisible, access, accessPending, changeAccess,
+        newConversation: localNew, onNewChat: startChat, defaultLocation: newLocation,
+        appearance, sendKey: appearance.sendKey }) : null);
   }
   root.render(h(DesktopApp));
 } catch {

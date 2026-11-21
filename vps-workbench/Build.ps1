@@ -132,7 +132,9 @@ try {
         'helper/RemoteWorkflowArtifacts.py',
         'helper/DshVpsChatBridge.exe', 'helper/relay/RemoteSsh.Proxy.exe', 'helper/compat/DshVpsChatBridge.exe',
         'helper/compat/sdk/dsh-claude-sdk-worker.mjs', 'helper/compat/antigravity/RemoteDshAntigravity.py',
-        'helper/terminal/DshSshBridge.exe', 'helper/terminal/helpers/remote_interactive.py')
+        'helper/terminal/DshSshBridge.exe', 'helper/terminal/helpers/remote_interactive.py',
+        'node_modules/@openai/codex-sdk/dist/index.js', 'node_modules/@openai/codex-sdk/LICENSE',
+        'helper/local-codex/bin/codex.exe', 'helper/local-codex/LICENSE')
     foreach ($path in @('helper','helper/compat','helper/compat/sdk','helper/compat/antigravity')) {
         $requiredFiles += @('DshVpsChatBridge.exe','DshVpsChatBridge.dll','DshVpsChatBridge.deps.json',
             'DshVpsChatBridge.runtimeconfig.json','RemoteSsh.Core.dll') | ForEach-Object { "$path/$_" }

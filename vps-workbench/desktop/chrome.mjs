@@ -110,13 +110,15 @@ function TitleMenu({ kind, label, children, items }) {
     })));
 }
 
-export function DesktopChrome({ native, projectCatalog, onError, onOpenResources }) {
+export function DesktopChrome({ native, projectCatalog, location, newLocation, locations, openLocation, changeNewLocation,
+  onError, onOpenResources }) {
   const header = React.useRef(null);
   const sidebar = React.useRef(null);
   const sidebarButton = React.useRef(null);
   const historyButton = React.useRef(null);
   const lastContentFocus = React.useRef(null);
   const [wideSidebar, setWideSidebar] = React.useState(true);
+  const [sidebarId, setSidebarId] = React.useState('desktop-workbench-sidebar');
   const [layout, setLayout] = React.useState({ narrow: narrowViewport.matches, narrowSidebar: false, subscription: false });
   const { items: projects } = React.useSyncExternalStore(projectCatalog.subscribe, projectCatalog.getSnapshot);
   const sidebarVisible = !layout.subscription && (layout.narrow ? layout.narrowSidebar : wideSidebar);
@@ -124,12 +126,13 @@ export function DesktopChrome({ native, projectCatalog, onError, onOpenResources
 
   React.useLayoutEffect(() => {
     const root = header.current.parentElement;
-    const workbench = root.querySelector('[data-vps-chat]');
+    const workbench = root.querySelector(location === 'local-sdk' ? '[data-local-sdk]' : '[data-vps-chat]');
     // The standalone toggle uses the same narrow history state and automatic closing as the Workbench.
     const toggle = workbench.querySelector('.vc-history-toggle');
     historyButton.current = toggle;
     sidebar.current = workbench.querySelector('.vc-rail');
-    sidebar.current.id = 'desktop-workbench-sidebar';
+    if (!sidebar.current.id) sidebar.current.id = 'desktop-workbench-sidebar';
+    setSidebarId(sidebar.current.id);
     const chromeColors = connectChromeColors(root, workbench, native.setChromeTheme, onError, reducedMotion);
 
     function rememberFocus(event) { lastContentFocus.current = event.target; }
@@ -163,13 +166,13 @@ export function DesktopChrome({ native, projectCatalog, onError, onOpenResources
       systemDark.removeEventListener('change', synchronize);
       reducedMotion.removeEventListener('change', synchronize);
     };
-  }, [native, onError]);
+  }, [native, onError, location]);
 
   React.useLayoutEffect(() => {
     const rail = sidebar.current;
     if (!sidebarVisible && rail.contains(document.activeElement)) sidebarButton.current.focus({ preventScroll: true });
     rail.inert = !sidebarVisible;
-  }, [sidebarVisible]);
+  }, [sidebarVisible, location]);
 
   function toggleSidebar() {
     if (narrowViewport.matches) {
@@ -182,7 +185,16 @@ export function DesktopChrome({ native, projectCatalog, onError, onOpenResources
   }
 
   const fileItems = [
-    { key: 'import', label: '导入 DSH 对话数据…', icon: 'import', run: () => run(native.importHistory) },
+    ...(location === 'local-sdk' ? [] : [
+      { key: 'import', label: '导入 DSH 对话数据…', icon: 'import', run: () => run(native.importHistory) },
+      { key: 'location-separator', type: 'separator' },
+    ]),
+    { key: 'history-location', type: 'heading', label: '打开会话历史' },
+    ...locations.map(([id, label]) => ({ key: 'open-' + id,
+      label: label + ' 历史' + (id === location ? ' · 当前' : ''), run: () => openLocation(id) })),
+    { key: 'new-location', type: 'heading', label: '新建位置' },
+    ...locations.map(([id, label]) => ({ key: 'new-' + id,
+      label: '新建时使用 ' + label + (id === newLocation ? ' · 默认' : ''), run: () => changeNewLocation(id) })),
     { key: 'quit-separator', type: 'separator' },
     { key: 'quit', label: '退出工作台', icon: 'exit', shortcut: 'Alt+F4', run: () => run(native.quit) },
   ];
@@ -214,7 +226,7 @@ export function DesktopChrome({ native, projectCatalog, onError, onOpenResources
     h('div', { className: 'desktop-title-controls', role: 'group', 'aria-label': '工作台操作' },
       h('button', {
         ref: sidebarButton, type: 'button', className: 'desktop-title-button desktop-sidebar-button',
-        title: sidebarLabel, 'aria-label': sidebarLabel, 'aria-controls': 'desktop-workbench-sidebar',
+        title: sidebarLabel, 'aria-label': sidebarLabel, 'aria-controls': sidebarId,
         'aria-expanded': sidebarVisible, disabled: layout.subscription, onClick: toggleSidebar,
       }, glyph('sidebar')),
       h('div', { className: 'desktop-brand' },
@@ -223,5 +235,5 @@ export function DesktopChrome({ native, projectCatalog, onError, onOpenResources
       h('span', { className: 'desktop-title-divider', 'aria-hidden': true }),
       h(TitleMenu, { kind: 'file', label: '文件', items: fileItems }, '文件', glyph('chevron')),
       h(TitleMenu, { kind: 'edit', label: '编辑', items: editItems }, '编辑', glyph('chevron')),
-      h(TitleMenu, { kind: 'projects', label: '项目', items: projectItems }, '项目', glyph('chevron'))));
+      location !== 'local-sdk' ? h(TitleMenu, { kind: 'projects', label: '项目', items: projectItems }, '项目', glyph('chevron')) : null));
 }

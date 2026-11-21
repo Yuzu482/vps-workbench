@@ -14,6 +14,7 @@ import { readWorkflowRun } from '../workflow-engine/runner.mjs';
 import { readWorkflows } from '../workflow-engine/state.mjs';
 import { decodeWorkflowAttachments } from './workflow-attachments.mjs';
 import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
+import { createPreviewLocalSdk } from '../preview/fixtures/local-sdk.mjs';
 
 const previewPort = 47823;
 const previewPrefix = '/__preview/';
@@ -88,6 +89,7 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
   const instance = randomBytes(8).toString('hex');
   let current = await buildPreview(instance);
   let access = defaultAccess;
+  let previewLocal;
   const fixtures = createPreviewFixtures();
   let projects = fixtures.projects;
   const token = randomBytes(24).toString('base64url');
@@ -133,6 +135,11 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
   function refresh() {
     clearTimeout(timer);
     timer = setTimeout(rebuild, 150);
+  }
+
+  function localSdk() {
+    previewLocal ??= createPreviewLocalSdk(() => access);
+    return previewLocal;
   }
 
   async function rebuild() {
@@ -185,11 +192,19 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
       if (name !== 'index.html' && mime.has(name)) return reply(response, 200, mime.get(name), current.files.get(name));
     }
 
+    if (url === previewPrefix + 'local-sdk' &&
+        (method === 'GET' || method === 'POST' && request.headers.origin === origin)) {
+      try {
+        const local = await localSdk();
+        return json(response, method === 'GET' ? local.status() : await local.request(await readPacket(request)));
+      } catch { return json(response, { ok: false, code: 'preview_local_sdk_unavailable' }, 400); }
+    }
     if (method === 'POST' && url === previewPrefix + 'access' && request.headers.origin === origin) {
       try {
         const { op, ...next } = await readPacket(request);
         if (op !== 'set-access' || !validAccess(next)) throw new Error('invalid_access');
         access = next;
+        if (access.mode === 'browse') (await previewLocal)?.revokeExecution();
         return json(response, access);
       } catch {
         return json(response, { ok: false, code: 'invalid_access' }, 400);
@@ -284,6 +299,7 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
     if (closed) return;
     closed = true;
     chat.dispose();
+    await (await previewLocal?.catch(() => null))?.close();
     clearTimeout(timer);
     for (const watcher of watchers) watcher.close();
     for (const client of clients) client.end();

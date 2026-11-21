@@ -2,6 +2,9 @@
 param(
     [Parameter(ParameterSetName = 'Build')][switch]$StageOnly,
     [Parameter(ParameterSetName = 'Install', Mandatory)][string]$StagedDirectory,
+    [Parameter(ParameterSetName = 'Build')][string]$ElectronZip,
+    [Parameter(ParameterSetName = 'Build')][string]$CompatibilityArchive,
+    [Parameter(ParameterSetName = 'Build')][string]$SubscriptionArchive,
     [ValidatePattern('^[a-f0-9]{64}$')][string]$ExpectedWebRevision
 )
 
@@ -71,7 +74,8 @@ try {
         }
     } else {
         $staged = Join-Path $releases ('.vps-workbench-' + $version + '-stage-' + [guid]::NewGuid().ToString('N'))
-        & (Join-Path $PSScriptRoot 'Build.ps1') -OutputDirectory $staged | Out-Host
+        & (Join-Path $PSScriptRoot 'Build.ps1') -OutputDirectory $staged -ElectronZip $ElectronZip `
+            -CompatibilityArchive $CompatibilityArchive -SubscriptionArchive $SubscriptionArchive | Out-Host
     }
     Assert-RealDirectory $staged
     $revision = Read-WebRevision $staged

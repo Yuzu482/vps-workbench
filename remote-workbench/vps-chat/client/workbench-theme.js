@@ -61,8 +61,7 @@ const toolTheme = `
   }
 `;
 
-export function workbenchCss(separatorWidth) {
-  return `
+const paletteCss = `
     [data-vps-chat] {
       --vc-base-canvas:#f8f5ef;
       --vc-base-rail:#eee9e1;
@@ -95,16 +94,8 @@ export function workbenchCss(separatorWidth) {
       --vc-title-font:Georgia,'Noto Serif CJK SC','Songti SC','SimSun',serif;
       --vc-gutter:clamp(16px,4cqi,44px);
       --vc-header-height:60px;
-      --vc-chat-font-size:14px;
-      --vc-thread-measure:816px;
-      --vc-composer-measure:728px;
-      box-sizing:border-box; position:relative; display:grid; grid-template-columns:216px minmax(0,1fr);
-      grid-template-rows:minmax(0,1fr); container-type:inline-size; isolation:isolate; color-scheme:light;
-      flex:1; width:100%; height:100%; min-width:0; min-height:0; overflow:hidden;
-      color:var(--vc-ink); background:var(--vc-canvas);
-      font:14px/1.55 'Segoe UI Variable','Segoe UI','Microsoft YaHei UI','PingFang SC','Noto Sans CJK SC',system-ui,sans-serif;
+      color-scheme:light;
     }
-    [data-vps-chat][data-subscription-open=true] > .vc-main {grid-column:1 / -1}
     ${darkWorkbench} {
       color-scheme:dark;
       --vc-base-canvas:#25211e;
@@ -133,6 +124,26 @@ export function workbenchCss(separatorWidth) {
       --vc-slider-thumb-shadow:0 1px 4px #0f0b08a0;
     }
     ${toolTheme}
+`;
+
+export function workbenchPaletteCss(scope = '[data-vps-chat]') {
+  return paletteCss.replaceAll('[data-vps-chat]', scope);
+}
+
+export function workbenchCss(separatorWidth) {
+  return `
+    ${paletteCss}
+    [data-vps-chat] {
+      --vc-chat-font-size:14px;
+      --vc-thread-measure:816px;
+      --vc-composer-measure:728px;
+      box-sizing:border-box; position:relative; display:grid; grid-template-columns:216px minmax(0,1fr);
+      grid-template-rows:minmax(0,1fr); container-type:inline-size; isolation:isolate;
+      flex:1; width:100%; height:100%; min-width:0; min-height:0; overflow:hidden;
+      color:var(--vc-ink); background:var(--vc-canvas);
+      font:14px/1.55 'Segoe UI Variable','Segoe UI','Microsoft YaHei UI','PingFang SC','Noto Sans CJK SC',system-ui,sans-serif;
+    }
+    [data-vps-chat][data-subscription-open=true] > .vc-main {grid-column:1 / -1}
     [data-vps-chat][data-vc-text-size=large] {--vc-chat-font-size:16px}
     [data-vps-chat][data-vc-text-size=largest] {--vc-chat-font-size:18px}
     [data-vps-chat][data-vc-width=wide] {--vc-thread-measure:1080px; --vc-composer-measure:960px}

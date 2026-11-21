@@ -10,7 +10,8 @@ const assets = resolve(desktop, '../assets');
 
 export const webSourceDirectories = [desktop, assets, resolve(desktop, '../terminal'),
   resolve(desktop, '../resource-library'), resolve(desktop, '../extensions'), resolve(desktop, '../workflow-engine'),
-  resolve(desktop, '../workflow-panel'), resolve(desktop, '../agent-presets'), join(client, 'client'), join(client, 'design-export')];
+  resolve(desktop, '../workflow-panel'), resolve(desktop, '../agent-presets'), resolve(desktop, '../local-ui'),
+  join(client, 'client'), join(client, 'design-export')];
 
 export const browserBuildOptions = {
   bundle: true, minify: true, charset: 'utf8', platform: 'browser', format: 'esm',

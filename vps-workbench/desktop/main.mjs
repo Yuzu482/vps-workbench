@@ -9,7 +9,10 @@ import { workflowKey } from '../workflow-engine/state.mjs';
 import { agentPresetKey, legacyAgentPresetKey } from '../agent-presets/state.mjs';
 import { accessPreference, readAccess, validAccess } from './access.mjs';
 import { importWorkbenchSnapshot } from './migrate.mjs';
-import { startWorkbenchServer } from './server.mjs';
+import { canonicalLocalDirectory, localCredentialVariable, startWorkbenchServer } from './server.mjs';
+
+const localApiKey = process.env[localCredentialVariable];
+delete process.env[localCredentialVariable];
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const title = 'VPS 工作台';
@@ -76,9 +79,9 @@ async function withDirectory(options, onSelected, onError) {
   directoryActionActive = true;
   try {
     const result = await dialog.showOpenDialog(window, { ...options, properties: ['openDirectory'] });
-    if (!result.canceled && result.filePaths.length) await onSelected(result.filePaths[0]);
+    if (!result.canceled && result.filePaths.length) return await onSelected(result.filePaths[0]);
   } catch (error) {
-    onError(error);
+    return onError(error);
   } finally {
     directoryActionActive = false;
   }
@@ -117,6 +120,7 @@ async function start() {
   runtime = await startWorkbenchServer({
     webRoot: join(directory, 'web'), workbenchRoot, terminalRoot,
     runtimeRoot: join(directory, '../helper'), pythonPath, access: () => readAccess(data.preference(accessPreference)),
+    localStateRoot: join(root, 'local-sdk'), localApiKey,
     data, onMemoryChanged: (state) => {
       if (window && !window.isDestroyed()) window.webContents.send('workbench:extensions-changed', state);
     },
@@ -201,6 +205,32 @@ async function start() {
     if (change?.op === 'set-automatic-memory' && !data.projects().some(({ workspaceId }) => workspaceId === change.projectId))
       throw new Error('invalid_project');
     return data.changeExtensions(change);
+  });
+  ipcMain.handle('workbench:local-sdk-status', (event) => {
+    trustedRenderer(event);
+    return runtime.localStatus();
+  });
+  ipcMain.handle('workbench:local-sdk-request', (event, body) => {
+    trustedRenderer(event);
+    return runtime.requestLocal(body);
+  });
+  ipcMain.handle('workbench:local-sdk-register', async (event, config) => {
+    trustedRenderer(event);
+    const status = runtime.localStatus();
+    if (!status.ok) return status;
+    if (readAccess(data.preference(accessPreference)).mode !== 'execute') {
+      return { ok: false, code: 'workbench_browse_only', message: '当前为仅浏览模式。' };
+    }
+    if (!config || Object.keys(config).length !== 3 ||
+        typeof config.name !== 'string' || !config.name.trim() || config.name.length > 80 ||
+        !status.models.some(({ id, efforts }) => id === config.model && efforts.includes(config.effort))) {
+      return { ok: false, code: 'invalid_profile', message: '请选择受支持的模型和推理档位，并填写配置名。' };
+    }
+    const selected = await withDirectory({ title: '选择本机 Codex 的只读工作目录' }, async (path) => {
+      const directory = await canonicalLocalDirectory(path);
+      return runtime.registerLocalProfile({ name: config.name, model: config.model, effort: config.effort, directory });
+    }, () => ({ ok: false, code: 'invalid_directory', message: '请选择可用的本机目录。' }));
+    return selected ?? { ok: false, code: 'directory_cancelled', message: '未选择工作目录。' };
   });
   ipcMain.handle('workbench:set-access', async (event, access) => {
     trustedRenderer(event);

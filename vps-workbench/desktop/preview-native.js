@@ -53,6 +53,20 @@
       if (!response.ok) throw new Error('preview_access_unavailable');
       return response.json();
     },
+    async localSdkStatus() {
+      const response = await fetch('/__preview/local-sdk');
+      if (!response.ok) throw new Error('preview_local_sdk_unavailable');
+      return response.json();
+    },
+    async localSdkRequest(body) {
+      const response = await fetch('/__preview/local-sdk', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!response.ok) throw new Error('preview_local_sdk_unavailable');
+      return response.json();
+    },
+    registerLocalSdkProfile(config) {
+      return this.localSdkRequest({ ...config, op: 'register' });
+    },
     async setPreference(name, value) {
       if (name === 'dsh-vps-chat:workflow-run:v1' && value !== null) {
         const record = JSON.parse(value);

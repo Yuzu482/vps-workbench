@@ -11,6 +11,10 @@ import { readSetupPreset, setupConnectionKey } from './setup-state.mjs';
 import { readWorkflowRun } from '../workflow-engine/runner.mjs';
 import { workflowRunKey } from '../workflow-engine/state.mjs';
 import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
+import { localModels, openCodexRuntime } from './codex-runtime.mjs';
+import { openLocalSdk } from '../local-sdk/service.mjs';
+
+export { canonicalLocalDirectory, localCredentialVariable } from './codex-runtime.mjs';
 
 const staticRoutes = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -33,9 +37,22 @@ function hasSession(header, ticket) {
 
 export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoot, runtimeRoot, pythonPath,
   makeBridge = createBridge, makeSubscriptionHost = createStandaloneSubscriptionHost, access = () => defaultAccess,
-  data, onMemoryChanged, onMemoryError }) {
+  data, onMemoryChanged, onMemoryError, localStateRoot, localApiKey, makeLocalRuntime = openCodexRuntime }) {
   const ticket = randomBytes(32).toString('base64url');
   const readRoute = createWorkbenchRouteReader(workbenchRoot);
+  let local;
+  let runtimeAvailable = false;
+  if (localStateRoot) {
+    try {
+      const sdk = await makeLocalRuntime({ runtimeRoot, stateRoot: localStateRoot, apiKey: localApiKey });
+      runtimeAvailable = sdk.runtimeAvailable;
+      local = await openLocalSdk({ root: localStateRoot, models: localModels, createThread: sdk.createThread,
+        canExecute: () => access().mode === 'execute', credentialConfigured: sdk.credentialConfigured });
+    } catch {
+      // Failure to open local state leaves the original SSH workbench available.
+    }
+  }
+  const localUnavailable = { ok: false, code: 'local_sdk_unavailable', message: '本机 SDK 记录无法读取。' };
   const bridgeOptions = { pythonPath, executable: join(runtimeRoot, 'DshVpsChatBridge.exe'),
     compatibilityDirectory: join(runtimeRoot, 'compat'), useCurrentAntigravity: true, readRoute };
   const backend = makeBridge({ ...bridgeOptions, root: workbenchRoot });
@@ -138,16 +155,31 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     host?.dispose();
     bridge.dispose?.();
     server.close();
+    await local?.close();
     throw error;
   }
   return {
     origin,
     cookie: { url: origin, name: cookieName, value: ticket, path: '/', httpOnly: true, sameSite: 'strict' },
+    localStatus() { return local ? { ...local.status(), runtimeAvailable } : localUnavailable; },
+    async requestLocal(body) {
+      if (body?.location !== 'local-sdk' || body.backend !== 'codex')
+        return { ok: false, code: 'execution_location_mismatch', message: '请选择本机 SDK 的 Codex 配置。' };
+      if (local && !runtimeAvailable && body.op === 'send')
+        return { ok: false, code: 'runtime_unavailable', message: '找不到打包的本机 Codex 运行时。' };
+      return local ? local.request(body) : localUnavailable;
+    },
+    async registerLocalProfile(profile) { return local ? local.registerProfile(profile) : localUnavailable; },
     changeMemoryExtractionModel(change) { return chat.changeExtractionModel(change); },
-    accessChanged() { if (access().mode === 'browse') host.revokeAccount(); },
+    accessChanged() {
+      if (access().mode !== 'browse') return;
+      host.revokeAccount();
+      local?.revokeExecution();
+    },
     async close() {
       terminal.dispose();
       host.dispose();
+      await local?.close();
       await new Promise((resolve) => {
         server.close(resolve);
         server.closeAllConnections();

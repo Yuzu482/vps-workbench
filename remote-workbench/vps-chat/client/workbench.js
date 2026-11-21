@@ -364,8 +364,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           )))) : null));
   }
 
-  function Workbench({ projectCatalog, terminalView, active = true, resourcesOpen, setResourcesOpen,
-    access, accessPending, changeAccess, extensions, agentPresets, workflowStore }) {
+  function Workbench({ projectCatalog, terminalView, active = true, visible = true, resourcesOpen, setResourcesOpen,
+    access, accessPending, changeAccess, extensions, agentPresets, workflowStore, onNewChat, newChatRequest = 0 }) {
     const workspaceSnapshot = React.useSyncExternalStore(projectCatalog.subscribe, projectCatalog.getSnapshot);
     const SubscriptionTerminal = React.useSyncExternalStore(terminalView.subscribe, terminalView.getSnapshot);
     const [subscriptionOpen, setSubscriptionOpen] = React.useState(false);
@@ -460,6 +460,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const resizeGesture = React.useRef(null);
     const modelReads = React.useRef(new Map());
     const presetRequest = React.useRef(null);
+    const handledNewChat = React.useRef(0);
     const action = React.useRef(null);
     const polling = React.useRef(null);
     const submittedDraft = React.useRef(null);
@@ -626,7 +627,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       (!design || designAvailable) && !attached?.error &&
       (attached?.base ? canBranchDesign : snapshot?.canSend) && !attempt && !working && !pollPaused &&
       !unconfirmedPrompt && !isActive(lastState) && lastState !== 'unknown' && prompt && draft.length <= maxPromptLength);
-    const shouldPoll = Boolean(remoteEnabled && ready && selected && !working && !attempt && !pollPaused && isActive(lastState));
+    const shouldPoll = Boolean(visible && remoteEnabled && ready && selected && !working && !attempt && !pollPaused && isActive(lastState));
     const pollInterval = lastTurn?.streaming === true ? streamPollInterval : legacyPollInterval;
     const workflows = useWorkflows({ store: workflowStore, rpc, readList, connection, remoteEnabled,
       toolIds: toolPreferences.ids, scope, sessionId: selected, prepareChat: prepareWorkflowChat,
@@ -634,7 +635,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
     const moduleCatalogEnabled = Boolean(extensions);
     React.useEffect(() => {
-      if (!moduleCatalogEnabled || !antigravityConfigured || !remoteEnabled || !scope || !connection?.hostKeyConfirmed ||
+      if (!visible || !moduleCatalogEnabled || !antigravityConfigured || !remoteEnabled || !scope || !connection?.hostKeyConfirmed ||
           connection.provider === 'antigravity') return undefined;
       const controller = new AbortController();
       const { signal } = controller;
@@ -645,7 +646,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         }
       }).catch(() => {});
       return () => controller.abort();
-    }, [moduleCatalogEnabled, antigravityConfigured, remoteEnabled, connection, scope, codexTargetId, rpc]);
+    }, [visible, moduleCatalogEnabled, antigravityConfigured, remoteEnabled, connection, scope, codexTargetId, rpc]);
 
     React.useLayoutEffect(() => {
       setToolTheme(workbench.current, activeTool);
@@ -653,7 +654,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }, [activeTool, acknowledgeSwitch]);
 
     React.useEffect(() => {
-      if (!saveModelParameters || !chatEnabled || showingSubscription) return undefined;
+      if (!visible || !saveModelParameters || !chatEnabled || showingSubscription) return undefined;
       const controller = new AbortController();
       const { signal } = controller;
       setModelParameterAvailability({ targetId: scope });
@@ -667,7 +668,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         });
       });
       return () => controller.abort();
-    }, [scope, connection, chatEnabled, showingSubscription, modelParameterRevision, rpc]);
+    }, [visible, scope, connection, chatEnabled, showingSubscription, modelParameterRevision, rpc]);
 
     React.useEffect(() => () => {
       action.current?.abort();
@@ -699,7 +700,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }, [split]);
 
     React.useEffect(() => {
-      if (!loadingPreset) return undefined;
+      if (!visible || !loadingPreset) return undefined;
       const controller = new AbortController();
       presetRequest.current = controller;
       async function loadPreset() {
@@ -726,7 +727,12 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         controller.abort();
         if (presetRequest.current === controller) presetRequest.current = null;
       };
-    }, [loadingPreset, rpc]);
+    }, [visible, loadingPreset, rpc]);
+
+    React.useEffect(() => {
+      if (!visible || !chatEnabled || working || handledNewChat.current === newChatRequest) return;
+      if (newSession('chat')) handledNewChat.current = newChatRequest;
+    }, [visible, chatEnabled, working, newChatRequest]);
 
     function updateDraft(id, value) {
       if (submittedDraft.current?.sessionId === id) submittedDraft.current = null;
@@ -1988,8 +1994,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const pinnedFolders = [...projects].filter(([id]) => pinnedProjects.has(id));
     const newActions = h('div', { className: 'vc-new-actions' },
       h('button', {
-        type: 'button', className: 'vc-button vc-new vc-primary', onClick: () => newSession('chat'),
-        disabled: !chatEnabled || Boolean(working),
+        type: 'button', className: 'vc-button vc-new vc-primary', onClick: onNewChat ?? (() => newSession('chat')),
+        disabled: !onNewChat && (!chatEnabled || Boolean(working)),
       }, sidebarActions ? h('span', { className: 'vc-menu-label' }, menuIcon(h, 'new-chat'), '新聊天') : '＋ 新对话'),
       sidebarActions ? null : h('button', {
         type: 'button', className: 'vc-button vc-new vc-new-design', onClick: () => newSession('design'),
@@ -2125,7 +2131,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       className: 'vc-canvas-history vc-disclosure-motion', 'data-expanded': canvasHistoryOpen, inert: !canvasHistoryOpen,
     }, h('div', { className: 'vc-disclosure-clip' }, conversationMessages)) : conversationMessages, conversationComposer);
 
-    return h('div', { ref: workbench, 'data-vps-chat': '', 'data-resizing': resizing,
+    return h('div', { ref: workbench, 'data-vps-chat': '', 'data-resizing': resizing, hidden: !visible, inert: !visible,
       'data-subscription-open': showingSubscription,
       'data-vc-color': activePreferences.color, 'data-vc-accent': activePreferences.accent,
       'data-vc-text-size': activePreferences.textSize, 'data-vc-width': activePreferences.width,
