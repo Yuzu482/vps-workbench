@@ -21,6 +21,7 @@ function readEdit(key) {
 export function useWorkflowControls({ store, rpc, readList, connection, remoteEnabled, toolIds,
   scope, sessionId, prepareChat, savePreference, report }) {
   const [open, setOpen] = React.useState(false);
+  const [preferRunPane, setPreferRunPane] = React.useState(false);
   const [edit, setEdit] = React.useState(null);
   const [proposal, setProposal] = React.useState(null);
   const [run, setRun] = React.useState(store.initialRun);
@@ -133,22 +134,26 @@ export function useWorkflowControls({ store, rpc, readList, connection, remoteEn
 
   const exampleBlocked = error || (running || run?.phase === 'paused' || run?.phase === 'running'
     ? '请先继续或停止当前工作流。' : '');
+  function showExampleRun() {
+    setPreferRunPane(true);
+    setOpen(true);
+  }
   async function startExample(provider, model, targetId) {
     setExampleError('');
-    setOpen(true);
+    showExampleRun();
     try { await invoke('start', createSetupExample(provider, model), setupExampleTask, null, targetId); }
     catch (failure) { setExampleError(failure.message); }
   }
 
   return {
-    openPanel: () => setOpen(true),
+    openPanel: () => { setPreferRunPane(false); setOpen(true); },
     editLabel: activeEdit && (activeEdit.workflow?.name ?? '新建工作流'),
     clearEdit: () => setEdit(null),
     prepareEdit,
     describeEdit,
-    example: { blocked: exampleBlocked, start: startExample, showRun: () => setOpen(true) },
+    example: { blocked: exampleBlocked, start: startExample, showRun: showExampleRun },
     panel: {
-      open, onClose: () => { setOpen(false); setProposal(null); setExampleError(''); }, workflows: store.items, exampleError,
+      open, preferRunPane, onClose: () => { setOpen(false); setProposal(null); setExampleError(''); }, workflows: store.items, exampleError,
       availableProviders, catalogScope: scope, readModels: readPanelModels, onChange: store.change, onEditInChat: startChatEdit,
       proposal, onDismissProposal: () => setProposal(null), run, running,
       canStart: !error && remoteEnabled && connection?.hostKeyConfirmed && availableProviders.length > 0,

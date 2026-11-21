@@ -125,7 +125,7 @@ test('packaged Agent resources, scoped memory and legacy presets apply to a para
     });
     checkpoint = 'loading the fixture connection';
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.getByText('本地演示 · 已配置', { exact: true }).waitFor();
+    await page.getByText('本地演示 · VPS 已配置', { exact: true }).waitFor();
     const entry = page.getByRole('button', { name: '工作流', exact: true });
     const panel = page.getByRole('dialog', { name: '工作流', exact: true });
     const editor = page.getByRole('textbox', { name: '消息', exact: true });
@@ -611,7 +611,7 @@ test('packaged Agent resources, scoped memory and legacy presets apply to a para
 
     checkpoint = 'restoring the saved workflow and run after reload';
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.getByText('本地演示 · 已配置', { exact: true }).waitFor();
+    await page.getByText('本地演示 · VPS 已配置', { exact: true }).waitFor();
     await entry.click();
     assert.equal(await panel.getByRole('combobox', { name: '已保存的工作流', exact: true }).inputValue(), updated.id);
     await panel.getByText('工作流已完成。', { exact: true }).waitFor();
@@ -630,7 +630,7 @@ test('packaged Agent resources, scoped memory and legacy presets apply to a para
       await page.evaluate(([key, value]) => window.vpsWorkbench.setPreference(key, value),
         [workflowRunKey, JSON.stringify(snapshot)]);
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await page.getByText('本地演示 · 已配置', { exact: true }).waitFor();
+      await page.getByText('本地演示 · VPS 已配置', { exact: true }).waitFor();
       await entry.click();
     }
     await restoreRun(false, 'stopping', 'complete', 'waiting');

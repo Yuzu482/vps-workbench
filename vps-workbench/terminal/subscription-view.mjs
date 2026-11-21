@@ -455,8 +455,8 @@ function SubscriptionTerminal({active=true, subscriptionPreset, activation=0, re
     if(copied)setSubscriptionNotice('已复制选中输出');
     else setMessage('无法写入剪贴板，请使用终端的复制快捷键。');
   }
-  const statusLabels={idle:'尚未连接',starting:'正在连接及检查出口',ready:'隔离终端运行中',closing:'正在关闭',closed:'本机终端已关闭',
-    detached:'SSH 已断开，需查询原回执',disconnected:'界面连接中断',reconnecting:'正在查询原连接',uncertain:'结果待确认'};
+  const statusLabels={idle:'终端会话未连接',starting:'正在连接 VPS 并检查出口',ready:'隔离终端运行中',closing:'正在关闭终端会话',closed:'本机终端已关闭',
+    detached:'SSH 已断开，需查询原回执',disconnected:'终端界面连接中断',reconnecting:'正在查询原终端连接',uncertain:'终端操作结果待确认'};
   const remoteLabels={busy:'原账号仍忙或原终端仍运行',finished:'原终端已退出',failed:'原启动失败',interrupted:'原终端已中断，操作结果仍需核对',
     not_found:'未找到原回执，不能自动重发',unknown:'原状态无法确认'};
   const receiptReview=h('label',null,h('input',{type:'checkbox',checked:reviewed,disabled:!remoteStatus,

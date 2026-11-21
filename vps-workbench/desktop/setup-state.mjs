@@ -16,6 +16,12 @@ export async function readSetupPreset(raw, readList) {
 
 export const setupExampleTask = '为一家独立书店的周末读书会准备一份简短的活动页简报。活动面向首次到访的读者，免费报名，时长 60 分钟。只处理这段示例文字，无需访问文件、网络或工具。';
 
+export function selectSetupModel(catalog, requested = '') {
+  const selected = requested ? catalog.find(({ id }) => id === requested) : catalog.find(({ isDefault }) => isDefault);
+  if (requested && !selected) return { ok: false, message: `模型 ${requested} 已不在当前模型选项中。` };
+  return { ok: true, model: selected?.id ?? '', name: selected?.displayName ?? '执行端默认模型' };
+}
+
 export function createSetupExample(provider, model) {
   const memory = { mcpServers: [], plugins: [], memory: 'isolated' };
   const facts = '以原始用户任务为准，保留「首次到访的读者」「免费报名」「60 分钟」。原始任务没有提供报名渠道，将报名渠道写为「待确认」。';

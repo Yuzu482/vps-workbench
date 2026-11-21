@@ -16,6 +16,7 @@ const pointSize = { width: 0, height: 0 };
 const playgroundCss = `
   [data-vps-chat] .vc-playground {
     display:flex; flex:1; flex-direction:column; min-width:0; min-height:0;
+    container:design-playground / inline-size;
   }
   [data-vps-chat] .vc-playground-viewport {
     position:relative; flex:1; min-width:0; min-height:0; overflow:clip; isolation:isolate;
@@ -88,7 +89,7 @@ const playgroundCss = `
     display:flex; flex-wrap:wrap; flex:none; align-items:center; justify-content:space-between;
     gap:3px 12px; padding:5px 9px; border-top:1px solid var(--vc-line); background:var(--vc-surface);
   }
-  [data-vps-chat] :is(.vc-playground-actions,.vc-playground-camera,.vc-playground-attachment,.vc-playground-selection) {
+  [data-vps-chat] :is(.vc-playground-actions,.vc-playground-secondary,.vc-playground-camera,.vc-playground-attachment,.vc-playground-selection) {
     display:flex; align-items:center; flex-wrap:wrap; gap:2px; min-width:0; font-size:12px;
   }
   [data-vps-chat] .vc-playground-selection {gap:6px; color:var(--vc-accent); font-weight:600}
@@ -96,18 +97,20 @@ const playgroundCss = `
     min-height:28px; padding:3px 7px;
     transition:background-color var(--vc-control-duration) var(--vc-motion-curve);
   }
-  [data-vps-chat] .vc-playground-camera {margin-inline-start:auto; color:var(--vc-muted)}
+  [data-vps-chat] .vc-playground-controls .vc-playground-more {display:none}
+  [data-vps-chat] .vc-playground-camera {margin-inline-start:auto; color:var(--vc-muted); flex-wrap:nowrap}
   [data-vps-chat] .vc-playground-camera output {min-width:38px; text-align:center; font-variant-numeric:tabular-nums}
   [data-vps-chat] .vc-playground-camera .vc-playground-step {min-width:27px; font-size:16px; line-height:1}
   [data-vps-chat] .vc-playground-attachment {max-width:100%; color:var(--vc-accent)}
   [data-vps-chat] .vc-playground-attachment span {
     max-width:180px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
   }
-  @media (max-height:600px) {
-    [data-vps-chat] .vc-playground-controls {
-      flex-wrap:nowrap; overflow-x:auto; scrollbar-width:thin;
-    }
-    [data-vps-chat] .vc-playground-controls > div {flex:none; flex-wrap:nowrap}
+  @container design-playground (max-width:700px) {
+    [data-vps-chat] .vc-playground-actions[data-more=true] .vc-playground-secondary {display:none}
+    [data-vps-chat] .vc-playground-controls .vc-playground-more {display:inline-flex}
+    [data-vps-chat] .vc-playground-attachment {order:1}
+    [data-vps-chat] .vc-playground-controls:has(.vc-playground-actions[data-more=true]) .vc-playground-attachment {display:none}
+    [data-vps-chat] .vc-playground-attachment span {max-width:calc(100cqi - 56px)}
   }
 `;
 
@@ -192,7 +195,8 @@ export function createDesignPlayground(React) {
   return function DesignPlayground({
     boards, positions = emptyPositions, links = emptyLinks, selectedId, onSelect, onMove,
     onEdit, onIterate, onVariants, onLink, onPlay, onPrompt, onClearAttachment, attachedId,
-    onBoardMenu, onSelectionMenu, onBackgroundMenu, generating, loading, canGenerate, revealBoard, conversation, previewWidth = 1080,
+    onBoardMenu, onSelectionMenu, onBackgroundMenu, onMoreMenu, onExportSelection, exporting,
+    generating, loading, canGenerate, revealBoard, conversation, previewWidth = 1080,
   }) {
     const viewport = React.useRef(null);
     const gesture = React.useRef(null);
@@ -539,6 +543,27 @@ export function createDesignPlayground(React) {
         'aria-label': label, disabled: Boolean(disabled), onClick: run }, content);
     }
 
+    const boardActions = selected ? [
+      { id: 'iterate', label: '迭代所选', icon: 'chat', disabled: locked || !canGenerate, run: () => onIterate(selected.id) },
+      { id: 'variants', label: '生成变体', icon: 'variants', disabled: locked || !canGenerate, run: () => onVariants(selected.id) },
+      { id: 'link', label: '连接画板', icon: 'link', disabled: locked, run: () => onLink(selected.id) },
+      { id: 'play', label: '播放原型', icon: 'play', disabled: loading || selected.provisional, run: () => onPlay(selected.id) },
+    ] : [];
+    const cannotExportSelection = exporting || selectedBoards.some(({ provisional, html }) => provisional || !html);
+
+    function exportSelection(event) {
+      if (!cannotExportSelection) onExportSelection(event, selectedBoards);
+    }
+
+    function openMore(event) {
+      const anchor = event.currentTarget;
+      const { left, bottom } = anchor.getBoundingClientRect();
+      const attachmentActions = attachment ? [{ id: 'clear-attachment', label: '移除画板附件', icon: 'undo',
+        detail: attachment.title, disabled: busy, run: onClearAttachment }] : [];
+      onMoreMenu(event, anchor, '更多画板操作', [boardActions, attachmentActions],
+        { point: { x: left, y: bottom }, tracksExpansion: true });
+    }
+
     const zoomPercent = view.scale < .1 ? Math.round(view.scale * 1000) / 10 : Math.round(view.scale * 100);
     return h('div', { className: 'vc-playground' },
       h('style', null, playgroundCss),
@@ -610,13 +635,19 @@ export function createDesignPlayground(React) {
       h('div', { className: 'vc-playground-controls' },
         selectedBoards.length > 1 ? h('div', { className: 'vc-playground-selection' },
           h('output', { 'aria-label': '已选画板', 'aria-live': 'polite' }, `已选 ${selectedBoards.length} 张画板`),
+          h('button', { type: 'button', className: 'vc-button vc-export-trigger', 'aria-haspopup': 'menu', 'aria-expanded': false,
+            'aria-disabled': Boolean(cannotExportSelection), onClick: exportSelection,
+            onKeyDown(event) {
+              if (['ArrowDown', 'ArrowUp'].includes(event.key) && !event.nativeEvent.isComposing) exportSelection(event);
+            },
+          }, `导出所选（${selectedBoards.length}）`),
           toolbarButton('清除画板选择', () => selectBoards(new Set()), false, '×')) : null,
-        selected ? h('div', { className: 'vc-playground-actions', role: 'group', 'aria-label': '所选画板操作' },
+        selected ? h('div', { className: 'vc-playground-actions', role: 'group', 'aria-label': '所选画板操作', 'data-more': Boolean(onMoreMenu) },
           toolbarButton('编辑画板', () => onEdit(selected.id), locked),
-          toolbarButton('迭代所选', () => onIterate(selected.id), locked || !canGenerate),
-          toolbarButton('生成变体', () => onVariants(selected.id), locked || !canGenerate),
-          toolbarButton('连接画板', () => onLink(selected.id), locked),
-          toolbarButton('播放原型', () => onPlay(selected.id), loading || selected.provisional)) : null,
+          h('div', { className: 'vc-playground-secondary' }, boardActions.map(({ id, label, run, disabled }) =>
+            h('button', { key: id, type: 'button', className: 'vc-button', disabled, onClick: run }, label))),
+          onMoreMenu ? h('button', { type: 'button', className: 'vc-button vc-playground-more',
+            'aria-haspopup': 'menu', 'aria-expanded': false, 'aria-label': '更多画板操作', onClick: openMore }, '更多') : null) : null,
         attachment ? h('div', { className: 'vc-playground-attachment' },
           h('span', { title: attachment.title }, `已附加 ${attachment.title}`),
           toolbarButton('移除画板附件', onClearAttachment, busy, '×')) : null,

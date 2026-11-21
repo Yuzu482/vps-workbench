@@ -269,6 +269,7 @@ export function workbenchCss(separatorWidth) {
     [data-vps-chat] .vc-segments .vc-button {min-height:26px; border:0; padding:3px 8px; border-radius:5px; background:transparent}
     [data-vps-chat] .vc-segments .vc-button:hover:not(:disabled) {background:var(--vc-surface)}
     [data-vps-chat] .vc-segments .vc-button[aria-pressed=true] {background:var(--vc-tint); color:var(--vc-accent)}
+    [data-vps-chat] .vc-view-kind {align-self:center; padding-inline:6px 4px; color:var(--vc-muted); font-size:11px}
     [data-vps-chat] .vc-design-panes {font-size:12px}
     [data-vps-chat] .vc-canvas-stage {
       display:flex; justify-content:center; flex:1; min-width:0; min-height:0; padding:clamp(12px,2.3cqi,27px);

@@ -106,13 +106,14 @@ test('a fresh desktop connection diagnoses each setup step and runs the sample o
     failure = 'resources';
     await guide.getByLabel('检查额外 Agent').selectOption(presetId);
     await runCheck.click();
-    await step('Agent 资源').getByRole('alert').filter({ hasText: '检查失败 resources' }).waitFor();
+    await step('MCP 服务器').getByRole('alert').filter({ hasText: '检查失败 resources' }).waitFor();
     assert.deepEqual(packets.find(({ kind }) => kind === 'resources').mcpServers, [server.id]);
-    assert.equal(await sample.count(), 0);
+    await guide.getByRole('region', { name: '基础接入检查', exact: true }).getByText('3 / 3 项通过', { exact: true }).waitFor();
+    assert.equal(await sample.isEnabled(), true);
 
     failure = '';
     await runCheck.click();
-    await guide.getByText('4 / 4 项通过', { exact: true }).waitFor();
+    await step('MCP 服务器').getByText('已通过', { exact: true }).waitFor();
     assert.equal(packets.filter(({ op }) => op === 'send').length, 0);
     if (process.env.VPS_WORKBENCH_SETUP_IMAGE) await guide.screenshot({ path: process.env.VPS_WORKBENCH_SETUP_IMAGE, animations: 'disabled' });
     await sample.click();
@@ -126,7 +127,7 @@ test('a fresh desktop connection diagnoses each setup step and runs the sample o
       packet.model === 'preview-codex' && packet.workflowStage?.runId && !packet.extensions && !packet.projectMemory));
     assert.deepEqual(otherOrigins, []);
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.getByText('本机保存的 VPS · 已配置', { exact: true }).waitFor();
+    await page.getByText('本机保存的 VPS · VPS 已配置', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'VPS 设置', exact: true }).click();
     await page.getByRole('button', { name: '接入向导', exact: true }).click();
     await guide.getByRole('button', { name: '开始检查', exact: true }).waitFor();

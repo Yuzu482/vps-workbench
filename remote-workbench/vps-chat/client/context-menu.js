@@ -12,7 +12,7 @@ export function contextMenuKey(event) {
     (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'));
 }
 
-export function contextMenuRequest(event, anchor, label, groups, { point, frame } = {}) {
+export function contextMenuRequest(event, anchor, label, groups, { point, frame, summary, focusLast, tracksExpansion } = {}) {
   event.preventDefault();
   event.stopPropagation();
   const keyboard = event.type === 'keydown' || (event.clientX === 0 && event.clientY === 0);
@@ -20,7 +20,7 @@ export function contextMenuRequest(event, anchor, label, groups, { point, frame 
     const bounds = anchor.getBoundingClientRect();
     point = { x: bounds.left + 8, y: bounds.bottom };
   }
-  return { anchor, label, groups, keyboard, frame, ...(point ?? { x: event.clientX, y: event.clientY }) };
+  return { anchor, label, groups, keyboard, frame, summary, focusLast, tracksExpansion, ...(point ?? { x: event.clientX, y: event.clientY }) };
 }
 
 function placeAtPointer(panel, { x, y }) {
@@ -39,6 +39,7 @@ export function createContextMenu(React) {
   const h = React.createElement;
   return function ContextMenu({ request, dismiss, closing }) {
     const ref = React.useRef(null);
+    const summaryId = React.useId();
 
     function close() {
       if (ref.current.matches(':popover-open')) ref.current.hidePopover();
@@ -56,6 +57,7 @@ export function createContextMenu(React) {
         const closing = newState === 'closed';
         panel.inert = closing;
         panel.setAttribute('aria-hidden', String(closing));
+        if (request.tracksExpansion) request.anchor.setAttribute('aria-expanded', String(!closing));
       };
       const onToggle = ({ newState }) => {
         if (newState !== 'closed' || panel.matches(':popover-open')) return;
@@ -68,15 +70,18 @@ export function createContextMenu(React) {
       window.addEventListener('resize', position);
       panel.showPopover({ source: request.anchor });
       position();
-      const first = request.keyboard ? panel.querySelector('[role=menuitem]:not([aria-disabled=true])') : null;
-      (first ?? panel).focus({ preventScroll: true });
+      const items = request.keyboard ? [...panel.querySelectorAll('[role=menuitem]:not([aria-disabled=true])')] : [];
+      (items.at(request.focusLast ? -1 : 0) ?? panel).focus({ preventScroll: true });
       return () => {
         cancel();
         frameDocument?.removeEventListener('pointerdown', dismissFromFrame, true);
         window.removeEventListener('resize', position);
         panel.removeEventListener('beforetoggle', prepareToggle);
         panel.removeEventListener('toggle', onToggle);
-        if (panel.matches(':popover-open')) panel.hidePopover();
+        if (panel.matches(':popover-open')) {
+          panel.hidePopover();
+          if (request.tracksExpansion) request.anchor.setAttribute('aria-expanded', 'false');
+        }
       };
     }, [request, dismiss]);
 
@@ -99,13 +104,17 @@ export function createContextMenu(React) {
       if (!Object.hasOwn(positions, event.key)) return;
       event.preventDefault();
       event.stopPropagation();
-      items.at(positions[event.key] % items.length)?.focus({ preventScroll: true });
+      items.at(positions[event.key] % items.length)?.focus();
     }
 
     return h('div', { ref, popover: 'auto', tabIndex: -1, role: 'menu', 'aria-label': request.label,
-      className: 'vc-context-menu vc-popup-motion', 'data-side': 'below', onKeyDown: handleKey,
+      'aria-describedby': request.summary ? summaryId : undefined,
+      className: `vc-context-menu vc-popup-motion${request.summary ? ' vc-export-menu' : ''}`, 'data-side': 'below', onKeyDown: handleKey,
       onContextMenu: (event) => event.preventDefault(),
-    }, request.groups.filter((group) => group.length).map((group, index) => h(React.Fragment, { key: group[0].id },
+    }, request.summary ? h('div', { className: 'vc-context-summary', id: summaryId },
+      h('p', null, request.summary.title),
+      h('ol', null, request.summary.items.map(({ id, label }) => h('li', { key: id, 'data-export-board-id': id }, label)))) : null,
+    request.groups.filter((group) => group.length).map((group, index) => h(React.Fragment, { key: group[0].id },
       index > 0 ? h('hr', { role: 'separator' }) : null,
       group.map(({ id, label, detail, icon, shortcut, disabled, run }) => h('button', {
         key: id, type: 'button', role: 'menuitem', tabIndex: -1, 'aria-disabled': disabled || undefined, title: detail,
@@ -133,6 +142,9 @@ export const contextMenuCss = `
   [data-vps-chat] .vc-context-menu :is(.vc-menu-icon,kbd) {color:var(--vc-muted)}
   [data-vps-chat] .vc-context-menu kbd {font:inherit; font-size:11px; margin-inline-start:12px; white-space:nowrap}
   [data-vps-chat] .vc-context-menu hr {margin:4px 3px; border:0; border-block-start:1px solid var(--vc-line)}
+  [data-vps-chat] .vc-context-summary {border-block-end:1px solid var(--vc-line); padding:5px 8px; color:var(--vc-muted); font-size:12px; max-width:290px; overflow-wrap:anywhere}
+  [data-vps-chat] .vc-context-summary p {margin:0; font-weight:600}
+  [data-vps-chat] .vc-context-summary ol {margin:3px 0; padding-inline-start:18px; max-height:min(120px,30vh); overflow:auto}
   [data-vps-chat] .vc-context-notice {position:fixed; z-index:10; right:16px; bottom:17px; pointer-events:none}
   [data-vps-chat] .vc-context-notice:not(:empty) {
     max-width:calc(100% - 32px); padding:8px 13px;

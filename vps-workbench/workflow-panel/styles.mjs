@@ -19,11 +19,12 @@ export const workflowPanelStyles = `
 }
 .vc-workflow-body {display:grid; grid-template-columns:minmax(0,1.9fr) minmax(300px,1fr); min-height:0}
 .vc-workflow-body[data-proposal=true] {grid-template-columns:minmax(0,1fr)}
+.vc-workflow-view-switch {display:none}
 .vc-workflow-pane {
   min-width:0; min-height:0; overflow:auto; padding:16px 20px;
   display:flex; flex-direction:column; gap:14px; font-size:13px;
 }
-.vc-workflow-pane + .vc-workflow-pane {border-inline-start:1px solid var(--vc-line); background:var(--vc-surface)}
+.vc-workflow-run-pane {border-inline-start:1px solid var(--vc-line); background:var(--vc-surface)}
 .vc-workflow-edit-pane {gap:12px}
 .vc-workflow-actions {display:flex; flex-wrap:wrap; align-items:center; gap:6px}
 .vc-workflow-draft-confirm {display:grid; gap:14px}
@@ -229,9 +230,18 @@ button.vc-workflow-port:not(:disabled):hover::before,
 @media (max-width:760px) {
   [data-vps-chat] .vc-workflow-dialog {width:calc(100vw - 20px); height:calc(100dvh - 54px)}
   .vc-workflow-header, .vc-workflow-pane {padding-inline:12px}
-  .vc-workflow-body {display:block; overflow:auto}
-  .vc-workflow-pane {overflow:visible}
-  .vc-workflow-pane + .vc-workflow-pane {border-inline-start:0; border-top:1px solid var(--vc-line)}
+  .vc-workflow-body {grid-template-columns:minmax(0,1fr)}
+  .vc-workflow-body[data-proposal=false] {grid-template-rows:auto minmax(0,1fr)}
+  .vc-workflow-view-switch {
+    display:flex; gap:6px; padding:6px 12px; background:var(--vc-surface); border-bottom:1px solid var(--vc-line);
+  }
+  .vc-workflow-view-switch > button {flex:1}
+  .vc-workflow-dialog .vc-workflow-view-switch > button[aria-pressed=true] {
+    color:var(--vc-accent); background:var(--vc-tint); border-color:var(--vc-line-strong);
+  }
+  .vc-workflow-body[data-view=configuration] .vc-workflow-run-pane,
+  .vc-workflow-body[data-view=run] .vc-workflow-edit-pane {display:none}
+  .vc-workflow-run-pane {border-inline-start:0}
 }
 @media (max-width:400px) {
   .vc-workflow-fields, .vc-workflow-model, .vc-workflow-file-path-row {grid-template-columns:minmax(0,1fr)}

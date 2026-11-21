@@ -68,7 +68,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
     page.on('pageerror', (error) => pageErrors.push(error.message));
     page.on('request', (request) => requests.push(request.url()));
     page.setDefaultTimeout(9000);
-    await page.getByText('独立验收服务器 · 已配置', { exact: true }).waitFor();
+    await page.getByText(legacyBaseline ? '独立验收服务器 · 已配置' : '独立验收服务器 · VPS 已配置', { exact: true }).waitFor();
     return page;
   }
   try {
@@ -136,7 +136,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
           tool: '.vc-tool-palette',
           access: '.vc-composer-panel[data-kind="access"]',
           mode: '.vc-composer-panel[data-kind="mode"]',
-          context: '.vc-context-menu',
+          context: '.vc-context-menu:not(.vc-export-menu)',
           export: '.vc-export-menu',
           folder: '.vc-session-group:has(button[title="测试美术项目"]) .vc-disclosure-motion',
           resources: '.vc-resource-library',
@@ -638,13 +638,13 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
         });
       });
     }, exportPath);
-    await page.getByRole('button', { name: '导出', exact: true }).click();
+    await page.getByRole('button', { name: legacyBaseline ? '导出' : '导出当前版本', exact: true }).click();
     await page.getByRole('menuitem', { name: '下载 HTML', exact: true }).click();
     assert.equal(await desktop.evaluate(() => globalThis.fixtureExport), 'completed');
     assert.match(await readFile(exportPath, 'utf8'), /独立海报画板/);
     if (!legacyBaseline) {
-      await sidebar.getByRole('button', { name: 'Design Playground', exact: true }).click();
-      const playground = page.getByRole('region', { name: 'Design Playground', exact: true });
+      await sidebar.getByRole('button', { name: '设计工作台', exact: true }).click();
+      const playground = page.getByRole('region', { name: '设计工作台', exact: true });
       const scene = playground.getByRole('region', { name: '多画板画布', exact: true });
       const board1 = scene.getByRole('button', { name: '画板 1', exact: true });
       const board2 = scene.getByRole('button', { name: '画板 2', exact: true });
@@ -1048,7 +1048,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await page.getByRole('button', { name: '返回设计对话', exact: true }).click();
       await page.locator('.vc-main-body > .vc-conversation textarea').waitFor();
       assert.equal(await editor.inputValue(), '切换画布时保留这段草稿。');
-      await sidebar.getByRole('button', { name: 'Design Playground', exact: true }).click();
+      await sidebar.getByRole('button', { name: '设计工作台', exact: true }).click();
       await playground.getByRole('button', { name: '单画板', exact: true }).click();
       await playground.getByRole('combobox', { name: '设计版本', exact: true }).selectOption('');
       await editor.fill('验收不含内容的候选稿');
@@ -1075,7 +1075,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await page.frameLocator('iframe[title="设计原型预览"]')
         .getByRole('heading', { name: '第二张海报画板', exact: true }).waitFor();
 
-      await sidebar.getByRole('button', { name: 'Design Playground', exact: true }).click();
+      await sidebar.getByRole('button', { name: '设计工作台', exact: true }).click();
       await playground.getByRole('button', { name: '单画板', exact: true }).click();
       const designFrame = page.frameLocator('iframe[title="设计原型预览"]');
       async function sendLayerRevision(heading, prompt) {
@@ -1360,7 +1360,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
     }
     await tab('执行端').click();
     await dialog.getByRole('checkbox', { name: 'Claude Code（订阅终端）', exact: true }).check();
-    await dialog.getByRole('button', { name: '保存执行端', exact: true }).click();
+    await dialog.getByRole('button', { name: legacyBaseline ? '保存执行端' : '保存启用变更', exact: true }).click();
     await dialog.waitFor({ state: 'hidden' });
     await page.locator('.vc-tool-trigger').click();
     await page.getByRole('option', { name: 'Claude Code（订阅终端）', exact: true }).click();
@@ -1469,7 +1469,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       });
       await tab('执行端').click();
       await dialog.getByRole('checkbox', { name: 'Antigravity', exact: true }).check();
-      await dialog.getByRole('button', { name: '保存执行端', exact: true }).click();
+      await dialog.getByRole('button', { name: '保存启用变更', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });
       await page.getByRole('button', { name: '切换 VPS 执行端', exact: true }).click();
       await page.getByRole('option', { name: 'Antigravity', exact: true }).click();

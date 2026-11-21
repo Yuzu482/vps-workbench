@@ -101,6 +101,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
     [id, id === 'host' ? hostThemeLabel : label]) };
   const ConnectionSettings = createConnectionFields(React);
   const Disclosure = createDisclosure(React);
+  const liveSave = () => h('span', { className: 'vc-settings-current vc-settings-save-hint' }, '实时保存');
 
   function PreferenceRows({ rows, values, change, disabled }) {
     return rows.map(([key, title, detail]) => h('div', { className: 'vc-preference-row', key },
@@ -154,7 +155,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
     return h('div', { className: 'vc-tool-model' },
       h('div', { className: 'vc-preference-row' },
         h('span', { className: 'vc-settings-description' },
-          h('strong', null, '默认模型'),
+          h('strong', null, '默认模型', liveSave()),
           h('small', null, model ? `已保存 ${model.id}` : '由 VPS 或当前会话决定。')),
         h('button', { type: 'button', className: 'vc-button vc-settings-outline', disabled: busy || loading, onClick: load },
           loading ? '正在读取' : catalog ? '刷新目录' : '读取模型目录')),
@@ -283,7 +284,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
 
     const header = {
       connection: ['VPS 连接', ready ? name || '当前连接' : '填写服务器与 SSH 验证信息以连接 VPS。'],
-      tools: ['执行端', '保存后，启用的工具会出现在当前 VPS 的切换菜单。独立设置即时保存。'],
+      tools: ['执行端', '保存启用变更后，所选执行端会出现在当前 VPS 的切换菜单。独立设置实时保存。'],
       agents: ['Agent 预设', '保存常用的执行端、模型和角色指令，供工作流各阶段选用。'],
       accounts: ['账号管理', '官方页面和执行端登录都在默认 VPS 的操作窗口中打开。'],
       appearance: ['外观', '本机通用外观。执行端的独立设置优先生效。'],
@@ -303,7 +304,8 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
       h('form', { className: 'vc-settings-form', onSubmit: submit },
         h('div', { className: 'vc-settings-scroll', ref: scroll },
           h('section', { key: tab, className: 'vc-settings-pane', 'aria-labelledby': panelId },
-            h('h3', { id: panelId }, header[0]), h('p', { className: 'vc-settings-intro' }, header[1]),
+            h('h3', { id: panelId, 'aria-label': header[0] }, header[0], prefPage ? liveSave() : null),
+            h('p', { className: 'vc-settings-intro' }, header[1]),
             tab === 'connection' ? h(ConnectionSettings, { form, edit, busy }) : null,
             tab === 'tools' ? h(ToolSettings, {
               tools, configured, setConfigured, profiles, preferences, updateTool, readModels, modelTools, activeTool, busy,
@@ -328,11 +330,15 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
               onClick: () => updatePreferences(Object.fromEntries(preferenceKeys.map(key => [key, defaultPreferences[key]]))),
             }, '恢复默认') : null,
             h('button', {
-              type: 'button', className: `vc-button ${savePage ? 'vc-settings-outline' : 'vc-primary'}`, disabled: busy, onClick: close,
-            }, savePage ? '取消' : '完成'),
+              type: 'button', className: `vc-button ${savePage ? 'vc-settings-outline' : 'vc-primary'}`, disabled: busy,
+              onClick() {
+                if (tab === 'tools') setConfigured(savedTools);
+                close();
+              },
+            }, tab === 'tools' ? '放弃启用变更' : savePage ? '取消' : '完成'),
             savePage ? h('button', {
               type: 'submit', className: 'vc-button vc-primary', disabled: busy || (tab === 'tools' ? !ready : !form.hostKeyConfirmed),
-            }, tab === 'tools' ? '保存执行端' : busy ? '正在检查设置' : '使用此 VPS') : null))));
+            }, tab === 'tools' ? '保存启用变更' : busy ? '正在检查设置' : '使用此 VPS') : null))));
   }
 
   return function SettingsDialog(props) {

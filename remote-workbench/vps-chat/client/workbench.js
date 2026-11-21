@@ -90,8 +90,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       capabilities: ExtensionSettings ? '支持对话、设计模式和工作台 MCP。' : '支持对话和设计模式。',
     },
     claude: {
-      label: 'Claude Code（API）', icon: 'key', modelCatalog: true,
-      setup: '在 VPS 的 LUKS2 加密用户目录中配置 API 凭据。使用 Claude 订阅时，请从「远端原生终端」登录官方 CLI。',
+      label: 'Claude API', icon: 'key', modelCatalog: true,
+      setup: '在 VPS 的 LUKS2 加密用户目录中配置 API 密钥。使用 Claude 订阅时，请从「远端原生终端」登录官方 CLI。',
       capabilities: '通过 API 使用工作台对话。高级参数取决于当前连接。',
     },
     'claude-sdk': {
@@ -107,9 +107,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     },
   };
   const subscriptionProvider = 'claude-subscription';
-  const chatTools = Object.entries(providers).map(([id, provider]) => ({
-    ...provider, id, label: id === 'claude' ? 'API 密钥' : provider.label,
-  }));
+  const chatTools = Object.entries(providers).map(([id, provider]) => ({ ...provider, id }));
   const subscriptionTool = {
     id: subscriptionProvider, label: 'Claude Code（订阅终端）', icon: 'claude-code',
     setup: '在 VPS 上安装官方 Claude Code 并登录 Claude 订阅。',
@@ -119,8 +117,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
   const toolsWithModels = chatTools.filter(({ modelCatalog }) => modelCatalog).map(({ id }) => id);
 
   const css = workbenchCss(separatorWidth) + composerControlsCss + menuIconsCss + menuMotionCss +
-    themeComposerCss + projectFoldersCss + accountDialogCss + providerPickerCss + themeRippleCss + settingsCss +
-    (saveConversationPreference || sidebarActions ? contextMenuCss : '') +
+    themeComposerCss + projectFoldersCss + accountDialogCss + providerPickerCss + themeRippleCss + settingsCss + contextMenuCss +
     (saveConversationPreference ? conversationActionsCss : '') +
     (saveModelParameters ? advancedModelOptionsCss : '');
 
@@ -1893,7 +1890,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           : needsCheck ? '请查询原任务状态后继续。' : blockedAfterTurn ? '请新建对话以继续使用。'
           : parametersBlocked ? '请在「模型 → 高级参数」确认该执行端的参数，或恢复默认后发送。' : '');
     const title = conversationOptions?.[selected]?.title ?? snapshot?.session.title ?? selectedRow?.title ?? 'VPS 对话';
-    const routeStatus = ready ? (connectionName ? `${connectionName} · 已配置` : 'VPS 已配置') : 'VPS 待配置';
+    const routeStatus = ready ? `${connectionName ? `${connectionName} · ` : ''}VPS 已配置` : 'VPS 待配置';
     const stopBusy = working === 'stop' || stopPending;
     const steerBusy = working === 'steer';
     const waitingForReceipt = Boolean(attempt || working === 'send');
@@ -2152,7 +2149,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             disabled: !designAvailable || Boolean(working), onClick: openPlayground,
             'aria-current': floatingChat ? 'page' : undefined,
             title: designAvailable ? '打开设计工作台' : '切换到 Codex 后可打开设计工作台',
-          }, menuIcon(h, 'canvas'), 'Design Playground'),
+          }, menuIcon(h, 'canvas'), '设计工作台'),
           h('nav', { className: 'vc-list', 'aria-label': '会话记录' },
             h('h2', { className: 'vc-rail-label vc-session-list-heading' }, '会话'),
             pinnedRows.length ? h('section', { className: 'vc-pinned-sessions', 'aria-label': '置顶会话' },
@@ -2226,7 +2223,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           !showingSubscription && floatingChat ? h('button', {
             type: 'button', className: 'vc-button vc-playground-back', onClick: leavePlayground,
           }, '返回设计对话') : null,
-          !showingSubscription && design && !floatingChat ? h('div', { className: 'vc-design-panes vc-segments', role: 'group', 'aria-label': '设计视图' },
+          !showingSubscription && design && !floatingChat ? h('div', { className: 'vc-design-panes vc-segments', role: 'group', 'aria-label': '工作区布局' },
+            h('span', { className: 'vc-view-kind', 'aria-hidden': true }, '布局'),
             [['chat', '对话', chatPaneId], ['split', '并排', `${chatPaneId} ${canvasPaneId}`], ['canvas', '画布', canvasPaneId]]
               .filter(([pane]) => roomy || pane !== 'split')
               .map(([pane, name, controls]) => h('button', {
@@ -2264,7 +2262,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             materialsOpen, setMaterialsOpen,
             playgroundEnabled: sidebarActions, playgroundOpen, setPlaygroundOpen: showPlaygroundBoards, onPrompt: focusPlaygroundPrompt,
             conversation: floatingChat ? conversation : null,
-            openCanvasMenu: floatingChat ? openCanvasMenu : undefined, copyBoardHtml,
+            openCanvasMenu: floatingChat ? openCanvasMenu : undefined, openExportMenu: openCanvasMenu, copyBoardHtml,
             canGenerate: remoteEnabled && designAvailable && !working, canBranch: canBranchDesign,
             readDesignRevision: sidebarActions ? readDesignRevision : undefined,
             scopedLayerRevisions: Boolean(sidebarActions && saveConversationPreference),
@@ -2294,7 +2292,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       contextMenus.map((request) => h(ContextMenu, {
         key: request.id, request, dismiss: dismissContextMenu,
         closing: showingSubscription || request.scope !== scope || Boolean(request.canvas &&
-          (!floatingChat || request.canvas.sessionId !== selected || request.canvas.view !== playgroundView)),
+          (!design || request.canvas.sessionId !== selected || request.canvas.view !== playgroundView)),
       })),
       dialogRow && !showingSubscription ? h(ConversationDialog, {
         key: `${scope}:${conversationDialog.kind}:${dialogRow.id}`, kind: conversationDialog.kind,

@@ -7,6 +7,7 @@ import { resolveAgentPreset } from '../agent-presets/state.mjs';
 import { automaticMemoryPolicy } from '../extensions/state.mjs';
 import { workflowProviders } from '../workflow-engine/state.mjs';
 import { checkStageResources } from './workflow-stage.mjs';
+import { selectSetupModel } from './setup-state.mjs';
 
 const h = React.createElement;
 const ConnectionFields = createConnectionFields(React);
@@ -14,7 +15,12 @@ const steps = [
   ['ssh', 'SSH 连接'],
   ['account', '账号登录'],
   ['model', '模型可用性'],
-  ['resources', 'Agent 资源'],
+];
+const agentSteps = [
+  ['agentModel', 'Agent 模型'],
+  ['mcp', 'MCP 服务器'],
+  ['plugins', '插件模板'],
+  ['memory', '记忆范围'],
 ];
 const labels = { waiting: '待检查', checking: '检查中', passed: '已通过', failed: '需处理', confirm: '待确认' };
 const accountActions = { codex: 'codex-login', claude: 'claude-api-key', 'claude-sdk': 'claude-login', antigravity: 'antigravity-login' };
@@ -22,7 +28,10 @@ const initialDetail = {
   ssh: '核对 SSH 指纹，登录并检查远端项目目录。',
   account: '使用所选执行端在 VPS 上的登录或 API 密钥。',
   model: '核对模型选项与当前执行端的配置。',
-  resources: '检查选中 Agent 的 MCP、插件模板和记忆范围。',
+  agentModel: '核对预设指定的模型。',
+  mcp: '核对预设引用的 MCP 服务器。',
+  plugins: '核对预设引用的插件模板。',
+  memory: '核对预设的记忆范围。',
 };
 const button = (text, onClick, extra) => h('button', { type: 'button', className: 'vc-button vc-settings-outline', onClick, ...extra }, text);
 
@@ -51,7 +60,7 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
     .filter((item) => item.provider === provider);
   const agent = presets.find((item) => item.id === presetId);
   const passedCount = steps.filter(([id]) => results[id]?.state === 'passed').length;
-  const ready = verified && verified.extensions === extensions && verified.presets === agentPresets?.items;
+  const ready = verified?.provider === provider && toolIds.includes(provider) && !editing;
   const disabled = busy || enabling || accessPending;
 
   React.useLayoutEffect(() => {
@@ -84,6 +93,44 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
 
   function updateStep(id, state, detail, code) {
     setResults((current) => ({ ...current, [id]: { state, detail, code } }));
+  }
+
+  async function checkAgent(models, targetId, memoryTargetId, baseModel, probe, signal) {
+    if (!agent || agentPresets?.error) {
+      updateStep('agent', 'failed', agentPresets?.error || '所选 Agent 预设已变更，请重新选择。');
+      return;
+    }
+    const selection = agent.model ? selectSetupModel(models, agent.model) : baseModel;
+    updateStep('agentModel', selection.ok ? 'passed' : 'failed', selection.ok ? selection.name : selection.message);
+
+    const mcpRefs = agent.agent?.mcpServers ?? [];
+    const mcp = checkStageResources({ provider, agent: { mcpServers: mcpRefs } }, targetId, extensions);
+    if (!mcp.ok) updateStep('mcp', 'failed', mcp.message);
+    else if (!mcp.mcpServers.length) updateStep('mcp', 'passed', '预设未配置 MCP 服务器。');
+    else {
+      const names = mcp.mcpServers.join('、');
+      updateStep('mcp', 'checking', `正在核对 ${names}。`);
+      try {
+        if (await probe('resources', mcp.mcpServers) !== 'resources_ready') throw new Error('VPS 未确认脚本可用。');
+        updateStep('mcp', 'passed', `已核对 ${names}。`);
+      } catch (error) {
+        signal.throwIfAborted();
+        updateStep('mcp', 'failed', `${names} · ${error?.message || '无法确认 MCP 脚本。'}`);
+      }
+    }
+
+    const pluginRefs = agent.agent?.plugins ?? [];
+    const plugins = checkStageResources({ provider, agent: { plugins: pluginRefs } }, targetId, extensions);
+    updateStep('plugins', plugins.ok ? 'passed' : 'failed', plugins.ok
+      ? pluginRefs.length ? `已核对 ${pluginRefs.map(({ title }) => title).join('、')}。` : '预设未配置插件模板。'
+      : plugins.message);
+
+    const mode = agent.agent?.memory;
+    if (mode === 'shared' && !memoryTargetId) updateStep('memory', 'failed', '当前 VPS 无法确认共享记忆范围。');
+    else if (mode === 'shared') {
+      const policy = automaticMemoryPolicy(extensions, { targetId: memoryTargetId, projectId: selectedProject });
+      updateStep('memory', policy?.enabled ? 'passed' : 'confirm', policy?.enabled ? '共享记忆已启用。' : '当前范围未开启自动记忆。');
+    } else updateStep('memory', 'passed', mode === 'isolated' ? '独立上下文。' : '默认不共享记忆。');
   }
 
   async function check(event, confirmedTarget = null) {
@@ -138,52 +185,27 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
 
       step = 'model';
       updateStep(step, 'checking', '正在核对执行端的模型选项…');
-      let model = '';
-      let modelName = 'VPS CLI 默认模型';
+      let models = [];
+      let baseModel = { ok: true, model: '', name: 'VPS CLI 默认模型' };
       if (provider !== 'codex' && await probe('model') !== 'model_route_ready') {
         throw new Error('VPS 未确认此执行端的模型服务路由。');
       }
       if (workflowProviders[provider].models) {
-        const models = readModelCatalog(await rpc('models', { settings, targetId }, signal));
+        models = readModelCatalog(await rpc('models', { settings, targetId }, signal));
         signal.throwIfAborted();
         if (models.length === 0) throw new Error('当前执行端未返回可选模型。请检查 VPS 执行环境。');
         const saved = toolProfiles[provider]?.model;
-        const requested = useDefaultModel ? '' : agent?.model || (saved?.targetId === targetId ? saved.id : '');
-        const selected = requested ? models.find(({ id }) => id === requested) : models.find(({ isDefault }) => isDefault);
-        if (requested && !selected) {
-          updateStep(step, 'failed', `模型 ${requested} 已不在当前模型选项中。`, 'model_unavailable');
+        const requested = !useDefaultModel && saved?.targetId === targetId ? saved.id : '';
+        baseModel = selectSetupModel(models, requested);
+        if (!baseModel.ok) {
+          updateStep(step, 'failed', baseModel.message, 'model_unavailable');
           return;
         }
-        model = selected?.id ?? '';
-        modelName = selected?.displayName ?? '执行端默认模型';
       }
-      updateStep(step, 'passed', `${modelName} · 示例运行将验证实际响应。`);
-
-      step = 'resources';
-      updateStep(step, 'checking', '正在核对 Agent 的资源引用…');
-      if (presetId && !agent) throw new Error('所选 Agent 预设已变更，请重新选择。');
-      if (agentPresets?.error) throw new Error(agentPresets.error);
-      const resources = checkStageResources({ provider, agent: agent?.agent }, targetId, extensions);
-      if (!resources.ok) {
-        updateStep(step, 'failed', resources.message, resources.code);
-        return;
-      }
-      if (resources.mcpServers.length && await probe('resources', resources.mcpServers) !== 'resources_ready') {
-        throw new Error('VPS 未确认 MCP 脚本是否可用。');
-      }
-      signal.throwIfAborted();
-      const policy = agent?.agent?.memory === 'shared' && memoryTargetId &&
-        automaticMemoryPolicy(extensions, { targetId: memoryTargetId, projectId: selectedProject });
-      const memory = agent?.agent?.memory === 'shared' ? (policy?.enabled ? '共享记忆已启用' : '当前范围未开启自动记忆')
-        : agent?.agent?.memory === 'isolated' || !agent ? '独立上下文' : '默认不共享';
-      const summary = [
-        agent?.name ?? '内置示例 Agent',
-        resources.mcpServers.length ? `${resources.mcpServers.length} 个 MCP 脚本已核对` : null,
-        agent?.agent?.plugins.length ? `${agent.agent.plugins.length} 个插件模板已核对` : null,
-        memory,
-      ].filter(Boolean).join(' · ');
-      updateStep(step, 'passed', summary);
-      setVerified({ targetId, model, extensions, presets: agentPresets?.items });
+      updateStep(step, 'passed', `${baseModel.name} · 示例运行将验证实际响应。`);
+      setVerified({ provider, targetId, model: baseModel.model });
+      step = 'agent';
+      if (presetId) await checkAgent(models, targetId, memoryTargetId, baseModel, probe, signal);
     } catch (error) {
       if (!signal.aborted) updateStep(step, 'failed', error?.message || '检查未完成，请重试。', error?.code);
     } finally {
@@ -219,6 +241,19 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
   const editVps = () => { setForm(connectionForm(connection)); setEditing(true); reset(); };
   const editSettings = (tab) => dismiss(() => openSettings(tab));
   const canRun = ready && remoteEnabled && !disabled && !workflow?.blocked && Boolean(workflow);
+  const agentError = results.agent?.detail || agentPresets?.error;
+  const agentNeedsAttention = agentError || agentSteps.some(([id]) => results[id]?.state === 'failed');
+
+  function stepCard(id, label, ...actions) {
+    const result = results[id];
+    const state = result?.state ?? 'waiting';
+    return h('li', { key: id, className: 'vc-setup-step', 'data-state': state, 'aria-label': label },
+      h('div', { className: 'vc-setup-step-header' },
+        h('span', { className: 'vc-setup-marker', 'aria-hidden': true }, state === 'passed' ? '✓' : state === 'failed' ? '!' : ''),
+        h('strong', null, label), h('span', { className: 'vc-setup-status' }, labels[state])),
+      h('p', { role: state === 'failed' ? 'alert' : undefined }, result?.detail ?? initialDetail[id]), ...actions);
+  }
+
   return h('dialog', { ref: dialog, className: 'vc-setup-guide vc-workbench-settings vc-popup-motion',
     'aria-labelledby': title, onCancel(event) { event.preventDefault(); dismiss(); } },
     h('header', { className: 'vc-settings-header' },
@@ -226,23 +261,17 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
       button('×', () => dismiss(), { className: 'vc-button vc-settings-close', 'aria-label': '关闭接入向导' })),
     h('form', { className: 'vc-settings-form', onSubmit: check },
       h('div', { className: 'vc-settings-scroll vc-setup-scroll' },
-        h('div', { className: 'vc-setup-overview' },
-          h('p', null, '模型请求由 VPS 发出。检查完成后可运行一份两阶段的示例。'),
-          h('span', { role: 'status' }, `${passedCount} / ${steps.length} 项通过`)),
+        h('p', { className: 'vc-setup-notice' }, '模型请求由 VPS 发出。基础接入通过后可运行内置示例。'),
         h('fieldset', { className: 'vc-setup-providers', disabled },
           h('legend', null, '示例执行端'),
           h('div', null, tools.map(({ id, icon }) => h('label', { key: id, className: 'vc-setup-provider', 'data-picked': provider === id },
             h('input', { type: 'radio', name: providerGroup, value: id, checked: provider === id,
               onChange: () => { setProvider(id); setPresetId(''); setUseDefaultModel(false); reset(); } }),
             menuIcon(h, icon), workflowProviders[id].label)))),
-        h('ol', { className: 'vc-setup-steps' }, steps.map(([id, label]) => {
-          const result = results[id];
-          const state = result?.state ?? 'waiting';
-          return h('li', { key: id, className: 'vc-setup-step', 'data-state': state, 'aria-label': label },
-            h('div', { className: 'vc-setup-step-header' },
-              h('span', { className: 'vc-setup-marker', 'aria-hidden': true }, state === 'passed' ? '✓' : state === 'failed' ? '!' : ''),
-              h('strong', null, label), h('span', { className: 'vc-setup-status' }, labels[state])),
-            h('p', { role: state === 'failed' ? 'alert' : undefined }, result?.detail ?? initialDetail[id]),
+        h('section', { className: 'vc-setup-group', 'aria-label': '基础接入检查' },
+          h('div', { className: 'vc-setup-overview' }, h('h3', null, '基础接入检查'),
+            h('span', { role: 'status' }, `${passedCount} / ${steps.length} 项通过`)),
+          h('ol', { className: 'vc-setup-steps' }, steps.map(([id, label]) => stepCard(id, label,
             id === 'ssh' && editing ? h('div', { className: 'vc-setup-fields' }, h(ConnectionFields, {
               form, busy: disabled, edit(key, value) { setForm((previous) => editConnectionForm(previous, key, value)); reset(); },
             }), connectionName && button('取消修改', () => { setEditing(false); reset(); }, { disabled })) : null,
@@ -252,19 +281,29 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
               enableProvider ? button('启用此执行端', () => void enable(), { disabled })
                 : button(provider === 'claude' ? '设置 VPS 密钥' : '在 VPS 登录', login, { disabled: disabled || !remoteEnabled }),
               manualTarget && button('已在 VPS 登录，继续检查', () => void check(null, manualTarget), { disabled })) : null,
-            id === 'model' && result?.code === 'model_unavailable' ? button('改用执行端默认模型', () => {
+            id === 'model' && results.model?.code === 'model_unavailable' ? button('改用执行端默认模型', () => {
               setUseDefaultModel(true); reset();
-            }, { disabled }) : null,
-            id === 'resources' ? h('div', { className: 'vc-setup-actions' },
-              presets.length > 0 ? h('label', null, '检查额外 Agent', h('select', { value: presetId, disabled,
-                onChange: (event) => { setPresetId(event.target.value); setUseDefaultModel(false); reset(); } },
-              h('option', { value: '' }, '只检查内置示例'), ...presets.map(({ id, name }) => h('option', { key: id, value: id }, name)))) : null,
-              state === 'failed' && button('检查 Agent 设置', () => editSettings('agents'), { disabled })) : null);
-        })),
+            }, { disabled }) : null)))),
+        h('section', { className: 'vc-setup-group', 'aria-label': '额外 Agent 检查' },
+          h('div', { className: 'vc-setup-overview' }, h('h3', null, '额外 Agent 检查'),
+            h('small', { className: 'vc-settings-current' }, '可选')),
+          h('div', { className: 'vc-setup-actions vc-setup-agent-actions' },
+            presets.length || presetId ? h('label', null, '检查额外 Agent', h('select', { value: presetId, disabled,
+              onChange(event) {
+                setPresetId(event.target.value);
+                setResults((current) => Object.fromEntries(steps.filter(([id]) => current[id]).map(([id]) => [id, current[id]])));
+              } },
+            h('option', { value: '' }, '只检查基础接入'),
+            presetId && !agent ? h('option', { value: presetId, disabled: true }, '已移除的预设') : null,
+            ...presets.map(({ id, name }) => h('option', { key: id, value: id }, name)))) :
+              h('p', { className: 'vc-setup-notice' }, '当前执行端暂无 Agent 预设。'),
+            agentNeedsAttention ? button('检查 Agent 设置', () => editSettings('agents'), { disabled }) : null),
+          agentError ? h('p', { className: 'vc-setup-notice', role: 'alert' }, agentError) : null,
+          presetId && h('ol', { className: 'vc-setup-steps' }, agentSteps.map(([id, label]) => stepCard(id, label)))),
         !remoteEnabled && h('p', { role: 'status', className: 'vc-setup-notice' }, '当前为仅浏览。切换为 VPS 执行后可开始检查。'),
         ready && h('div', { className: 'vc-setup-example', role: 'status' },
           h('strong', null, '接入示例 · 读书会活动页'),
-          h('p', null, '整理简报 → 核对并汇总。示例使用内置角色和独立上下文，并消耗所选执行端的额度。'),
+          h('p', null, '整理简报 → 核对并汇总。示例使用已验证的执行端和模型、内置角色及独立上下文，并消耗所选执行端的额度。'),
           workflow?.blocked && h('p', null, workflow.blocked))),
       h('footer', { className: 'vc-settings-footer vc-setup-footer' },
         !remoteEnabled && onEnableExecution ? button('切换为 VPS 执行', onEnableExecution, { disabled: accessPending }) : null,
@@ -273,6 +312,6 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
           disabled: disabled || !remoteEnabled || Boolean(manualTarget) || (editing && !form.hostKeyConfirmed) },
         busy ? '正在检查' : editing ? '连接并检查' : Object.keys(results).length ? '重新检查' : '开始检查'),
         ready ? button('运行示例工作流', () => {
-          dismiss(() => workflow.start(provider, verified.model, verified.targetId));
+          dismiss(() => workflow.start(verified.provider, verified.model, verified.targetId));
         }, { className: 'vc-button vc-primary', disabled: !canRun }) : null)));
 }

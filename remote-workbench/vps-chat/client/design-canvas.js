@@ -6,6 +6,7 @@ import {
   setDesignBoard, setPlaygroundLink, setPlaygroundPositions,
 } from './design-state.js';
 import { createDesignPlayground } from './design-playground.js';
+import { designExportMenu } from './design-export-menu.js';
 import { createDesignPrototype } from './design-prototype.js';
 import { createDesignVersionGraph } from './design-version-graph.js';
 import { designVersionNodes } from './design-version-state.js';
@@ -18,7 +19,6 @@ const defaultChoices = { system: false, references: false, revision: false };
 const emptyHistory = { undo: [], redo: [] };
 const noPlaygroundBoards = new Map();
 const noHistory = [];
-const exportFormats = [['html', '下载 HTML'], ['zip', '下载 ZIP'], ['pdf', '下载 PDF'], ['pptx', '下载 PPTX']];
 
 const canvasCss = `
   [data-vps-chat] .vc-canvas-toolbar {position:relative; flex:none}
@@ -120,21 +120,10 @@ const canvasCss = `
   [data-vps-chat] .vc-design-image-list span {min-width:0; flex:1; overflow-wrap:anywhere}
   [data-vps-chat] .vc-canvas-status {margin:0; padding:5px 12px; color:var(--vc-warn); font-size:12px}
   [data-vps-chat] .vc-canvas-status[data-outcome] {color:var(--vc-muted); display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px}
-  [data-vps-chat] .vc-export {position:relative}
   [data-vps-chat] .vc-export-trigger {display:flex; align-items:center; gap:6px}
   [data-vps-chat] .vc-export-trigger::after {
     content:''; width:6px; height:6px; margin-top:-3px; border:solid currentColor; border-width:0 1.5px 1.5px 0; transform:rotate(45deg);
   }
-  [data-vps-chat] .vc-export-menu {
-    position:absolute; z-index:6; inset-block-start:calc(100% + 6px); inset-inline-end:0; display:grid; gap:2px;
-    min-width:128px; padding:5px; border:1px solid var(--vc-line-strong); border-radius:8px;
-    background:var(--vc-surface); box-shadow:var(--vc-shadow);
-  }
-  [data-vps-chat] .vc-export-menu:not([data-open=true]) {display:none}
-  [data-vps-chat] .vc-export-menu .vc-button {
-    width:100%; min-height:29px; text-align:start; border:0; border-radius:5px; font-weight:500;
-  }
-  [data-vps-chat] .vc-export-menu .vc-button:focus {background:var(--vc-tint); outline-offset:-2px}
   @container (max-width:700px) {
     [data-vps-chat] .vc-canvas-content {flex-direction:column}
     [data-vps-chat] .vc-design-inspector {width:100%; max-height:43%; border-inline-start:0; border-top:1px solid var(--vc-line)}
@@ -230,7 +219,7 @@ export function createDesignCanvas(React) {
 
   return function DesignCanvas({ id, turns, generating, loading, targetId, sessionId, onContext, onCycleFocus,
     submitted, waitingForReceipt, request, materialsOpen, setMaterialsOpen, playgroundEnabled, playgroundOpen,
-    setPlaygroundOpen, canGenerate, canBranch, readDesignRevision, onPrompt, conversation, openCanvasMenu, copyBoardHtml,
+    setPlaygroundOpen, canGenerate, canBranch, readDesignRevision, onPrompt, conversation, openCanvasMenu, openExportMenu, copyBoardHtml,
     scopedLayerRevisions }) {
     const floatingConversation = Boolean(conversation);
     const storageKey = `dsh-vps-design:v1:${targetId}:${sessionId}`;
@@ -247,7 +236,7 @@ export function createDesignCanvas(React) {
     const [editing, setEditing] = React.useState(false);
     const [choices, setChoices] = React.useState(defaultChoices);
     const [exporting, setExporting] = React.useState(false);
-    const [exportOpen, setExportOpen] = React.useState(false);
+    const exportInFlight = React.useRef(false);
     const [playgroundTarget, setPlaygroundTarget] = React.useState(null);
     const [topologyPreference, setTopologyPreference] = React.useState(null);
     const [compactCanvas, setCompactCanvas] = React.useState(false);
@@ -274,10 +263,6 @@ export function createDesignCanvas(React) {
     const frame = React.useRef(null);
     const frameMenu = React.useRef(null);
     const pointerGesture = React.useRef(null);
-    const exportGroup = React.useRef(null);
-    const exportTrigger = React.useRef(null);
-    const firstExportItem = React.useRef(0);
-    const exportMenuId = React.useId();
 
     const previousVersions = React.useRef(null);
     const previousArtboards = React.useRef(null);
@@ -464,17 +449,6 @@ export function createDesignCanvas(React) {
 
     React.useEffect(() => () => readingVersion.current?.abort(), []);
 
-    React.useLayoutEffect(() => {
-      if (!exportOpen) return undefined;
-      const group = exportGroup.current;
-      group.querySelectorAll('[role="menuitem"]')[firstExportItem.current]?.focus();
-      function dismissOutside(event) {
-        if (!group.contains(event.target)) setExportOpen(false);
-      }
-      document.addEventListener('pointerdown', dismissOutside, true);
-      return () => document.removeEventListener('pointerdown', dismissOutside, true);
-    }, [exportOpen]);
-
     function chooseBoard(nextIndex) {
       setSelectedBoard({ version: active?.id, index: nextIndex });
       setSelection(null);
@@ -530,7 +504,6 @@ export function createDesignCanvas(React) {
       placeHandles();
 
       function beginDrag(event) {
-        setExportOpen(false);
         if (!editing || event.button !== 0 || pointerGesture.current) return;
         const kind = event.target?.closest?.('[data-dsh-handle]')?.dataset.dshHandle;
         const node = kind ? highlighted : event.target?.closest?.('[data-dsh-layer]');
@@ -813,16 +786,13 @@ export function createDesignCanvas(React) {
 
     function openSelectionMenu(event, anchor, entries) {
       const unavailable = entries.some((entry) => entry.provisional || !entry.html);
+      const { summary, actions } = designExportMenu(entries,
+        (format, list) => void exportBoards(format, list, { playgroundLinks }), { busy: exporting, contextSelection: true });
       openCanvasMenu(event, anchor, '所选画板操作', [
         [{ id: 'copy-selection', label: '复制所选画板 HTML', icon: 'copy', disabled: unavailable,
           run: () => void copySelectedBoards(entries) }],
-        exportFormats.map(([format]) => {
-          const tooMany = (format === 'pdf' || format === 'pptx') && entries.length > 6;
-          return { id: `export-${format}`, label: `导出所选画板为 ${format.toUpperCase()}`, icon: 'download',
-            disabled: unavailable || exporting || tooMany, detail: tooMany ? '每次最多导出 6 张画板。' : undefined,
-            run: () => void exportBoards(format, entries, { playgroundLinks }) };
-        }),
-      ]);
+        actions,
+      ], { summary });
     }
 
     function openFrameBoardMenu(event, iframe) {
@@ -973,56 +943,36 @@ export function createDesignCanvas(React) {
     }
 
     async function exportBoards(format, entries, options) {
-      if (entries ? exporting || !entries.length || entries.some((entry) => entry.provisional || !entry.html) : exportDisabled) return;
+      if (exportInFlight.current || !entries.length || entries.some((entry) => entry.provisional || !entry.html)) return;
+      exportInFlight.current = true;
       setExporting(true);
       setAlert('');
       try {
-        await downloadDesign(entries ?? boards, format, options);
+        await downloadDesign(entries, format, options);
       } catch {
         setAlert('导出失败。请检查当前画板后重试。');
       } finally {
+        exportInFlight.current = false;
         setExporting(false);
       }
     }
 
     const exportDisabled = exporting || active?.provisional || !boards.length || boards.some((board) => !board.html);
 
-    function showExportMenu(start) {
+    function showExportFormats(event, entries, options) {
+      const anchor = event.currentTarget;
+      const { left, bottom } = anchor.getBoundingClientRect();
+      const { summary, actions } = designExportMenu(entries, (format, list) => void exportBoards(format, list, options), { busy: exporting });
+      openExportMenu(event, anchor, '导出格式', [actions], {
+        point: { x: left, y: bottom }, frame: frame.current, summary, tracksExpansion: true,
+        focusLast: event.key === 'ArrowUp' || event.key === 'End',
+      });
+    }
+
+    function exportCurrentVersion(event) {
       if (exportDisabled) return;
-      firstExportItem.current = start;
-      if (exportOpen) exportGroup.current.querySelectorAll('[role="menuitem"]')[start]?.focus();
-      else setExportOpen(true);
-    }
-
-    function dismissExportMenu() {
-      exportTrigger.current?.focus();
-      setExportOpen(false);
-    }
-
-    function exportKeys(event) {
-      if (event.nativeEvent.isComposing) return;
-      const { key } = event;
-      if (key === 'Escape' && exportOpen) {
-        event.preventDefault();
-        event.stopPropagation();
-        dismissExportMenu();
-        return;
-      }
-      if (exportDisabled || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(key)) return;
-      const items = Array.from(exportGroup.current.querySelectorAll('[role="menuitem"]'));
-      event.preventDefault();
-      const index = items.indexOf(event.target);
-      if (index < 0) {
-        showExportMenu(key === 'ArrowUp' || key === 'End' ? exportFormats.length - 1 : 0);
-        return;
-      }
-      const positions = {
-        ArrowDown: (index + 1) % items.length,
-        ArrowUp: (index - 1 + items.length) % items.length,
-        Home: 0,
-        End: items.length - 1,
-      };
-      items[positions[key]]?.focus();
+      const entries = boards.map((entry, index) => ({ ...entry, id: `${active.id}:${index + 1}`, version: active.number }));
+      showExportFormats(event, entries);
     }
 
     const topology = hasTopology ? h('div', {
@@ -1038,10 +988,12 @@ export function createDesignCanvas(React) {
       canCancelDraft: !waitingForReceipt && !generating,
       loading: historyLoading || loadingVersion, error: historyError, onRetry: reloadHistory,
     }))) : null;
+    const canvasTitle = playgroundOpen || conversation ? '设计工作台' : '设计画布';
     const header = h('header', { className: 'vc-canvas-header' },
-      h('h2', null, playgroundOpen || conversation ? 'Design Playground' : '设计画布'),
+      h('h2', null, canvasTitle),
       h('div', { className: 'vc-canvas-actions' },
-        playgroundEnabled ? h('div', { className: 'vc-segments', role: 'group', 'aria-label': '画布工作区' },
+        playgroundEnabled ? h('div', { className: 'vc-segments', role: 'group', 'aria-label': '画板浏览' },
+          h('span', { className: 'vc-view-kind', 'aria-hidden': true }, '浏览'),
           [[true, '多画板'], [false, '单画板']].map(([open, label]) => h('button', {
             key: label, type: 'button', className: 'vc-button', 'aria-pressed': Boolean(playgroundOpen) === open,
             onClick: () => setPlaygroundOpen(open),
@@ -1070,27 +1022,16 @@ export function createDesignCanvas(React) {
         !conversation ? h('button', {
           type: 'button', className: 'vc-button', disabled: waitingForReceipt, onClick: () => setMaterialsOpen(true),
         }, '设计资料') : null,
-        h('div', {
-          ref: exportGroup, className: 'vc-export', onKeyDown: exportKeys,
-          onBlur: (event) => {
-            if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setExportOpen(false);
-          },
-        },
         h('button', {
-          ref: exportTrigger, type: 'button', className: 'vc-button vc-export-trigger',
-          'aria-haspopup': 'menu', 'aria-expanded': exportOpen, 'aria-controls': exportMenuId,
-          'aria-disabled': exportDisabled, onClick: () => exportOpen ? dismissExportMenu() : showExportMenu(0),
-        }, '导出'),
-        h('div', {
-          id: exportMenuId, className: 'vc-export-menu vc-popup-motion', role: 'menu', 'aria-label': '导出格式',
-          'data-open': exportOpen, 'data-side': 'below', inert: !exportOpen,
-        }, exportFormats.map(([format, label]) => h('button', {
-          key: format, type: 'button', className: 'vc-button', role: 'menuitem', tabIndex: -1,
-          onClick: () => { dismissExportMenu(); void exportBoards(format); },
-        }, label))))));
+          type: 'button', className: 'vc-button vc-export-trigger', 'aria-haspopup': 'menu', 'aria-expanded': false,
+          'aria-disabled': exportDisabled, onClick: exportCurrentVersion,
+          onKeyDown(event) {
+            if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && !event.nativeEvent.isComposing) exportCurrentVersion(event);
+          },
+        }, '导出当前版本')));
 
     const canvas = h('section', {
-      ref: panel, id, className: 'vc-canvas', 'aria-label': playgroundOpen || conversation ? 'Design Playground' : '设计画布',
+      ref: panel, id, className: 'vc-canvas', 'aria-label': canvasTitle,
       'data-compact': floatingConversation && compactCanvas,
       tabIndex: -1, 'data-vc-focus-area': 'canvas', onKeyDown: playgroundOpen ? undefined : handleHistoryShortcut,
     },
@@ -1132,6 +1073,9 @@ export function createDesignCanvas(React) {
         onBoardMenu: openCanvasMenu ? openBoardMenu : undefined,
         onSelectionMenu: openCanvasMenu ? openSelectionMenu : undefined,
         onBackgroundMenu: openCanvasMenu ? openBackgroundMenu : undefined,
+        onMoreMenu: openCanvasMenu,
+        onExportSelection: (event, entries) => showExportFormats(event, entries, { playgroundLinks }),
+        exporting,
         onClearAttachment: clearPlaygroundTarget, attachedId: targetBoard?.id,
         links: drawnLinks, generating, loading,
         canGenerate: canGenerate && !waitingForReceipt && (!readDesignRevision || !turns.length || canBranch), previewWidth: width,

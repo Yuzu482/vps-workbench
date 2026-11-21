@@ -120,6 +120,7 @@ export const settingsCss = `
   }
   [data-vps-chat] .vc-settings-disclosure[open] > summary .vc-settings-chevron {transform:rotate(225deg); margin-bottom:-3px}
   [data-vps-chat] .vc-settings-current {color:var(--vc-muted); font-size:12px; white-space:nowrap}
+  [data-vps-chat] .vc-settings-save-hint {display:inline-block; margin-inline-start:8px; font-weight:400}
   [data-vps-chat] .vc-settings-disclosed {padding:2px 2px 12px}
   [data-vps-chat] .vc-settings-group .vc-settings-disclosure {border:0}
   [data-vps-chat] .vc-settings-group .vc-settings-disclosure > summary {padding:3px 0}

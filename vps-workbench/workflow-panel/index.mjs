@@ -238,12 +238,14 @@ export function createWorkflowPanel(React, { icon } = {}) {
         })));
   }
 
-  return function WorkflowPanel({ open, onClose, workflows, availableProviders, catalogScope, readModels, onChange, onEditInChat,
+  return function WorkflowPanel({ open, preferRunPane, onClose, workflows, availableProviders, catalogScope, readModels, onChange, onEditInChat,
     proposal, onDismissProposal, run, running, canStart, onStart, onResume, onPause, onStop, exampleError,
     agentPresets = [], onManageAgentPresets, moduleCatalog, projects = emptyProjects, selectedProject,
     readFileTarget, saveAttachments, readArtifacts }) {
     const titleId = React.useId();
     const memoryProjectErrorId = React.useId();
+    const configurationId = React.useId();
+    const runPaneId = React.useId();
     const draftTitleId = React.useId();
     const draftDescriptionId = React.useId();
     const dialog = React.useRef(null);
@@ -268,6 +270,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
     const [confirmDelete, setConfirmDelete] = React.useState(false);
     const [transition, setTransition] = React.useState(null);
     const [transitionError, setTransitionError] = React.useState('');
+    const [compactView, setCompactView] = React.useState(run ? 'run' : 'configuration');
     const [editError, setEditError] = React.useState('');
     const [proposalError, setProposalError] = React.useState(null);
     const [runError, setRunError] = React.useState('');
@@ -292,6 +295,9 @@ export function createWorkflowPanel(React, { icon } = {}) {
         if (element.open) element.close();
       };
     }, [open]);
+    React.useLayoutEffect(() => {
+      if (open && preferRunPane) setCompactView('run');
+    }, [open, preferRunPane]);
     React.useLayoutEffect(() => {
       if (!transition || !open) return undefined;
       const element = draftDialog.current;
@@ -598,14 +604,17 @@ export function createWorkflowPanel(React, { icon } = {}) {
         : !proposal && working ? h('span', { className: 'vc-workflow-note', role: 'status' }, '未保存') : null,
         !proposal && draft ? button('保存工作流', saveDraft, { primary: true, disabled: writeBusy || fileBusy || !working || stale }) : null,
         button('关闭', dismiss, { ref: closeButton, 'aria-label': '关闭工作流' }))),
-    h('div', { className: 'vc-workflow-body', 'data-proposal': Boolean(proposal) },
+    h('div', { className: 'vc-workflow-body', 'data-proposal': Boolean(proposal), 'data-view': compactView },
       proposal ? h(Proposal, { key: `${proposal.id}:${proposal.revision}`, proposal, busy: writeBusy || fileBusy, isRevision: proposal.revision != null, moduleCatalog,
         error: proposalError?.proposal === proposal ? proposalError.message : '',
         onAccept: (event) => requestTransition(event.currentTarget, '接受工作流提案',
           () => write({ op: 'save', id: proposal.id, revision: proposal.revision, draft: proposal.draft }, { currentProposal: proposal })),
         onDismiss: () => { setProposalError(null); onDismissProposal(); },
       }) : h(React.Fragment, null,
-        h('section', { className: 'vc-workflow-pane vc-workflow-edit-pane', 'aria-label': '工作流配置' },
+        h('div', { className: 'vc-workflow-view-switch', role: 'group', 'aria-label': '工作流面板' },
+          button('配置', () => setCompactView('configuration'), { 'aria-controls': configurationId, 'aria-pressed': compactView === 'configuration' }),
+          button('运行', () => setCompactView('run'), { 'aria-controls': runPaneId, 'aria-pressed': compactView === 'run' })),
+        h('section', { id: configurationId, className: 'vc-workflow-pane vc-workflow-edit-pane', 'aria-label': '工作流配置' },
           h('div', { className: 'vc-workflow-command-row' },
             field('已保存的工作流', h('select', { value: selected?.id ?? '', disabled: writeBusy || fileBusy,
               onChange(event) {
@@ -648,8 +657,10 @@ export function createWorkflowPanel(React, { icon } = {}) {
               button('确认删除', () => write({ op: 'delete', id: selected.id, revision: selected.revision }),
                 { disabled: writeBusy || fileBusy || stale || !selected }),
               button('取消删除', () => setConfirmDelete(false), { disabled: writeBusy })))),
-        h('section', { className: 'vc-workflow-pane', 'aria-label': '工作流运行' },
-          h('h3', null, '运行工作流'),
+        h('section', { id: runPaneId, className: 'vc-workflow-pane vc-workflow-run-pane', 'aria-label': '工作流运行' },
+          h('div', { className: 'vc-workflow-title-row' },
+            h('h3', null, '运行工作流'),
+            unresolved ? note(`当前运行 · ${run.stopRequested ? '等待确认停止' : phases[run.phase]}`, 'status') : null),
           field('运行任务', h('textarea', { value: task, onChange: (event) => setTask(event.target.value) })),
           sharedMemory && field('记忆项目', h('select', { value: memoryProject,
             disabled: Boolean(launchAction), 'aria-invalid': missingMemoryProject || undefined,

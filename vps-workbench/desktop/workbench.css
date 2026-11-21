@@ -307,7 +307,9 @@ input, button, textarea, select { font: inherit; }
 [data-vps-chat] .vc-setup-guide[open] { display: grid; }
 [data-vps-chat] .vc-setup-guide::backdrop { background: color-mix(in srgb, var(--vc-overlay) 81%, transparent); }
 [data-vps-chat] .vc-setup-scroll { display: grid; align-content: start; gap: 15px; }
+[data-vps-chat] .vc-setup-group { display: grid; gap: 7px; min-width: 0; }
 [data-vps-chat] .vc-setup-overview { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+[data-vps-chat] .vc-setup-overview h3 { margin: 0; font-size: 14px; }
 [data-vps-chat] .vc-setup-overview p, [data-vps-chat] .vc-setup-example p, [data-vps-chat] .vc-setup-step p {
   margin: 0; font-size: 13px; color: var(--vc-muted); overflow-wrap: anywhere;
 }
@@ -339,6 +341,7 @@ input, button, textarea, select { font: inherit; }
 [data-vps-chat] .vc-setup-step[data-state=failed] .vc-setup-marker { background: var(--vc-accent); color: var(--vc-on-accent); }
 [data-vps-chat] .vc-setup-step > p { padding-inline-start: 24px; }
 [data-vps-chat] .vc-setup-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; margin-inline-start: 24px; }
+[data-vps-chat] .vc-setup-agent-actions { margin-inline-start: 0; }
 [data-vps-chat] .vc-setup-actions small, [data-vps-chat] .vc-setup-actions label { color: var(--vc-muted); font-size: 12px; }
 [data-vps-chat] .vc-setup-actions label { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
 [data-vps-chat] .vc-setup-actions select {
