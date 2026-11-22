@@ -18,7 +18,7 @@ import {
 } from './project-folders.js';
 import { createProviderPicker, providerPickerCss, readToolPreferences } from './provider-picker.js';
 import { workbenchCss, themeComposerCss } from './workbench-theme.js';
-import { setToolTheme, themeRippleCss, transitionToolView } from './theme-ripple.js';
+import { setToolTheme, themeRippleCss, transitionSubscriptionView, transitionToolView } from './theme-ripple.js';
 import { createAccountDialog, accountDialogCss } from './account-view.js';
 import { getAccountAction } from './account-routes.js';
 import { createSettingsDialog, defaultSettings, settingFields } from './settings-dialog.js';
@@ -1547,6 +1547,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       };
     }
 
+    function crossesSubscriptionView(provider) {
+      return Boolean(settingsSurface && (showingSubscription || provider === subscriptionProvider));
+    }
+
     function changeProvider(provider, origin) {
       if (!ready || providerSwitchLocked || !configuredTools.some(({ id }) => id === provider)) return;
       void perform('provider', async (signal) => {
@@ -1554,7 +1558,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           const update = await providerUpdate(provider, signal);
           if (signal.aborted) return;
           const motion = toolProfiles[provider]?.motion ?? preferences.motion;
-          await transitionToolView(workbench.current, provider, active && motion !== 'reduce' ? origin : null, () => new Promise(resolve => {
+          const animate = active && motion !== 'reduce';
+          const commit = () => new Promise(resolve => {
             if (signal.aborted) return resolve();
             const done = () => {
               signal.removeEventListener('abort', done);
@@ -1565,7 +1570,12 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             // The new snapshot can be captured once React has mounted the new view and theme.
             signal.addEventListener('abort', done, { once: true });
             setAcknowledgeSwitch(() => done);
-          }), signal, onThemeReveal);
+          });
+          if (crossesSubscriptionView(provider)) {
+            await transitionSubscriptionView(workbench.current, animate && activePreferences.motion !== 'reduce', commit, signal, onThemeReveal);
+          } else {
+            await transitionToolView(workbench.current, provider, animate ? origin : null, commit, signal, onThemeReveal);
+          }
         } catch (error) {
           if (!signal.aborted) setFeedback(errorText(error, '暂时无法切换执行端。'));
         }
@@ -2044,7 +2054,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       : '未归类';
     const toolPicker = ready && configuredTools.length ? h(ProviderPicker, {
       value: activeTool, tools: configuredTools, disabled: providerSwitchLocked, active,
-      select: changeProvider, docked: sidebarActions,
+      select: changeProvider, closeOnSelect: crossesSubscriptionView, docked: sidebarActions,
     }) : null;
     const accessProvider = showingSubscription ? subscriptionProvider : connection?.provider;
     const accessButton = access ? h(AccessTrigger, { access, provider: accessProvider,

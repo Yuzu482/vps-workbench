@@ -10,7 +10,7 @@ const terminalPath = '/dsh-terminal-workbench/api/rpc';
 const terminalLabel = 'Claude Code 订阅终端';
 const subscriptionLabel = 'Claude Code（订阅终端）';
 
-async function openTerminalPreview(t, { width = 1280, height = 720, reducedMotion = 'reduce' } = {}) {
+async function openTerminalPreview(t, { width = 1280, height = 720, reducedMotion = 'reduce', enter = true } = {}) {
   const preview = await startPreview({ port: 0, watch: false });
   t.after(() => preview.close());
   const browser = await chromium.launch({ channel: 'msedge', args: ['--disable-background-networking', '--no-proxy-server'] });
@@ -106,12 +106,15 @@ async function openTerminalPreview(t, { width = 1280, height = 720, reducedMotio
   await page.goto(preview.origin);
   await page.getByText('本地演示 · VPS 已配置', { exact: true }).waitFor();
   async function choose(name) {
-    await page.getByRole('button', { name: '切换 VPS 执行端', exact: true }).click();
+    await page.getByRole('button', { name: '切换 VPS 执行端', exact: true })
+      .and(page.locator('[aria-disabled=false]')).click();
     await page.getByRole('option', { name, exact: true }).click();
   }
-  await choose(subscriptionLabel);
   const terminal = page.getByRole('region', { name: terminalLabel, exact: true });
-  await terminal.waitFor();
+  if (enter) {
+    await choose(subscriptionLabel);
+    await terminal.waitFor();
+  }
   const after = (sequence) => page.waitForRequest((request) => {
     if (!request.url().endsWith(terminalPath) || request.method() !== 'POST') return false;
     const packet = request.postDataJSON();
@@ -287,4 +290,82 @@ test('subscription terminal leaves a malformed or mismatched page unacknowledged
     assert.equal(calls.findLast(({ op }) => op === 'native-poll').after, events.length - 1);
     assert.equal(await terminal.getByText('MISMATCHED-TAIL', { exact: true }).count(), 0);
     assert.equal(calls.filter(({ op }) => op === 'native-subscription-start').length, 1);
+  });
+
+test('subscription entry and exit use the same brief arrival and preserve focus and session while resizing',
+  { timeout: 35_000 }, async (t) => {
+    const fixture = await openTerminalPreview(t, { reducedMotion: 'no-preference', enter: false });
+    const { page, terminal, choose, calls, events } = fixture;
+    const selector = '[data-vps-chat][data-subscription-open]';
+    const picker = page.getByRole('button', { name: '切换 VPS 执行端', exact: true });
+    const draft = page.getByRole('textbox', { name: '消息', exact: true });
+    await draft.fill('切换前的 Codex 草稿');
+    const samples = [];
+
+    async function switchView(name, entering, resize) {
+      const motion = page.evaluate(({ selector, entering }) => new Promise((resolve) => {
+        const deadline = performance.now() + 2500;
+        let first;
+        let snapshot;
+        function sample(now) {
+          const root = document.querySelector(selector);
+          const main = root.querySelector(':scope > .vc-main');
+          const animation = main.getAnimations().find(({ id }) => id === 'vc-subscription-arrival');
+          if (root.dataset.subscriptionOpen === String(entering) && animation && first === undefined) {
+            first = now;
+            snapshot = {
+              duration: animation.effect.getTiming().duration,
+              from: animation.effect.getKeyframes()[0].transform,
+              oldRipple: root.hasAttribute('data-theme-ripple'),
+              menuVisible: getComputedStyle(root.querySelector('.vc-tool-palette')).display !== 'none',
+              chatVisible: main.querySelector('.vc-main-body').getClientRects().length > 0,
+              terminalVisible: main.querySelector('[aria-label="VPS 订阅会话"]').getClientRects().length > 0,
+            };
+          } else if (first !== undefined && !animation) {
+            resolve({ ...snapshot, elapsedMs: Number((now - first).toFixed(1)) });
+            return;
+          }
+          if (now > deadline) { resolve(null); return; }
+          requestAnimationFrame(sample);
+        }
+        requestAnimationFrame(sample);
+      }), { selector, entering });
+      await choose(name);
+      if (resize) {
+        await page.locator('[data-subscription-transition]').waitFor();
+        await page.setViewportSize(resize);
+      }
+      const result = await motion;
+      assert.ok(result, name);
+      assert.equal(result.duration, 240);
+      assert.equal(result.from, 'translateY(6px)');
+      assert.equal(result.oldRipple, false);
+      assert.equal(result.menuVisible, false);
+      assert.equal(result.chatVisible, !entering);
+      assert.equal(result.terminalVisible, entering);
+      assert.equal(await picker.evaluate((button) => button === document.activeElement), true);
+      samples.push({ entering, ...result, resized: Boolean(resize) });
+    }
+
+    await switchView(subscriptionLabel, true);
+    await fixture.start();
+    await fixture.after(1);
+    await switchView('Codex', false, { width: 420, height: 640 });
+    assert.equal(await draft.inputValue(), '切换前的 Codex 草稿');
+    const observed = fixture.after(events.length + 1);
+    fixture.append('\r\nHIDDEN-SESSION-OUTPUT\r\n❯ ');
+    await observed;
+    await switchView(subscriptionLabel, true);
+    await terminal.getByText('隔离终端运行中', { exact: true }).waitFor();
+    assert.ok((await terminal.locator('.xterm-rows').innerText()).includes('HIDDEN-SESSION-OUTPUT'));
+    assert.equal(calls.filter(({ op }) => op === 'native-subscription-start').length, 1);
+
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    for (const [name, entering] of [['Codex', false], [subscriptionLabel, true]]) {
+      await choose(name);
+      await page.locator(`${selector}[data-subscription-open=${entering}]`).waitFor();
+      assert.equal(await page.locator('[data-subscription-transition], [data-theme-ripple]').count(), 0);
+      assert.equal(await picker.evaluate((button) => button === document.activeElement), true);
+    }
+    t.diagnostic(JSON.stringify(samples));
   });

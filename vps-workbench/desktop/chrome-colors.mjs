@@ -118,7 +118,7 @@ export function connectChromeColors(root, workbench, setWindowColors, onError, r
     sync(theme) {
       const { vcAccent, toolTheme, vcMotion } = workbench.dataset;
       const next = `${theme}:${vcAccent}:${toolTheme}`;
-      const revealActive = workbench.hasAttribute('data-theme-ripple');
+      const revealActive = workbench.hasAttribute('data-theme-ripple') || workbench.hasAttribute('data-subscription-transition');
       const reduce = reducedMotion.matches || vcMotion === 'reduce';
       if (displayed && revealActive && !revealFrom) {
         revealFrom = displayed;

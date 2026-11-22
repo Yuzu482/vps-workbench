@@ -150,7 +150,8 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
     }
     const attributes = new MutationObserver(synchronize);
     attributes.observe(workbench, {
-      attributeFilter: ['data-vc-color', 'data-vc-accent', 'data-vc-motion', 'data-tool-theme', 'data-theme-ripple', 'data-subscription-open'],
+      attributeFilter: ['data-vc-color', 'data-vc-accent', 'data-vc-motion', 'data-tool-theme', 'data-theme-ripple',
+        'data-subscription-open', 'data-subscription-transition'],
     });
     attributes.observe(toggle, { attributeFilter: ['aria-expanded'] });
     workbench.addEventListener('focusin', rememberFocus);

@@ -1384,7 +1384,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       assert.deepEqual((await desktop.evaluate(() => globalThis.fixtureOverlays)).at(-1),
         { color: '#29241f', symbolColor: '#eee5da', height: 44 });
     } else {
-      await page.locator('[data-vps-chat][data-theme-ripple]').waitFor({ state: 'detached' });
+      await page.locator('[data-vps-chat][data-subscription-transition]').waitFor({ state: 'detached' });
       const subscriptionColors = await checkWindowColors();
       assert.notEqual(subscriptionColors.borderColor, darkColors.borderColor);
       assert.equal(subscriptionColors.accent, '#eac084');

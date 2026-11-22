@@ -54,6 +54,41 @@ export function setToolTheme(root, tool) {
   else delete root.dataset.toolTheme;
 }
 
+export async function transitionSubscriptionView(root, animate, commit, signal, onReveal) {
+  const main = root?.querySelector(':scope > .vc-main');
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  if (!animate || signal?.aborted || reducedMotion.matches || !main?.animate) return commit();
+  root.dataset.subscriptionTransition = '';
+  let arrival, frame;
+  const stop = () => arrival?.cancel();
+  const respectMotionPreference = (event) => { if (event.matches) stop(); };
+  signal?.addEventListener('abort', stop, { once: true });
+  reducedMotion.addEventListener('change', respectMotionPreference);
+  try {
+    await commit();
+    if (signal?.aborted || reducedMotion.matches) return;
+    arrival = main.animate([
+      { opacity: 0, transform: 'translateY(6px)' },
+      { opacity: 1, transform: 'translateY(0)' },
+    ], { id: 'vc-subscription-arrival', duration: 240, easing: 'cubic-bezier(.22, 1, .36, 1)' });
+    if (onReveal) {
+      const paint = () => {
+        onReveal(root, arrival.effect.getComputedTiming().progress ?? 0);
+        frame = requestAnimationFrame(paint);
+      };
+      frame = requestAnimationFrame(paint);
+    }
+    await arrival.finished;
+  } catch (error) {
+    if (error.name !== 'AbortError') throw error;
+  } finally {
+    cancelAnimationFrame(frame);
+    delete root.dataset.subscriptionTransition;
+    signal?.removeEventListener('abort', stop);
+    reducedMotion.removeEventListener('change', respectMotionPreference);
+  }
+}
+
 export async function transitionToolView(root, tool, origin, commit, signal, onReveal) {
   if (!root || !origin || !tool || root.dataset.toolTheme === tool ||
       typeof root.startViewTransition !== 'function' ||

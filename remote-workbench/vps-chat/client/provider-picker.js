@@ -52,7 +52,7 @@ function positionPalette(palette, button, count, openingIndex, docked) {
 
 export function createProviderPicker(React) {
   const h = React.createElement;
-  return function ProviderPicker({ value, tools, disabled, active, select, docked = false }) {
+  return function ProviderPicker({ value, tools, disabled, active, select, closeOnSelect, docked = false }) {
     const id = React.useId();
     const button = React.useRef(null);
     const palette = React.useRef(null);
@@ -65,8 +65,12 @@ export function createProviderPicker(React) {
       palette.current.children[index + 1]?.focus({ preventScroll: true });
     }
 
-    function closePalette(restoreFocus) {
+    function closePalette(restoreFocus, instant = false) {
       const panel = palette.current;
+      if (instant) {
+        panel.dataset.instantClose = '';
+        panel.inert = true;
+      }
       if (panel.matches(':popover-open')) panel.hidePopover();
       if (restoreFocus) button.current.focus({ preventScroll: true });
     }
@@ -74,6 +78,7 @@ export function createProviderPicker(React) {
     function openPalette(index = Math.max(0, selected)) {
       const panel = palette.current;
       if (disabled || !active || panel.matches(':popover-open')) return;
+      delete panel.dataset.instantClose;
       openingIndex.current = Math.max(0, selected);
       positionPalette(panel, button.current, tools.length, openingIndex.current, docked);
       panel.inert = false;
@@ -159,12 +164,11 @@ export function createProviderPicker(React) {
         'data-index': index, 'data-tool-theme': tool.id, title: tool.label,
         onClick: (event) => {
           if (disabled || index === selected) return;
-          if (event.detail > 0) {
-            select(tool.id, { x: event.clientX, y: event.clientY });
-            return;
-          }
           const bounds = event.currentTarget.getBoundingClientRect();
-          select(tool.id, { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 });
+          const origin = event.detail > 0 ? { x: event.clientX, y: event.clientY } :
+            { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+          if (closeOnSelect?.(tool.id)) closePalette(true, true);
+          select(tool.id, origin);
         },
       }, menuIcon(h, tool.icon)))));
   };
@@ -200,6 +204,7 @@ export const providerPickerCss = `
   [data-vps-chat] .vc-tool-palette:popover-open {
     display:grid; opacity:1; pointer-events:auto; clip-path:inset(-18px round 999px);
   }
+  [data-vps-chat] .vc-tool-palette[data-instant-close] {transition:none; display:none}
   @starting-style {
     [data-vps-chat] .vc-tool-palette:popover-open {
       clip-path:inset(0 var(--vc-reveal-end,0px) 0 var(--vc-reveal-start,0px) round 999px); opacity:0;
