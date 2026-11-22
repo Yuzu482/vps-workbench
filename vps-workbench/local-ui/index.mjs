@@ -136,6 +136,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     const composing = React.useRef(false);
     const compositionEndedAt = React.useRef(-Infinity);
     const editor = React.useRef(null);
+    const settingsEntry = React.useRef(null);
     const historyToggle = React.useRef(null);
     const feed = React.useRef(null);
     const follow = React.useRef(true);
@@ -513,7 +514,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
             title: '本机配置状态。账户和网络以实际对话结果为准。',
           }, statusLine))),
         h('div', { className: 'local-actions' },
-          h(Button, { onClick: showOptions, title: optionsLabel, 'aria-label': '设置', 'aria-haspopup': 'dialog' },
+          h(Button, { ref: settingsEntry, onClick: showOptions, title: optionsLabel, 'aria-label': '设置', 'aria-haspopup': 'dialog' },
             icon?.(h, 'settings'), '设置'),
           h(Button, { disabled: accessPending, 'aria-pressed': browsing, title: browsing ? '切换为允许执行' : '切换为仅浏览',
             onClick: () => changeAccess?.({ ...access, mode: browsing ? 'execute' : 'browse' }) },
@@ -556,6 +557,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     h(SettingsDialog, {
       tab: settingsTab, setTab: setSettingsTab, close: () => setSettingsTab(false), busy: registerBusy,
       settingsLabel: '设置', navigateLocation: navigateSettings, preferences: appearance, updatePreferences: changeAppearance,
+      focusFallback: () => settingsEntry.current?.focus({ preventScroll: true }),
       localPanels: {
         connection: h(React.Fragment, null, connectionChecks(), profileFields()),
         tools: profileFields(),

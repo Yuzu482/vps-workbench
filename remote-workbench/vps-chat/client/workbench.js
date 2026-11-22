@@ -426,6 +426,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const settingsLabel = VpsConnectionChecks ? '设置' : 'VPS 设置';
     const [setupOpen, setSetupOpen] = React.useState(false);
     const [accountOpen, setAccountOpen] = React.useState(null);
+    const [requestedAccount, setRequestedAccount] = React.useState(null);
     const [settingsError, setSettingsError] = React.useState('');
     const [pinConfirmationRequired, setPinConfirmationRequired] = React.useState(false);
     const [historyOpen, setHistoryOpen] = React.useState(false);
@@ -589,6 +590,13 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const canBranchDesign = sidebarActions && design && designAvailable && remoteEnabled &&
       (snapshot?.session.canBranch ?? (isSettled(lastState) && snapshot?.canSend)) && !working && !attempt && !pollPaused;
     const providerSwitchLocked = Boolean(working || attempt || isActive(lastState));
+    React.useEffect(() => {
+      if (!requestedAccount) return;
+      setRequestedAccount(null);
+      if (!visible || !remoteEnabled || !ready || providerSwitchLocked || !connection.hostKeyConfirmed) return;
+      connectionDiagnostics?.clear();
+      setAccountOpen({ actionId: requestedAccount.actionId, settings: connection });
+    }, [requestedAccount]);
     const report = reportedTurnSettings(turns, Boolean(attempt && lastTurn?.id !== attempt.id));
     const modelKey = `${scope}:${selected}`;
     const catalog = modelCatalogs[scope];
@@ -1288,9 +1296,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }
 
     function openAccount(actionId) {
-      if (!remoteEnabled || !ready || providerSwitchLocked || !getAccountAction(actionId) || !connection.hostKeyConfirmed) return;
-      connectionDiagnostics?.clear();
-      setAccountOpen({ actionId, settings: connection });
+      if (getAccountAction(actionId)) setRequestedAccount({ actionId });
     }
 
     function openSetup() {
@@ -2384,6 +2390,11 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         close: () => setSettingsOpen(false), saveConnection: saveSettings, saveTools,
         VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired,
         navigateLocation: navigateSettings, settingsLabel,
+        focusFallback: () => {
+          const entry = Array.from(workbench.current?.querySelectorAll('.vc-sidebar-settings, .vc-header-settings') ?? [])
+            .find((button) => button.getClientRects().length && !button.disabled);
+          (entry ?? editor.current)?.focus({ preventScroll: true });
+        },
         openSetup: SetupGuide ? openSetup : undefined,
         preferences, updatePreferences, profiles: toolProfiles, updateTool, readModels: readSettingsModels,
         modelTools: remoteEnabled ? toolsWithModels : emptyList, openAccount, remoteEnabled,

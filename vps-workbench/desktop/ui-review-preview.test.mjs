@@ -743,6 +743,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
       assert.equal(await light.getAttribute('aria-pressed'), 'true');
       await page.keyboard.press('Escape');
       await settings.waitFor({ state: 'hidden' });
+      assert.equal(await entry.evaluate((node) => node === document.activeElement), true);
       assert.equal(await page.getByLabel('新建位置', { exact: true }).inputValue(), 'ssh-vps');
     });
 }

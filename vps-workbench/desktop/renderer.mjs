@@ -159,7 +159,8 @@ try {
     const [sshNew, setSshNew] = React.useState(0);
     const [settingsJump, setSettingsJump] = React.useState(null);
     const [appearance, setAppearance] = React.useState(readPreferences);
-    const savingAppearance = React.useRef(false);
+    const appearanceDraft = React.useRef(appearance);
+    const appearanceWrites = React.useRef(Promise.resolve());
     const [resourcesOpen, setResourcesOpen] = React.useState(false);
     const [access, setAccess] = React.useState(initialAccess);
     const [extensions, setExtensions] = React.useState(startingExtensions);
@@ -182,17 +183,23 @@ try {
       setSettingsJump({ location: next, tab });
     }
     async function changeAppearance(patch) {
-      if (savingAppearance.current) return false;
-      savingAppearance.current = true;
+      const next = { ...appearanceDraft.current, ...patch };
+      appearanceDraft.current = next;
+      setAppearance(next);
+      const write = appearanceWrites.current.then(() => saveLocalPreference(workbenchPreferenceKey, JSON.stringify(next)));
+      appearanceWrites.current = write.catch(() => {});
       try {
-        const next = { ...readPreferences(), ...patch };
-        await saveLocalPreference(workbenchPreferenceKey, JSON.stringify(next));
-        setAppearance(next);
+        await write;
         return true;
       } catch {
+        if (appearanceDraft.current === next) {
+          const saved = readPreferences();
+          appearanceDraft.current = saved;
+          setAppearance(saved);
+        }
         showLocalStatus('应用偏好未能保存。请重试。');
         return false;
-      } finally { savingAppearance.current = false; }
+      }
     }
     function changeNewLocation(next) {
       setNewLocation(next);

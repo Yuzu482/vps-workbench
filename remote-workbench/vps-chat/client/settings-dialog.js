@@ -285,7 +285,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
     toolKey, error, busy, close, openSetup,
     saveConnection, saveTools, preferences, updatePreferences, profiles, updateTool, readModels, modelTools, openAccount,
     remoteEnabled = true, extensionSettings, agentSettings, VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired,
-    navigateLocation, localPanels, settingsLabel = 'VPS 设置' }) {
+    navigateLocation, localPanels, settingsLabel = 'VPS 设置', focusFallback }) {
     const dialog = React.useRef(null);
     const confirmDialog = React.useRef(null);
     const pointerOutside = React.useRef(false);
@@ -307,6 +307,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
     const [transition, setTransition] = React.useState(null);
     const [draftError, setDraftError] = React.useState('');
     const [preferenceSaved, setPreferenceSaved] = React.useState(false);
+    const preferenceChange = React.useRef(0);
     const [saving, setSaving] = React.useState(false);
     const write = React.useRef(false);
     const savedForm = connectionForm(settings);
@@ -337,6 +338,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
         }
       } else if (element.open) {
         element.close();
+        if (document.activeElement === document.body) focusFallback?.();
         return afterPopupMotion(element, () => setLastTab(false));
       }
     }, [openTab, visit]);
@@ -476,8 +478,10 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
     const customPanel = extensionSettings && extensionPages.some(([id]) => id === tab);
     function guardedAccount(action) { requestTransition(() => openAccount(action)); }
     async function changePreferences(patch) {
+      const writing = ++preferenceChange.current;
+      setPreferenceSaved(false);
       const saved = await updatePreferences(patch);
-      setPreferenceSaved(saved);
+      if (preferenceChange.current === writing) setPreferenceSaved(saved);
       return saved;
     }
     return h('dialog', {
