@@ -88,7 +88,7 @@ export const settingsCss = `
   [data-vps-chat] .vc-tool-profile-fields label {
     display:grid; gap:4px; min-width:0; font-size:12px; color:var(--vc-muted);
   }
-  [data-vps-chat] .vc-workbench-settings .vc-field input,
+  [data-vps-chat] .vc-workbench-settings .vc-field :is(input,select),
   [data-vps-chat] .vc-tool-profile-fields select {
     min-width:0; width:100%; min-height:34px; padding:6px 8px;
     border:1px solid var(--vc-line); border-radius:7px; color:var(--vc-ink); background:var(--vc-canvas);

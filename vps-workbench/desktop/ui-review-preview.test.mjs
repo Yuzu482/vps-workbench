@@ -14,6 +14,7 @@ import { extensionPreferenceKey, readExtensions } from '../extensions/state.mjs'
 const require = createRequire(import.meta.url);
 const { chromium } = require('../../dsh-terminal-workbench/client/browser-test/node_modules/playwright-core');
 const previewStorageKey = 'vps-workbench-preview-state';
+const workbenchPreferenceKey = 'dsh-vps-chat:workbench:v1';
 
 async function openPreview(t, { viewport = { width: 1280, height: 720 }, seed } = {}) {
   const preview = await startPreview({ port: 0, watch: false });
@@ -805,6 +806,85 @@ test('saving VPS settings and closing from the other location preserves the sele
   await entry.click();
   await openSettingsSection(settings, '连接');
   assert.equal(await directory.inputValue(), '/srv/changed-fixture');
+});
+
+test('local and VPS chat share the conversation, sidebar and settings styles at wide and compact sizes', { timeout: 45_000 }, async (t) => {
+  for (const { viewport, color } of [
+    { viewport: { width: 1280, height: 720 }, color: 'dark' },
+    { viewport: { width: 365, height: 480 }, color: 'light' },
+  ]) {
+    await t.test(`${viewport.width}×${viewport.height} ${color}`, async (t) => {
+      const page = await openPreview(t, { viewport, seed({ preferences }) {
+        preferences[workbenchPreferenceKey] = JSON.stringify({ color, accent: 'violet', textSize: 'large' });
+      } });
+      const locations = page.getByRole('group', { name: '打开会话历史', exact: true });
+      const toggle = page.locator('.desktop-sidebar-button');
+      const settings = page.getByRole('dialog', { name: '设置', exact: true });
+      const compact = viewport.width <= 620;
+      const styles = [];
+      const fieldStyles = [];
+
+      for (const [label, selector, ready, fieldName] of [
+        ['VPS SSH', '[data-vps-chat]', '本地演示 · VPS 已配置', 'SSH 用户名'],
+        ['本机 SDK', '[data-local-sdk]', 'SDK 可用 · 凭据已配置', '配置名称'],
+      ]) {
+        const shell = page.locator(`#root > ${selector}`);
+        await locations.getByRole('button', { name: label, exact: true }).click();
+        await shell.getByText(ready, { exact: true }).waitFor();
+        const newChat = shell.getByRole('button', { name: '新聊天', exact: true });
+        if (compact) await toggle.click();
+        await newChat.waitFor();
+        await page.mouse.move(viewport.width - 2, 1);
+        styles.push(await shell.evaluate((root) => [
+          '.vc-header', '.vc-welcome :is(h1,h2)', '.vc-rail', '.vc-new', '.vc-sidebar-actions',
+          '.vc-sidebar-settings', '.vc-composer', '.vc-composer textarea', '.vc-compose-icon-button',
+        ].map((selector) => {
+          const { backgroundColor, borderColor, borderRadius, color, fontFamily, fontSize } = getComputedStyle(root.querySelector(selector));
+          return { selector, backgroundColor, borderColor, borderRadius, color, fontFamily, fontSize };
+        })));
+
+        if (compact) {
+          if (label === '本机 SDK') {
+            await newChat.focus();
+            await page.keyboard.press('Escape');
+            await page.waitForFunction(() => {
+              const toggle = document.querySelector('.desktop-sidebar-button');
+              return toggle === document.activeElement && toggle.getAttribute('aria-expanded') === 'false';
+            });
+          } else await toggle.click();
+          await newChat.waitFor({ state: 'hidden' });
+        }
+
+        assert.equal(await shell.evaluate((root) => {
+          const title = root.querySelector('.vc-welcome :is(h1,h2)').getBoundingClientRect();
+          const feed = root.querySelector('.vc-scroll').getBoundingClientRect();
+          return title.top >= feed.top && title.bottom <= feed.bottom;
+        }), true, `${label} welcome title stays visible`);
+        const entry = shell.locator('.vc-sidebar-actions').getByRole('button', { name: '设置', exact: true });
+        const bounds = await entry.boundingBox();
+        assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0 &&
+          bounds.x + bounds.width <= viewport.width && bounds.y + bounds.height <= viewport.height);
+        await entry.press('Enter');
+        await openSettingsSection(settings, '连接');
+        const field = settings.getByLabel(fieldName, { exact: true });
+        await field.waitFor();
+        fieldStyles.push(await field.evaluate((node) => {
+          const { backgroundColor, borderColor, borderRadius, color, fontSize } = getComputedStyle(node);
+          return { backgroundColor, borderColor, borderRadius, color, fontSize };
+        }));
+        await page.keyboard.press('Escape');
+        await settings.waitFor({ state: 'hidden' });
+        assert.equal(await entry.evaluate((node) => node === document.activeElement), true);
+      }
+
+      assert.deepEqual(styles[1], styles[0]);
+      assert.deepEqual(fieldStyles[1], fieldStyles[0]);
+      const composer = page.locator('#root > [data-local-sdk] .vc-composer');
+      await composer.getByRole('button', { name: '允许执行', exact: true }).press('Enter');
+      await composer.getByRole('button', { name: '仅浏览', exact: true }).waitFor();
+      assert.equal(await composer.getByRole('button', { name: '发送', exact: true }).isDisabled(), true);
+    });
+  }
 });
 
 test('from local history an unvisited VPS loads only connection metadata and keeps browse access', { timeout: 35_000 }, async (t) => {

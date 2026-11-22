@@ -2,6 +2,7 @@ import { localWorkspaceStyles } from './styles.mjs';
 import { ConnectionResult } from '../desktop/connection-panel.mjs';
 import { TrialActions, trialResult, useConnectionTrial } from '../desktop/connection-trial.mjs';
 import { trialPrompt, trialState } from '../desktop/setup-trial.mjs';
+import { effortName } from '../../remote-workbench/vps-chat/client/model-catalog.js';
 import { createSettingsDialog } from '../../remote-workbench/vps-chat/client/settings-dialog.js';
 import { workbenchStorage } from '../../remote-workbench/vps-chat/client/workbench-storage.js';
 
@@ -94,21 +95,22 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     return h('button', { type: 'button', className: 'vc-button ' + className, ...props }, children);
   }
 
-  function note(message, className = 'local-muted') {
-    return h('p', { className }, message);
+  function note(message) {
+    return h('p', { className: 'local-muted' }, message);
   }
 
   function Turn({ turn, stale, browsing, acting, refresh, stop, onStreamingRender }) {
     const state = stale ? 'unknown' : turn.state;
-    return h('article', { className: 'local-turn', 'data-turn-state': state },
-      h('div', { className: 'local-prompt', 'aria-label': '用户消息' }, turn.prompt),
-      h('div', { className: 'local-response', 'aria-label': 'Codex 回复' },
+    return h('article', { className: 'vc-turn', 'data-turn-state': state },
+      h('div', { className: 'vc-user vc-text', 'aria-label': '用户消息', dir: 'auto' }, turn.prompt),
+      h('div', { className: 'vc-answer', 'aria-label': 'Codex 回复' },
+        h('div', { className: 'vc-answer-head' },
+          h('strong', null, 'Codex'),
+          h('span', { className: 'vc-answer-state', 'data-state': state }, labels[state] ?? labels.unknown),
+          state === 'unknown' && h(Button, { className: 'vc-settings-outline', disabled: acting, onClick: refresh }, '查询回执'),
+          !browsing && !stale && turn.canStop && stop && h(Button, { disabled: acting, onClick: stop }, '停止')),
         turn.reply && h(MarkdownReply, { source: turn.reply, streaming: pending.has(state), onStreamingRender }),
-        h('div', { className: 'local-turn-status' },
-          h('span', { className: 'local-muted' }, labels[state] ?? labels.unknown),
-          errors[turn.code] && h('span', { className: 'local-alert' }, errors[turn.code]),
-          state === 'unknown' && h(Button, { disabled: acting, onClick: refresh }, '查询回执'),
-          !browsing && !stale && turn.canStop && h(Button, { disabled: acting, onClick: stop }, '停止'))));
+        errors[turn.code] && h('p', { className: 'vc-feedback' }, errors[turn.code])));
   }
 
   return function LocalWorkspace({
@@ -146,6 +148,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     const feed = React.useRef(null);
     const follow = React.useRef(true);
     const historyId = React.useId();
+    const hintId = React.useId();
     const profiles = status?.profiles;
     const models = status?.models ?? [];
     const model = models.find(({ id }) => id === modelId) ?? models[0];
@@ -322,15 +325,18 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       if (active && feed.current && (force || follow.current)) feed.current.scrollTop = feed.current.scrollHeight;
     }
 
-    React.useLayoutEffect(() => { followReply(); }, [active, target, session, record?.attempt, record?.alert]);
+    React.useLayoutEffect(() => {
+      if (!active || !feed.current) return;
+      if (session?.turns.length || record?.attempt) followReply();
+      else feed.current.scrollTop = 0;
+    }, [active, target, session, record?.attempt, record?.alert]);
 
     function selectHistory(item, configuration) {
       const at = { sessionId: item.id, profileId: configuration.id, targetId: configuration.targetId };
       const cached = recordsRef.current.get(item.id);
       if (cached && (cached.target.profileId !== at.profileId || cached.target.targetId !== at.targetId)) return;
       choose(cached?.target ?? at);
-      setHistoryOpen(false);
-      historyToggle.current?.focus({ preventScroll: true });
+      if (historyOpen) closeHistory();
       if (!cached || (cached.history && !cached.session)) {
         updateRecord(at, (previous) => ({ ...previous, history: true, historyLoading: true, alert: '' }));
         void readReceipt(at, { op: 'get' });
@@ -443,7 +449,9 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
 
     function closeHistory() {
       setHistoryOpen(false);
-      historyToggle.current?.focus({ preventScroll: true });
+      const toggle = historyToggle.current;
+      const trigger = toggle?.closest('#root')?.querySelector('.desktop-sidebar-button') ?? toggle;
+      trigger?.focus({ preventScroll: true });
     }
 
     function showOptions() {
@@ -454,9 +462,13 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     const statusLine = statusError ? '状态读取失败' : !status ? '正在读取本机状态…' :
       `${status.runtimeAvailable ? 'SDK 可用' : 'SDK 不可用'} · ${status.credentialConfigured ? '凭据已配置' : '凭据未配置'}`;
     const modelLabel = (id) => models.find((item) => item.id === id)?.label ?? id;
-    const optionsLabel = profile ? '配置 · ' + profile.name : '本机配置';
+    const profileModel = profile ? modelLabel(profile.model) : '未配置模型';
+    const profileEffort = profile ? effortName(profile.effort) : null;
+    const accessLabel = browsing ? '仅浏览' : '允许执行';
     const attempt = record?.attempt;
     const acting = Boolean(record?.querying || record?.stopping);
+    const composerStop = !browsing && runningTurn && runningTurn.id !== record?.staleTurn &&
+      (runningTurn.canStop || record.stopping || runningTurn.state === 'stopping');
     const awaitingReceipt = attempt?.state === 'unknown' || Boolean(record?.staleTurn);
     const composerNote = awaitingReceipt ? '请查询原始回执' : attempt ? '等待发送回执' :
       browsing ? '仅浏览 · 草稿可编辑' : runningTurn ? 'Codex 正在生成回复' :
@@ -465,16 +477,16 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
 
     function historyRow(row, configuration) {
       return h('button', {
-        type: 'button', key: row.id, className: 'local-history-row', title: row.title,
+        type: 'button', key: row.id, className: 'vc-session', title: row.title,
         'aria-current': row.id === target.sessionId ? 'true' : undefined,
         onClick: () => selectHistory(row, configuration),
-      }, row.title);
+      }, h('span', { className: 'vc-session-title' }, row.title));
     }
 
     function vpsSettingsLink(tab, message, label) {
       return h('section', { className: 'vc-settings-group' },
         note(message),
-        h(Button, { onClick: () => settingsSurface.navigate('ssh-vps', tab) }, label));
+        h(Button, { className: 'vc-settings-outline', onClick: () => settingsSurface.navigate('ssh-vps', tab) }, label));
     }
 
     const settings = h(SettingsDialog, {
@@ -483,9 +495,9 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       restoreFocus: settingsSurface.restoreFocus,
       localPanels: {
         connection: h(React.Fragment, null, profileFields(), connectionChecks()),
-        tools: h('div', { className: 'local-profile' },
+        tools: h('section', { className: 'vc-settings-group', 'aria-label': '本机配置摘要' },
           profileSummary(),
-          h(Button, { onClick: () => settingsSurface.setTab('connection') }, '编辑本机配置')),
+          h(Button, { className: 'vc-settings-outline', onClick: () => settingsSurface.setTab('connection') }, '编辑本机配置')),
         accounts: accountDetails(),
         'tool-overrides': vpsSettingsLink('tool-overrides',
           '本机 Codex 使用通用应用偏好。VPS SSH 执行端可单独覆盖。', '打开 VPS 执行端偏好'),
@@ -496,7 +508,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       },
     });
     return h('div', {
-      'data-local-sdk': '', hidden: !active, inert: !active, 'data-history-open': String(historyOpen), 'data-tool-theme': 'codex',
+      'data-local-sdk': '', hidden: !active, inert: !active, 'data-tool-theme': 'codex',
       'data-vc-color': appearance?.color, 'data-vc-accent': appearance?.accent, 'data-vc-motion': appearance?.motion,
       'data-vc-text-size': appearance?.textSize, 'data-vc-width': appearance?.width,
       onKeyDown(event) {
@@ -507,66 +519,71 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       },
     },
     h('style', null, localWorkspaceStyles),
-    h('aside', { className: 'vc-rail', id: historyId, 'aria-label': '本地对话历史' },
-      h('div', { className: 'local-rail-content' },
-        h(Button, { className: 'local-new', onClick: newChat,
-          title: defaultLocation && defaultLocation !== location ? '按默认位置新建对话' : '新建本地对话' },
-        icon?.(h, 'new-chat'), '新建对话'),
-        h('div', { className: 'local-history' },
-          h('h2', null, '本地对话历史'),
+    h('aside', { className: 'vc-rail', id: historyId, 'aria-label': '本地对话历史', 'data-open': historyOpen },
+      h('div', { className: 'vc-rail-content' },
+        h('div', { className: 'vc-new-actions' },
+          h(Button, { className: 'vc-new vc-primary', onClick: newChat,
+            title: defaultLocation && defaultLocation !== location ? '按默认位置新建对话' : '新建本地对话' },
+          h('span', { className: 'vc-menu-label' }, icon(h, 'new-chat'), '新聊天'))),
+        h('nav', { className: 'vc-list', 'aria-label': '会话记录' },
+          h('h2', { className: 'vc-rail-label vc-session-list-heading' }, '会话'),
           !profiles?.length && note('尚无本机配置。'),
-          withoutProfile.length > 0 && h('section', null,
-            h('h3', null, '未选配置的草稿'), withoutProfile.map((row) => historyRow(row, unconfiguredProfile))),
+          withoutProfile.length > 0 && h('section', { className: 'local-history-group' },
+            h('h3', { className: 'vc-rail-label' }, '未选配置的草稿'), withoutProfile.map((row) => historyRow(row, unconfiguredProfile))),
           profiles?.map((item) => {
             const history = histories.get(item.id);
             const rows = historyItems(item, history, records);
-            return h('section', { key: item.id },
-              h('h3', null, item.name),
+            return h('section', { key: item.id, className: 'local-history-group' },
+              h('h3', { className: 'vc-rail-label' }, item.name),
               history?.error && note('历史读取失败。'),
               !rows.length && !history?.error && note(history ? '暂无对话' : '读取中…'),
               rows.map((row) => historyRow(row, item)));
           })))),
     historyOpen && h('button', { type: 'button', className: 'local-rail-scrim', tabIndex: -1, 'aria-label': '关闭历史', onClick: closeHistory }),
-    h('main', { className: 'local-pane', 'aria-label': '本地 Codex SDK 对话' },
-      h('header', { className: 'local-header' },
-        h('div', { className: 'local-heading' },
-          h('button', { type: 'button', ref: historyToggle, className: 'vc-button vc-history-toggle',
-            'aria-expanded': historyOpen, 'aria-controls': historyId, onClick: () => setHistoryOpen((open) => !open) }, '历史'),
-          h('div', null, h('h1', null, '本地 Codex SDK'), h('p', {
-            className: 'local-muted local-subtitle local-nowrap',
+    h('div', { className: 'vc-sidebar-actions', role: 'group', 'aria-label': '本机操作' },
+      h('div', { className: 'vc-tool-picker' },
+        h('div', { className: 'vc-tool-summary' },
+          h('span', { className: 'vc-tool-badge' }, icon(h, 'codex')),
+          h('span', { className: 'vc-tool-label' }, 'Codex'))),
+      h(Button, { className: 'vc-sidebar-settings', onClick: showOptions,
+        title: profile ? '配置 · ' + profile.name : '本机配置', 'aria-label': '设置', 'aria-haspopup': 'dialog' },
+      icon(h, 'settings'), '设置')),
+    h('main', { className: 'vc-main', 'aria-label': '本地 Codex SDK 对话' },
+      h('header', { className: 'vc-header' },
+        h('button', { type: 'button', ref: historyToggle, className: 'vc-button vc-history-toggle',
+          'aria-expanded': historyOpen, 'aria-controls': historyId, onClick: () => setHistoryOpen((open) => !open) }, '历史'),
+        h('div', { className: 'vc-heading' },
+          h('h1', null, '本地 Codex SDK'),
+          h('div', { className: 'vc-route', 'data-ready': !statusError && status?.runtimeAvailable && status.credentialConfigured }, h('span', {
+            className: 'vc-route-status', role: 'status',
             title: '本机配置状态。账户和网络以实际对话结果为准。',
-          }, statusLine))),
-        h('div', { className: 'local-actions' },
-          h(Button, { onClick: showOptions, title: optionsLabel, 'aria-label': '设置', 'aria-haspopup': 'dialog' },
-            icon?.(h, 'settings'), '设置'),
-          h(Button, { disabled: accessPending, 'aria-pressed': browsing, title: browsing ? '切换为允许执行' : '切换为仅浏览',
-            onClick: () => changeAccess?.({ ...access, mode: browsing ? 'execute' : 'browse' }) },
-          browsing ? '仅浏览' : '允许执行'))),
-      h('div', { ref: feed, className: 'local-feed', tabIndex: 0, 'aria-label': '对话内容',
+          }, statusLine)))),
+      h('div', { ref: feed, className: 'vc-scroll', role: 'region', tabIndex: 0, 'aria-label': '对话内容',
         onScroll() {
           const node = feed.current;
           follow.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
         },
-      }, session?.turns.length || attempt ? h('div', { className: 'local-wrap local-transcript' },
+      }, h('div', { className: 'vc-body' }, session?.turns.length || attempt ? h(React.Fragment, null,
         session?.turns.map((turn) => h(Turn, {
           key: turn.id, turn, stale: record.staleTurn === turn.id, browsing, acting: acting || accessPending,
-          onStreamingRender: followReply, stop: () => void stop(turn.id), refresh: () => void readReceipt(target, { turnId: turn.id }),
+          onStreamingRender: followReply, stop: composerStop && turn.id === runningTurn.id ? undefined : () => void stop(turn.id),
+          refresh: () => void readReceipt(target, { turnId: turn.id }),
         })),
         attempt && h(Turn, { key: attempt.turnId, browsing, acting, stale: attempt.state === 'unknown',
           turn: { prompt: attempt.prompt, state: 'queued' },
           refresh: () => void readReceipt(target, { turnId: attempt.turnId, prompt: attempt.prompt }),
-        })) : h('div', { className: 'local-wrap local-empty' },
-        h('section', null,
-          h('h2', null, record?.historyLoading ? '正在读取对话…' : record?.history ? '本地历史对话' : '开始本地对话'),
-          record?.history && !record.historyLoading && h(Button, { onClick: () => void readReceipt(target, { op: 'get' }) }, '重新读取'),
-          !record?.history && !profile && note('在配置中选择工作目录、模型和推理强度。'),
-          !record?.history && profile && note(`${profile.name} · ${modelLabel(profile.model)} · ${profile.effort}`),
-          !record?.history && status && note('凭据与 SDK 状态只反映本机配置。账户和网络尚未验证。')))),
-      h('form', { className: 'local-wrap local-composer', onSubmit: (event) => { event.preventDefault(); void send(); } },
-        record?.alert && h('p', { role: 'status', className: 'local-alert local-composer-note' }, record.alert),
-        h('div', { className: 'local-composer-box' },
-          h('textarea', { ref: editor, value: draft, rows: 2, maxLength: 8192, placeholder: '输入消息',
-            'aria-label': '本地对话草稿', readOnly: Boolean(attempt),
+        })) : h('div', { className: 'vc-welcome' },
+        h('h2', null, record?.historyLoading ? '正在读取对话…' : record?.history ? '本地历史对话' : '开始一段对话'),
+        record?.history && !record.historyLoading && h(Button, { className: 'vc-example',
+          onClick: () => void readReceipt(target, { op: 'get' }) }, '重新读取'),
+        !record?.history && h('p', null, profile ? '给本机 Codex 发消息，使用只读工作目录。' : '配置工作目录和模型后开始聊天。'),
+        !record?.history && !profile && h(Button, { className: 'vc-example', onClick: showOptions }, '配置本机 SDK')))),
+      h('div', { className: 'vc-compose-area' }, h('div', { className: 'vc-compose-wrap' },
+        record?.alert && h('div', { role: 'status', className: 'vc-feedback' }, record.alert),
+        h('form', { className: 'vc-composer', onSubmit: (event) => { event.preventDefault(); void send(); } },
+          h('textarea', { ref: editor, value: draft, rows: 2, maxLength: 8192,
+            placeholder: profile ? '给 Codex 发消息' : '配置本机 SDK 后可发送消息',
+            'aria-label': '本地对话草稿', 'aria-describedby': hintId, readOnly: Boolean(attempt),
             onChange: (event) => {
               const value = event.target.value;
               updateRecord(target, (prev) => ({ ...prev, draft: value, updatedAt: new Date().toISOString() }));
@@ -574,17 +591,37 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
             onKeyDown: onEditorKey, onCompositionStart: () => { composing.current = true; },
             onCompositionEnd: (event) => { composing.current = false; compositionEndedAt.current = event.timeStamp; },
           }),
-          h('div', { className: 'local-composer-footer' },
-            h('span', { className: 'local-muted' }, composerNote),
-            h(Button, { type: 'submit', className: 'local-primary', disabled: !canSend }, '发送'))))),
+          h('div', { className: 'vc-composer-toolbar' },
+            h(Button, { className: 'vc-composer-option', 'data-control': 'access', 'data-browse': browsing,
+              disabled: accessPending, 'aria-label': accessLabel, 'aria-pressed': browsing,
+              title: browsing ? '切换为允许执行' : '切换为仅浏览',
+              onClick: () => changeAccess?.({ ...access, mode: browsing ? 'execute' : 'browse' }) },
+            icon(h, 'access'), h('span', { className: 'vc-option-label' }, accessLabel)),
+            h('div', { className: 'vc-composer-end' },
+              h('span', { className: 'vc-composer-option', 'data-control': 'model',
+                title: profileEffort ? `${profileModel} · ${profileEffort}` : profileModel },
+              h('span', { className: 'vc-option-label' }, profileModel),
+              profileEffort && h('span', { className: 'vc-option-effort' }, profileEffort)),
+              h('div', { className: 'vc-compose-buttons' }, composerStop ? h(Button, {
+                className: 'vc-compose-action vc-compose-icon-button vc-compose-stop',
+                disabled: acting || accessPending || !runningTurn.canStop, onClick: () => void stop(runningTurn.id),
+                'aria-busy': Boolean(record.stopping), 'aria-label': '停止', title: '停止',
+              }, h('span', { className: 'vc-compose-icon', 'aria-hidden': true })) : h(Button, {
+                type: 'submit', className: 'vc-primary vc-compose-action vc-compose-icon-button',
+                disabled: !canSend, 'aria-label': '发送', title: '发送',
+              }, h('span', { className: 'vc-compose-icon', 'data-symbol': 'send', 'aria-hidden': true })))))),
+        h('p', { id: hintId, className: 'vc-compose-hint', role: 'status' }, composerNote)))),
     active ? settings : settingsSurface.show(settings, { 'data-local-sdk': '', 'data-tool-theme': 'codex',
       'data-vc-color': appearance?.color, 'data-vc-accent': appearance?.accent, 'data-vc-motion': appearance?.motion }));
 
     function connectionChecks() {
       const checked = confirmedStatus;
-      return h(React.Fragment, null,
-        h(Button, { disabled: statusBusy, onClick: () => void loadStatus(true) }, statusBusy ? '检查中' : '测试本机配置'),
-        h('ol', { className: 'vc-setup-steps local-connection-checks' },
+      return h('section', { className: 'vc-setup-group vc-connection-checks', 'aria-label': '本机连接检查' },
+        h('div', { className: 'vc-setup-overview' }, h('h4', null, '连接检查')),
+        h('div', { className: 'vc-setup-actions' },
+          h(Button, { className: 'vc-settings-outline', disabled: statusBusy, onClick: () => void loadStatus(true) },
+            statusBusy ? '检查中' : '测试本机配置')),
+        h('ol', { className: 'vc-setup-steps' },
           h(ConnectionResult, { id: 'runtime', label: '本机 SDK',
             detail: '检查 Windows 上的 SDK 运行文件。', result: statusError
               ? { state: 'failed', detail: '本机 SDK 状态读取失败。请重试。' } : checked && {
@@ -618,8 +655,8 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
           h('p', null, '本机启动环境的 ', h('code', null, 'VPS_WORKBENCH_LOCAL_CODEX_API_KEY')),
           h('p', { role: 'status' }, !status || statusError ? '凭据配置待读取。' : status.credentialConfigured
             ? '本机 API 密钥已配置。' : '请在启动工作台的本机环境中设置此变量。'),
-          h(Button, { onClick: () => settingsSurface.setTab('connection') }, '打开本机连接检查')),
-        h('ol', { className: 'vc-setup-steps local-connection-checks' },
+          h(Button, { className: 'vc-settings-outline', onClick: () => settingsSurface.setTab('connection') }, '打开本机连接检查')),
+        h('ol', { className: 'vc-setup-steps' },
           credentialCheck(),
           h(ConnectionResult, { id: 'response', label: '实际模型响应', detail: '试跑使用所选本机配置。',
             result: trialResult(trial, trialTarget) })));
@@ -631,37 +668,39 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
         h('dt', null, '名称'), h('dd', null, settingsProfile.name),
         includeDirectory && h(React.Fragment, null, h('dt', null, '工作目录'), h('dd', null, settingsProfile.directory)),
         h('dt', null, '默认模型'), h('dd', null, modelLabel(settingsProfile.model)),
-        h('dt', null, '推理强度'), h('dd', null, settingsProfile.effort));
+        h('dt', null, '推理强度'), h('dd', null, effortName(settingsProfile.effort)));
     }
 
     function profileFields() {
-      return h('section', { className: 'vc-settings-group local-profile', 'aria-label': '本机配置' },
-        h('h4', null, '本机配置'),
-        profiles?.length > 0 && h('label', null, '查看配置',
-          h('select', { 'aria-label': '查看配置', value: settingsProfile?.id ?? '',
-            onChange: (event) => setSettingsProfileId(event.target.value),
-          }, profiles.map((item) => h('option', { key: item.id, value: item.id }, item.name)))),
-        profileSummary(true),
-        note('工作台在独立的本机存储中保存历史、SDK 线程和回执。已创建的会话继续使用原配置。'),
-        settingsProfile && h(Button, { disabled: browsing || accessPending || registerBusy || settingsProfile.id === defaultProfileId,
-          onClick: () => void setNewProfile() },
-        settingsProfile.id === defaultProfileId ? '新聊天默认配置' : '设为新聊天配置'),
-        h('hr'),
-        h('form', { className: 'local-register', onSubmit: (event) => void register(event) },
-          h('h3', null, '注册本机配置'),
-          h('label', null, '配置名称', h('input', { value: name, maxLength: 80, required: true,
+      return h(React.Fragment, null,
+        settingsProfile && h('section', { className: 'vc-settings-group', 'aria-label': '本机配置' },
+          h('h4', null, '本机配置'),
+          h('label', { className: 'vc-field' }, '查看配置',
+            h('select', { 'aria-label': '查看配置', value: settingsProfile.id,
+              onChange: (event) => setSettingsProfileId(event.target.value),
+            }, profiles.map((item) => h('option', { key: item.id, value: item.id }, item.name)))),
+          profileSummary(true),
+          h(Button, { className: 'vc-settings-outline',
+            disabled: browsing || accessPending || registerBusy || settingsProfile.id === defaultProfileId,
+            onClick: () => void setNewProfile() },
+          settingsProfile.id === defaultProfileId ? '新聊天默认配置' : '设为新聊天配置')),
+        h('form', { className: 'vc-settings-group', onSubmit: (event) => void register(event) },
+          h('h4', null, '注册本机配置'),
+          h('label', { className: 'vc-field' }, '配置名称', h('input', { value: name, maxLength: 80, required: true,
             disabled: browsing || registerBusy, onChange: (event) => setName(event.target.value) })),
-          h('div', { className: 'local-register-row' },
-            h('label', null, '模型', h('select', { value: model?.id ?? '', disabled: browsing || registerBusy || !model,
+          h('div', { className: 'vc-settings-address' },
+            h('label', { className: 'vc-field' }, '模型', h('select', { value: model?.id ?? '', disabled: browsing || registerBusy || !model,
               onChange: (event) => { setModelId(event.target.value); setEffortId(''); } },
             models.map((item) => h('option', { key: item.id, value: item.id }, item.label)))),
-            h('label', null, '推理强度', h('select', { value: effort ?? '', disabled: browsing || registerBusy || !model,
+            h('label', { className: 'vc-field' }, '推理强度', h('select', { value: effort ?? '', disabled: browsing || registerBusy || !model,
               onChange: (event) => setEffortId(event.target.value) },
-            model?.efforts.map((item) => h('option', { key: item, value: item }, item))))),
-          registerError && h('div', { role: 'alert', className: 'local-alert' }, registerError),
-          h(Button, { type: 'submit', className: 'local-primary',
-            disabled: browsing || accessPending || registerBusy || statusBusy || !status || !model || !name.trim() },
-          registerBusy ? '正在选择工作目录…' : '选择工作目录并保存')));
+            model?.efforts.map((item) => h('option', { key: item, value: item }, effortName(item)))))),
+          registerError && h('div', { role: 'alert', className: 'vc-feedback' }, registerError),
+          h('div', { className: 'vc-dialog-actions' },
+            h(Button, { type: 'submit', className: 'vc-primary',
+              disabled: browsing || accessPending || registerBusy || statusBusy || !status || !model || !name.trim() },
+            registerBusy ? '正在选择工作目录…' : '选择工作目录并保存')),
+          note('工作台在独立的本机存储中保存历史、SDK 线程和回执。已创建的会话继续使用原配置。')));
     }
   };
 }

@@ -1,3 +1,6 @@
+import { composerControlsCss } from './composer-controls.js';
+import { menuIconsCss } from './menu-icons.js';
+import { menuMotionCss } from './menu-motion.js';
 import { accentOptions } from './workbench-preferences.js';
 
 const darkTheme = ':is(.dark,[data-theme=dark],[data-ds-dark-theme])';
@@ -132,7 +135,7 @@ export function workbenchPaletteCss(scope = '[data-vps-chat]') {
 
 export function workbenchCss(separatorWidth) {
   return `
-    ${paletteCss}
+    ${workbenchPaletteCss()}
     [data-vps-chat] {
       --vc-chat-font-size:14px;
       --vc-thread-measure:816px;
@@ -306,7 +309,9 @@ export function workbenchCss(separatorWidth) {
       border-bottom:1px solid var(--vc-line); min-width:0;
     }
     [data-vps-chat] .vc-heading {flex:1; min-width:0}
-    [data-vps-chat] .vc-heading strong {display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:650}
+    [data-vps-chat] .vc-heading :is(strong,h1) {
+      display:block; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:inherit; font-weight:650;
+    }
     [data-vps-chat] .vc-header-settings {flex:none}
     [data-vps-chat] .vc-route {
       display:flex; align-items:center; gap:6px; color:var(--vc-muted); font-size:12px; overflow-wrap:anywhere;
@@ -324,7 +329,7 @@ export function workbenchCss(separatorWidth) {
     [data-vps-chat] .vc-scroll {flex:1; min-height:0; overflow:auto; overscroll-behavior:contain}
     [data-vps-chat] .vc-body {max-width:var(--vc-thread-measure); margin:auto; padding:29px var(--vc-gutter)}
     [data-vps-chat] .vc-welcome {max-width:484px; margin:clamp(12px,10vh,100px) auto 0; text-align:center}
-    [data-vps-chat] .vc-welcome h1 {
+    [data-vps-chat] .vc-welcome > :is(h1,h2) {
       margin:0 0 11px; font-family:var(--vc-title-font); font-size:clamp(22px,3.1cqi,32px); line-height:1.25;
       font-weight:600; letter-spacing:-.012em;
       text-wrap:balance;
@@ -454,7 +459,18 @@ export function workbenchCss(separatorWidth) {
       [data-vps-chat] .vc-header > .vc-button {padding-inline:8px}
       [data-vps-chat] .vc-settings {padding:15px}
     }
+    @media (max-height:560px) {
+      @container (max-width:620px) {
+        [data-vps-chat] .vc-body:has(> .vc-welcome) {padding-block:8px}
+        [data-vps-chat] .vc-welcome {margin-block-start:6px}
+        [data-vps-chat] .vc-welcome :is(h1,h2,p) {margin-block-end:8px}
+      }
+    }
   `;
+}
+
+export function chatSurfaceCss(separatorWidth = 9) {
+  return workbenchCss(separatorWidth) + composerControlsCss + menuIconsCss + menuMotionCss + themeComposerCss;
 }
 
 export const themeComposerCss = `

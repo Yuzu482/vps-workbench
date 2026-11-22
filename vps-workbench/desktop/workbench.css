@@ -45,7 +45,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 }
 #root[data-chrome-motion="reduce"] { --desktop-motion: 0ms; --desktop-sidebar-motion: 0ms; }
 #root[data-appearance-transition] { --desktop-motion: 0ms; }
-#root[data-appearance-transition] > [data-vps-chat] { --vc-control-duration: 0ms; }
+#root[data-appearance-transition] > :is([data-vps-chat], [data-local-sdk]) { --vc-control-duration: 0ms; }
 @media (prefers-reduced-motion: reduce) {
   #root { --desktop-motion: 0ms; --desktop-sidebar-motion: 0ms; }
 }
@@ -221,14 +221,14 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 .desktop-menu-heading { padding: 4px 8px 2px; color: var(--desktop-muted); font-size: 11px; font-weight: 600; }
 .desktop-title-menu kbd { margin-inline-start: auto; color: var(--desktop-muted); font-family: inherit; font-size: 11px; white-space: nowrap; }
 .desktop-title-menu hr { width: calc(100% - 8px); margin: 5px 4px; border: 0; border-top: 1px solid var(--desktop-line); }
-#root > [data-vps-chat] {
+#root > :is([data-vps-chat], [data-local-sdk]) {
   --desktop-actions-height: 62px;
   width: 100%; height: 100%;
   grid-template-rows: minmax(0, 1fr) var(--desktop-actions-height);
 }
-#root > [data-vps-chat] .vc-history-toggle { display: none; }
-#root > [data-vps-chat] > .vc-main { grid-area: 1 / 1 / 2 / -1; }
-#root > [data-vps-chat] > .vc-rail {
+#root > :is([data-vps-chat], [data-local-sdk]) .vc-history-toggle { display: none; }
+#root > :is([data-vps-chat], [data-local-sdk]) > .vc-main { grid-area: 1 / 1 / 2 / -1; }
+#root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail {
   min-width: 0; padding: 0; overflow: clip; opacity: 1; transform: translateX(0); visibility: visible;
   transition: opacity var(--desktop-sidebar-motion) ease, transform var(--desktop-sidebar-motion) ease, visibility 0s;
 }
@@ -257,12 +257,13 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   background: var(--vc-canvas); border-top: 1px solid var(--vc-line);
 }
 #root .vc-sidebar-actions .vc-tool-picker { inline-size: 190px; min-inline-size: 0; flex: 0 1 auto; }
-#root .vc-sidebar-actions .vc-tool-trigger {
+#root .vc-sidebar-actions :is(.vc-tool-trigger, .vc-tool-summary) {
   grid-template-columns: 32px minmax(0, 1fr) 11px; align-items: center; justify-items: stretch; gap: 8px;
   width: 100%; height: 44px; padding: 5px 10px 5px 6px; border-radius: 11px;
   background: color-mix(in srgb, var(--vc-accent) 15%, var(--vc-surface));
   color: var(--vc-ink); text-align: start; font-weight: 650;
 }
+#root .vc-sidebar-actions .vc-tool-summary { display: grid; grid-template-columns: 32px minmax(0, 1fr); }
 #root .vc-sidebar-actions .vc-tool-trigger:is(:hover, [aria-expanded="true"]):not([aria-disabled="true"]) {
   background: color-mix(in srgb, var(--vc-accent) 24%, var(--vc-surface));
 }
@@ -282,35 +283,35 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 }
 #root .vc-sidebar-settings .vc-menu-icon { width: 18px; height: 18px; color: var(--vc-muted); }
 @media (width > 620px) {
-  #root > [data-vps-chat] {
+  #root > :is([data-vps-chat], [data-local-sdk]) {
     grid-template-columns: var(--desktop-sidebar-width, 216px) minmax(0, 1fr);
     transition: grid-template-columns var(--desktop-sidebar-motion) cubic-bezier(.25,.72,.32,1);
   }
-  #root > [data-vps-chat][data-subscription-open="false"] > .vc-main { grid-column: 2; }
-  #root > [data-vps-chat] > .vc-rail { grid-area: 1 / 1 / 2 / 2; }
+  #root > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) > .vc-main { grid-column: 2; }
+  #root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail { grid-area: 1 / 1 / 2 / 2; }
   .vc-rail-content { inline-size: 215px; }
-  #root:not([data-sidebar-collapsed="true"]) > [data-vps-chat][data-subscription-open="false"] {
+  #root:not([data-sidebar-collapsed="true"]) > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) {
     --desktop-actions-height: 104px;
   }
-  #root:not([data-sidebar-collapsed="true"]) > [data-vps-chat][data-subscription-open="false"] > .vc-main {
+  #root:not([data-sidebar-collapsed="true"]) > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) > .vc-main {
     grid-area: 1 / 2 / -1 / -1;
   }
-  #root:not([data-sidebar-collapsed="true"]) > [data-vps-chat][data-subscription-open="false"] > .vc-sidebar-actions {
+  #root:not([data-sidebar-collapsed="true"]) > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) > .vc-sidebar-actions {
     grid-column: 1; flex-direction: column; align-items: stretch; justify-content: flex-end;
     background: var(--vc-rail); border-inline-end: 1px solid var(--vc-line);
   }
-  #root > [data-vps-chat] > .vc-sidebar-actions > .vc-tool-picker {
+  #root > :is([data-vps-chat], [data-local-sdk]) > .vc-sidebar-actions > .vc-tool-picker {
     max-inline-size: 100%;
   }
-  #root[data-sidebar-collapsed="true"] > [data-vps-chat] { --desktop-sidebar-width: 0px; }
-  #root[data-sidebar-collapsed="true"] > [data-vps-chat] > .vc-rail {
+  #root[data-sidebar-collapsed="true"] > :is([data-vps-chat], [data-local-sdk]) { --desktop-sidebar-width: 0px; }
+  #root[data-sidebar-collapsed="true"] > :is([data-vps-chat], [data-local-sdk]) > .vc-rail {
     opacity: 0; transform: translateX(-10px); visibility: hidden; pointer-events: none;
     transition-delay: 0s, 0s, var(--desktop-sidebar-motion);
   }
 }
 @media (max-width: 620px) {
-  #root > [data-vps-chat] > .vc-rail { display: flex; inset-block-end: var(--desktop-actions-height); }
-  #root > [data-vps-chat] > .vc-rail:not([data-open="true"]) {
+  #root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail { display: flex; inset-block-end: var(--desktop-actions-height); }
+  #root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail:not([data-open="true"]) {
     opacity: 0; transform: translateX(-10px); visibility: hidden; pointer-events: none;
     transition-delay: 0s, 0s, var(--desktop-sidebar-motion);
   }
@@ -337,9 +338,9 @@ input, button, textarea, select { font: inherit; }
 [data-vps-chat] .vc-setup-guide[open] { display: grid; }
 [data-vps-chat] .vc-setup-guide::backdrop { background: color-mix(in srgb, var(--vc-overlay) 81%, transparent); }
 [data-vps-chat] .vc-setup-scroll { display: grid; align-content: start; gap: 15px; }
-[data-vps-chat] .vc-setup-group { display: grid; gap: 7px; min-width: 0; }
-[data-vps-chat] .vc-setup-overview { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
-[data-vps-chat] .vc-setup-overview :is(h3, h4) { margin: 0; font-size: 14px; }
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-group { display: grid; gap: 7px; min-width: 0; }
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-overview { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-overview :is(h3, h4) { margin: 0; font-size: 14px; }
 [data-vps-chat] .vc-setup-overview p, [data-vps-chat] .vc-setup-example p, :is([data-vps-chat], [data-local-sdk]) .vc-setup-step p {
   margin: 0; font-size: 13px; color: var(--vc-muted); overflow-wrap: anywhere;
 }
@@ -370,9 +371,8 @@ input, button, textarea, select { font: inherit; }
 :is([data-vps-chat], [data-local-sdk]) .vc-setup-step[data-state=failed] .vc-setup-marker { background: var(--vc-accent); color: var(--vc-on-accent); }
 :is([data-vps-chat], [data-local-sdk]) .vc-setup-step > p { padding-inline-start: 24px; }
 :is([data-vps-chat], [data-local-sdk]) .vc-setup-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; margin-inline-start: 24px; }
-[data-vps-chat] .vc-connection-checks > .vc-setup-actions { margin-inline-start: 0; }
-[data-vps-chat] .vc-connection-checks { margin-block: 8px 13px; }
-[data-local-sdk] .local-connection-checks { margin-block: 8px 14px; }
+:is([data-vps-chat], [data-local-sdk]) .vc-connection-checks > .vc-setup-actions { margin-inline-start: 0; }
+:is([data-vps-chat], [data-local-sdk]) .vc-connection-checks { margin-block: 8px 13px; }
 [data-vps-chat] .vc-setup-agent-actions { margin-inline-start: 0; }
 :is([data-vps-chat], [data-local-sdk]) .vc-setup-actions small, [data-vps-chat] .vc-setup-actions label { color: var(--vc-muted); font-size: 12px; }
 [data-vps-chat] .vc-setup-actions label { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }

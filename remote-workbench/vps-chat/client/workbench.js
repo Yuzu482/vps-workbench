@@ -2,7 +2,7 @@ import { createMarkdownReply } from './markdown.js';
 import { createDesignCanvas } from './design-canvas.js';
 import { readVersionHistory, validDesignTurn } from './design-version-state.js';
 import {
-  composerControlsCss, createComposerControls, readModelCatalog, reportedTurnSettings, validTurnMetadata,
+  createComposerControls, readModelCatalog, reportedTurnSettings, validTurnMetadata,
 } from './composer-controls.js';
 import { extractHtmlFences } from './design-preview.js';
 import { layerRevisionKey, readLayerRevision, readLayerRevisionOutcome, serializeLayerRevision } from './design-layer-revision.js';
@@ -10,14 +10,13 @@ import { contextMenuCss, contextMenuKey, contextMenuRequest, createContextMenu, 
 import {
   conversationActionsCss, conversationOptionsKey, createConversationDialog, readConversationOptions, updateConversationOptions,
 } from './conversation-actions.js';
-import { menuIcon, menuIconsCss } from './menu-icons.js';
-import { menuMotionCss } from './menu-motion.js';
+import { menuIcon } from './menu-icons.js';
 import {
   membershipKey, pinnedProjectsKey, projectFoldersCss, projectMembershipFor, projectMembershipId,
   projectMembershipIsolated, readPinnedProjects, readProjectMemberships, updateProjectMembership,
 } from './project-folders.js';
 import { createProviderPicker, providerPickerCss, readToolPreferences } from './provider-picker.js';
-import { workbenchCss, themeComposerCss } from './workbench-theme.js';
+import { chatSurfaceCss } from './workbench-theme.js';
 import { setToolTheme, themeRippleCss, transitionSubscriptionView, transitionToolView } from './theme-ripple.js';
 import { createAccountDialog, accountDialogCss } from './account-view.js';
 import { getAccountAction } from './account-routes.js';
@@ -117,8 +116,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
   const toolIds = [...chatTools.map(({ id }) => id), subscriptionProvider];
   const toolsWithModels = chatTools.filter(({ modelCatalog }) => modelCatalog).map(({ id }) => id);
 
-  const css = workbenchCss(separatorWidth) + composerControlsCss + menuIconsCss + menuMotionCss +
-    themeComposerCss + projectFoldersCss + accountDialogCss + providerPickerCss + themeRippleCss + settingsCss + contextMenuCss +
+  const css = chatSurfaceCss(separatorWidth) + projectFoldersCss + accountDialogCss + providerPickerCss + themeRippleCss + settingsCss + contextMenuCss +
     (saveConversationPreference ? conversationActionsCss : '') +
     (saveModelParameters ? advancedModelOptionsCss : '');
 
