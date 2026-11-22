@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { openSettingsSection } from './test-settings.mjs';
 import { startPreview } from './preview-server.mjs';
-import { readWorkflows, workflowKey } from '../workflow-engine/state.mjs';
+import { applyWorkflowChange, readWorkflows, workflowKey } from '../workflow-engine/state.mjs';
 import { agentPresetKey, applyAgentPresetChange } from '../agent-presets/state.mjs';
 import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
 import { designExportMenu } from '../../remote-workbench/vps-chat/client/design-export-menu.js';
@@ -46,6 +46,15 @@ async function readSavedWorkflows(page) {
   const raw = await page.evaluate(({ storage, key }) => JSON.parse(sessionStorage.getItem(storage)).preferences[key],
     { storage: previewStorageKey, key: workflowKey });
   return readWorkflows(raw);
+}
+
+async function browseLocally(page) {
+  const access = page.getByRole('button', { name: '访问权限', exact: true });
+  await access.press('Enter');
+  const browse = page.getByRole('button', { name: '仅浏览', exact: true });
+  await browse.click();
+  await page.waitForFunction(() => document.querySelector('[data-local-sdk] [data-control=access]')?.dataset.browse === 'true');
+  await page.keyboard.press('Escape');
 }
 
 async function sidebarButton(page, name) {
@@ -880,8 +889,7 @@ test('local and VPS chat share the conversation, sidebar and settings styles at 
       assert.deepEqual(styles[1], styles[0]);
       assert.deepEqual(fieldStyles[1], fieldStyles[0]);
       const composer = page.locator('#root > [data-local-sdk] .vc-composer');
-      await composer.getByRole('button', { name: '允许执行', exact: true }).press('Enter');
-      await composer.getByRole('button', { name: '仅浏览', exact: true }).waitFor();
+      await browseLocally(page);
       assert.equal(await composer.getByRole('button', { name: '发送', exact: true }).isDisabled(), true);
     });
   }
@@ -902,9 +910,8 @@ test('from local history an unvisited VPS loads only connection metadata and kee
   const draft = page.getByRole('textbox', { name: '本地对话草稿' });
   await draft.fill('原本机会话');
   await page.getByRole('button', { name: '发送', exact: true }).click();
-  await page.locator('[data-turn-state=completed]').getByText('收到 原本机会话', { exact: true }).waitFor();
-  await page.getByRole('button', { name: '允许执行', exact: true }).click();
-  await page.getByRole('button', { name: '仅浏览', exact: true }).waitFor();
+  await page.locator('[data-turn-state=complete]').getByText('收到 原本机会话', { exact: true }).waitFor();
+  await browseLocally(page);
   await draft.fill('本机会话草稿');
   const originalRow = page.getByRole('complementary', { name: '本地对话历史' }).getByRole('button', { name: '原本机会话', exact: true });
   const packets = [];
@@ -913,6 +920,7 @@ test('from local history an unvisited VPS loads only connection metadata and kee
     return route.continue();
   });
   await entry.click();
+  await openSettingsSection(settings, '连接');
   await settings.getByRole('group', { name: '配置的执行位置' }).getByRole('button', { name: 'VPS SSH' }).press('Enter');
   const user = settings.getByLabel('SSH 用户名', { exact: true });
   await user.waitFor();
@@ -931,7 +939,7 @@ test('from local history an unvisited VPS loads only connection metadata and kee
   assert.deepEqual(packets, [{ op: 'configuration' }]);
 });
 
-test('local resource pages link to the matching VPS settings and keep the local draft', { timeout: 35_000 }, async (t) => {
+test('local tools and memory settings stay on the selected configuration and keep the draft', { timeout: 35_000 }, async (t) => {
   const page = await openPreview(t, { seed({ preferences }) {
     preferences['dsh-vps-chat:desktop-view-location:v1'] = 'local-sdk';
     preferences['dsh-vps-chat:desktop-new-location:v1'] = 'local-sdk';
@@ -947,19 +955,20 @@ test('local resource pages link to the matching VPS settings and keep the local 
   await entry.press('Enter');
   const settings = page.getByRole('dialog', { name: '设置', exact: true });
   await settings.getByText(/独立的本机存储/u).waitFor();
+  await settings.getByLabel('配置名称', { exact: true }).fill('本机资料配置');
+  await settings.getByRole('button', { name: '选择工作目录并保存' }).click();
+  await settings.getByRole('combobox', { name: '查看配置' }).waitFor();
   const cases = [
-    ['提示词模板', '打开 VPS 提示词模板', settings.getByLabel('粘贴 JSON 清单', { exact: true })],
-    ['Agent 预设', '打开 VPS Agent 预设', settings.getByRole('button', { name: '新建预设', exact: true })],
-    ['MCP 服务器', '打开 VPS MCP 服务器', settings.getByLabel('服务 ID', { exact: true })],
-    ['长期记忆', '打开 VPS 记忆', settings.getByText(/作用范围 · VPS SSH/u)],
+    ['提示词模板', settings.getByLabel('粘贴 JSON 清单', { exact: true })],
+    ['Agent 预设', settings.getByRole('button', { name: '新建预设', exact: true })],
+    ['MCP 服务器', settings.getByLabel('本机 HTTP 地址', { exact: true })],
+    ['长期记忆', settings.getByText(/作用范围 · 本机 SDK/u)],
   ];
   const locations = settings.getByRole('group', { name: '配置的执行位置', exact: true });
-  for (const [section, label, targetControl] of cases) {
+  for (const [section, targetControl] of cases) {
     await openSettingsSection(settings, section);
-    assert.equal(await targetControl.count(), 0);
-    await settings.getByRole('button', { name: label, exact: true }).press('Enter');
     await targetControl.waitFor();
-    assert.equal(await locations.getByRole('button', { name: 'VPS SSH', exact: true }).getAttribute('aria-pressed'), 'true');
+    assert.equal(await locations.getByRole('button', { name: '本机 SDK', exact: true }).getAttribute('aria-pressed'), 'true');
     if (section === '长期记忆') {
       await settings.getByLabel('记忆所属项目', { exact: true }).selectOption({ label: '纸间书店' });
       for (const name of ['开启个人自动记忆', '开启此项目的自动记忆', '随消息发送手动记忆']) {
@@ -967,15 +976,68 @@ test('local resource pages link to the matching VPS settings and keep the local 
       }
       assert.equal(await settings.getByRole('heading', { name: '记忆提炼模型', exact: true }).count(), 1);
     }
-    await locations.getByRole('button', { name: '本机 SDK', exact: true }).and(settings.locator('button:enabled')).press('Enter');
-    await settings.getByRole('button', { name: label, exact: true }).waitFor();
   }
   await page.keyboard.press('Escape');
   await settings.waitFor({ state: 'hidden' });
   assert.equal(await draft.inputValue(), '本机草稿');
   assert.equal(await page.getByLabel('新建位置', { exact: true }).inputValue(), 'local-sdk');
   assert.equal(await entry.evaluate((node) => node === document.activeElement), true);
-  assert.deepEqual(requests, [{ op: 'configuration' }]);
+  assert.deepEqual(requests, []);
+});
+
+test('local SDK opens the design canvas, project resources and a graph run through the shared workbench', { timeout: 55_000 }, async (t) => {
+  const page = await openPreview(t, { seed({ preferences }) {
+    preferences['dsh-vps-chat:desktop-view-location:v1'] = 'local-sdk';
+    preferences['dsh-vps-chat:desktop-new-location:v1'] = 'local-sdk';
+    const draft = { name: '本机并行核对', stages: [
+      { id: 's1', name: '核对内容', provider: 'codex', model: 'gpt-5.5', instruction: '整理内容。' },
+      { id: 's2', name: '核对布局', provider: 'codex', model: 'gpt-6-sol', instruction: '整理布局。' },
+      { id: 's3', name: '汇总', provider: 'codex', model: '', instruction: '合并两路证据。' },
+    ], edges: [{ from: 's1', to: 's3' }, { from: 's2', to: 's3' }] };
+    preferences[workflowKey] = JSON.stringify(applyWorkflowChange([], {
+      op: 'save', id: '14e60b67-76ec-4d41-9ab3-f8f5dfd4cc49', revision: null, draft,
+    }));
+  } });
+  const packets = [];
+  const ssh = [];
+  await page.route('**/dsh-vps-chat/api/**', (route) => { ssh.push(route.request().url()); return route.abort(); });
+  await page.route('**/__preview/local-sdk', (route) => {
+    if (route.request().method() === 'POST') packets.push(route.request().postDataJSON());
+    return route.continue();
+  });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await settings.getByLabel('配置名称', { exact: true }).fill('本机全功能');
+  await settings.getByRole('button', { name: '选择工作目录并保存' }).click();
+  await settings.getByRole('combobox', { name: '查看配置' }).waitFor();
+  await settings.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await page.getByRole('button', { name: '设计工作台', exact: true }).click();
+  const canvas = page.getByRole('region', { name: '多画板画布' });
+  await canvas.waitFor();
+  await page.getByRole('combobox', { name: '归入本地项目' }).selectOption({ label: '纸间书店' });
+  await page.getByRole('textbox', { name: '本地对话草稿', exact: true }).fill('制作可跳转的概览和详情两张画板。');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await canvas.getByRole('button', { name: /概览/u }).first().waitFor();
+  await canvas.getByRole('button', { name: /详情/u }).first().waitFor();
+  await page.getByRole('button', { name: '项目资源库', exact: true }).click();
+  const library = page.getByRole('dialog', { name: '项目资源库', exact: true });
+  await library.getByText('概览', { exact: true }).first().waitFor();
+  await page.keyboard.press('Escape');
+  await library.waitFor({ state: 'hidden' });
+
+  await page.getByRole('button', { name: '工作流', exact: true }).click();
+  const flow = page.getByRole('dialog', { name: '工作流', exact: true });
+  await flow.getByRole('combobox', { name: '已保存的工作流', exact: true }).selectOption({ label: '本机并行核对' });
+  await flow.getByRole('textbox', { name: '运行任务' }).fill('同时核对内容和布局。');
+  await flow.getByRole('button', { name: '开始运行', exact: true }).click();
+  await flow.locator('.vc-workflow-title-row').getByRole('status').filter({ hasText: /^已完成$/u }).waitFor({ timeout: 15_000 });
+  await flow.getByRole('button', { name: '查看产物', exact: true }).last().click();
+  await flow.getByText('阶段结果.md', { exact: true }).waitFor();
+  const sends = packets.filter(({ op, payload }) => op === 'workbench' && payload.op === 'send');
+  assert.equal(sends.length, 4);
+  assert.ok(sends.every(({ location, backend, payload }) => location === 'local-sdk' && backend === 'codex' &&
+    payload.settings.location === 'local-sdk'));
+  assert.deepEqual(ssh, []);
 });
 
 test('prompt-template actions preserve the manifest and the existing DSH import entry', { timeout: 35_000 }, async (t) => {
@@ -1070,14 +1132,14 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
       await settings.getByRole('listitem', { name: '本机 SDK', exact: true }).getByText('已通过', { exact: true }).waitFor();
       assert.equal(requests.length, priorVpsRequests);
       await openSettingsSection(settings, '长期记忆');
-      const memoryLink = settings.getByRole('button', { name: '打开 VPS 记忆', exact: true });
-      await assertWithinViewport(memoryLink);
-      await memoryLink.press('Enter');
+      const localMemory = settings.getByRole('switch', { name: '开启个人自动记忆', exact: true });
+      await assertWithinViewport(localMemory);
+      await routeOptions.getByRole('button', { name: 'VPS SSH', exact: true }).press('Enter');
       await settings.getByText(/作用范围 · VPS SSH/u).waitFor();
       await assertWithinViewport(settings.getByRole('button', { name: '完成', exact: true }));
       assert.equal(requests.length, priorVpsRequests);
       await routeOptions.getByRole('button', { name: '本机 SDK', exact: true }).press('Enter');
-      await memoryLink.waitFor();
+      await localMemory.waitFor();
       await openSettingsSection(settings, '外观');
       const light = settings.getByRole('button', { name: '浅色', exact: true });
       await light.press('Enter');

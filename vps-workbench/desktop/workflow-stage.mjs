@@ -35,7 +35,8 @@ export function checkStageResources({ provider, agent }, targetId, state) {
   } catch (error) { return unavailable(error.message); }
 }
 
-export function prepareWorkflowStage(body, reference, readRun, state, isProject, readSavedWorkflow = () => null) {
+export function prepareWorkflowStage(body, reference, readRun, state, isProject, readSavedWorkflow = () => null,
+  scoped = true, allowedStates = ['submitted']) {
   if (body.op !== 'send' || !exactFields(reference, 'runId') || !workflowUuid(reference.runId) || body.mode ||
       body.extensions || body.advanced || body.effort) return changedWorkflowStage;
   let run;
@@ -44,7 +45,7 @@ export function prepareWorkflowStage(body, reference, readRun, state, isProject,
     return changedWorkflowStage;
   }
   const index = run.rows.findIndex(({ targetId, sessionId, turnId, state }) =>
-    state === 'submitted' && targetId === body.targetId && sessionId === body.sessionId && turnId === body.turnId);
+    allowedStates.includes(state) && targetId === body.targetId && sessionId === body.sessionId && turnId === body.turnId);
   const stage = run.workflow.stages[index];
   const projectId = run.projectId ?? null;
   if (!stage || stage.provider !== body.settings?.provider || stage.model !== (body.model ?? '') ||
@@ -64,7 +65,7 @@ export function prepareWorkflowStage(body, reference, readRun, state, isProject,
   const { mcpServers, pluginInstructions } = resources;
   try {
     return { ok: true, projectId, memory: stage.agent?.memory ?? 'isolated', mcpServers, fileAccess,
-      prompt: workflowStagePrompt(run, index, pluginInstructions, true) };
+      prompt: workflowStagePrompt(run, index, pluginInstructions, scoped) };
   } catch {
     return unavailable('此阶段的任务和提示词模板组合过长。请缩短任务或减少模板。');
   }

@@ -6,6 +6,7 @@ const location = 'local-sdk';
 const backend = 'codex';
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const nativeId = /^[a-z0-9_-]{1,128}$/i;
+const digest = /^[a-f0-9]{64}$/;
 const maxPromptLength = 8192;
 const maxReplyLength = 256 * 1024;
 const pending = new Set(['queued', 'running', 'stopping']);
@@ -27,6 +28,8 @@ const messages = Object.freeze({
   turn_not_found: '这条本机会话中找不到指定回执。',
   turn_conflict: '此轮次已关联另一条回执。',
   session_conflict: '该会话已绑定其他本机配置。',
+  mode_conflict: '该会话已绑定其他模式。请新建对话。',
+  design_branch_unavailable: '无法从此版本继续。请选择一个已完成的版本再试。',
   browse_only: '本机 SDK 处于仅浏览模式。',
   auth_required: '请配置本机 Codex API 密钥并检查账号权限。',
   network_error: '本机 Codex 无法连接模型服务。请检查本机网络和原回执。',
@@ -35,6 +38,7 @@ const messages = Object.freeze({
   stop_unconfirmed: '已请求停止。本轮结果尚未确认，可查询原回执。',
   unknown_outcome: '本轮结果未知。可查询原回执。',
   storage_unavailable: '本机 Codex 回执暂时无法读写。',
+  resources_changed: '本轮的文件或工具授权已变化，请核对后重新发送。',
 });
 
 function failure(code) {
@@ -121,7 +125,10 @@ function validateStore(store) {
   const nativeIds = new Set();
   const turns = new Set();
   for (const session of store.sessions) {
-    if (!exact(session, ['id', 'profileId', 'nativeThreadId', 'title', 'updatedAt', 'turns']) ||
+    const fields = ['id', 'profileId', 'nativeThreadId', 'title', 'updatedAt', 'turns'];
+    if (session?.mode === 'design') fields.push('mode');
+    if (session?.background === true) fields.push('background');
+    if (!exact(session, fields) ||
         !localSessionId(session.id) || session.id !== session.id.toLowerCase() || sessions.has(session.id) ||
         !profiles.has(session.profileId) || !validText(session.title) || !validDate(session.updatedAt) ||
         !Array.isArray(session.turns) || session.turns.length === 0) return false;
@@ -130,13 +137,35 @@ function validateStore(store) {
       nativeIds.add(session.nativeThreadId.toLowerCase());
     }
     sessions.add(session.id);
+    const earlier = new Set();
     for (const turn of session.turns) {
       const fields = ['id', 'prompt', 'reply', 'state'];
       if (Object.hasOwn(turn ?? {}, 'code')) fields.push('code', 'message');
+      if (Object.hasOwn(turn ?? {}, 'execution')) fields.push('execution');
       if (!exact(turn, fields) || !identifier(turn.id) || turn.id !== turn.id.toLowerCase() || turns.has(turn.id) ||
           !validText(turn.prompt) || typeof turn.reply !== 'string' || !states.has(turn.state) ||
           (fields.includes('code') && (!Object.hasOwn(messages, turn.code) || turn.message !== messages[turn.code]))) return false;
+      if (turn.execution) {
+        const meta = turn.execution;
+        const fields = ['fingerprint', 'model', 'effort', 'workspace'];
+        if (Object.hasOwn(meta, 'usedTokens')) fields.push('usedTokens');
+        if (session.mode === 'design') fields.push('branch');
+        if (!exact(meta, fields) || !digest.test(meta.fingerprint) || !validText(meta.model) || !validText(meta.effort) ||
+            !['profile', 'private'].includes(meta.workspace) || (fields.includes('usedTokens') &&
+              (!Number.isSafeInteger(meta.usedTokens) || meta.usedTokens < 0))) return false;
+        if (session.mode === 'design') {
+          const branch = meta.branch;
+          if (!exact(branch, ['parentTurnId', 'fork', 'nativeThreadId']) ||
+              (branch.parentTurnId !== null && !earlier.has(branch.parentTurnId)) ||
+              typeof branch.fork !== 'boolean' || (branch.fork && branch.parentTurnId === null)) return false;
+          if (branch.nativeThreadId !== null) {
+            if (!validNativeId(branch.nativeThreadId) || nativeIds.has(branch.nativeThreadId.toLowerCase())) return false;
+            nativeIds.add(branch.nativeThreadId.toLowerCase());
+          }
+        }
+      } else if (fields.includes('execution') || session.mode === 'design') return false;
       turns.add(turn.id);
+      earlier.add(turn.id);
     }
   }
   return true;
@@ -260,14 +289,17 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
   }
 
   function view(profile, session) {
-    const turns = session.turns.map((turn) => {
+    const turns = session.turns.map(({ execution, ...turn }, index) => {
+      const metadata = execution && { model: execution.model, effort: execution.effort,
+        ...(execution.usedTokens !== undefined && { contextUsage: { usedTokens: execution.usedTokens, contextWindow: null } }),
+        ...(execution.branch && { parentTurnId: execution.branch.parentTurnId, fork: execution.branch.fork, ordinal: index + 1 }) };
       const control = active.get(turn.id);
       const reply = control ? replyFor(control) || turn.reply : turn.reply;
       if (pending.has(turn.state) && (!control || storageFailed)) {
-        return { ...turn, ...stateResult('unknown', 'unknown_outcome'), reply, canStop: false };
+        return { ...turn, ...metadata, ...stateResult('unknown', 'unknown_outcome'), reply, canStop: false };
       }
       return {
-        ...turn,
+        ...turn, ...metadata,
         state: control?.controller.signal.aborted && pending.has(turn.state) ? 'stopping' : turn.state,
         reply,
         canStop: pending.has(turn.state) && turn.state !== 'stopping' && !control?.controller.signal.aborted &&
@@ -279,7 +311,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       location,
       targetId: profile.targetId,
       session: {
-        id: session.id, profileId: profile.id, title: session.title, mode: 'chat',
+        id: session.id, profileId: profile.id, title: session.title, mode: session.mode ?? 'chat',
         canSend: !executionBlock() && supportedProfile(profile) && !turns.some((turn) => turn.state === 'unknown'), turns,
       },
     };
@@ -322,18 +354,23 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
     });
   }
 
-  async function bindNative(sessionId, id) {
+  async function bindNative(sessionId, turnId, id) {
     await transact(async () => {
-      const current = sessionById(sessionId).nativeThreadId;
+      const thread = (session) => session.mode === 'design'
+        ? session.turns.find(({ id }) => id === turnId)?.execution.branch : session;
+      const owner = thread(sessionById(sessionId));
+      const current = owner.nativeThreadId;
+      const conflicts = (candidate) => candidate !== owner && candidate.nativeThreadId?.toLowerCase() === id.toLowerCase();
       if (!validNativeId(id) || (current !== null && current !== id) ||
-          store.sessions.some((session) => session.id !== sessionId && session.nativeThreadId?.toLowerCase() === id.toLowerCase())) {
+          store.sessions.some((session) => conflicts(session) || session.turns.some(({ execution }) =>
+            execution?.branch && conflicts(execution.branch)))) {
         throw new Error('native thread mismatch');
       }
-      if (current === null) await commit((next) => { sessionById(sessionId, next).nativeThreadId = id; });
+      if (current === null) await commit((next) => { thread(sessionById(sessionId, next)).nativeThreadId = id; });
     });
   }
 
-  async function execute(profile, sessionId, turnId, control) {
+  async function execute(profile, sessionId, turnId, control, input, options) {
     const { signal } = control.controller;
     let dispatched = false;
     let terminal = false;
@@ -351,7 +388,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
         if (session.turns.some((turn) => turn.state === 'unknown')) return stateResult('failed', 'unknown_outcome');
         if (block) return stateResult('failed', block);
         await updateTurn(sessionId, turnId, stateResult('running'));
-        return { prompt: turn.prompt, nativeThreadId: session.nativeThreadId };
+        return { prompt: turn.prompt, execution: turn.execution, nativeThreadId: session.nativeThreadId };
       });
       if (!start) return;
       if (start.state) return await finish(start);
@@ -359,15 +396,20 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       const beforeCreate = executionBlock();
       if (signal.aborted || beforeCreate === 'browse_only') return await finish(stateResult('stopped'));
       if (beforeCreate) return await finish(stateResult('failed', beforeCreate));
-      const thread = await createThread({ ...profile }, start.nativeThreadId);
+      if (options?.permittedResources && !options.permittedResources()) return await finish(stateResult('failed', 'resources_changed'));
+      const thread = await createThread({ ...profile, ...(start.execution && {
+        model: start.execution.model, effort: start.execution.effort,
+      }) }, start.nativeThreadId, { workspace: start.execution?.workspace, sessionId, signal, mcpServers: options?.mcpServers,
+        rasterInput: Array.isArray(input) && input.some(({ type }) => type === 'raster') });
       const beforeDispatch = executionBlock();
       if (signal.aborted || beforeDispatch === 'browse_only') return await finish(stateResult('stopped'));
       if (beforeDispatch) return await finish(stateResult('failed', beforeDispatch));
+      if (options?.permittedResources && !options.permittedResources()) return await finish(stateResult('failed', 'resources_changed'));
       dispatched = true;
-      const { events } = await thread.runStreamed(start.prompt, { signal });
+      const { events } = await thread.runStreamed(input ?? start.prompt, { signal });
       for await (const event of events) {
         if (terminal) continue;
-        if (event.type === 'thread.started') await bindNative(sessionId, event.thread_id);
+        if (event.type === 'thread.started') await bindNative(sessionId, turnId, event.thread_id);
         if (event.type === 'item.updated' || event.type === 'item.completed') {
           const { item } = event;
           if (item?.type === 'agent_message' && typeof item.id === 'string' && typeof item.text === 'string') {
@@ -375,8 +417,14 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
           }
         }
         if (event.type === 'turn.completed') {
-          if (!sessionById(sessionId).nativeThreadId) throw new Error('missing native thread');
-          await finish(stateResult('completed'));
+          const session = sessionById(sessionId);
+          const observed = session.mode === 'design'
+            ? session.turns.find(({ id }) => id === turnId)?.execution.branch.nativeThreadId : session.nativeThreadId;
+          if (!observed) throw new Error('missing native thread');
+          const execution = session.turns.find(({ id }) => id === turnId)?.execution;
+          const usedTokens = event.usage?.input_tokens;
+          await finish({ ...stateResult('completed'), ...(execution && Number.isSafeInteger(usedTokens) && usedTokens >= 0 &&
+            { execution: { ...execution, usedTokens } }) });
         }
         if (event.type === 'turn.failed') await finish(stateResult('failed', sdkFailure(event.error?.message) ?? 'turn_failed'));
         if (event.type === 'error') throw new Error(event.message);
@@ -395,47 +443,69 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
     }
   }
 
-  function schedule(profile, sessionId, turnId, revoked) {
+  function schedule(profile, sessionId, turnId, revoked, input, options) {
     const control = { controller: new AbortController(), text: new Map() };
     if (revoked) control.controller.abort();
     active.set(turnId, control);
     const previous = lanes.get(sessionId) ?? Promise.resolve();
-    const task = previous.then(() => execute(profile, sessionId, turnId, control)).catch(() => {}).finally(() => {
+    const task = previous.then(() => execute(profile, sessionId, turnId, control, input, options)).catch(() => {}).finally(() => {
       active.delete(turnId);
       if (lanes.get(sessionId) === task) lanes.delete(sessionId);
     });
     lanes.set(sessionId, task);
   }
 
-  async function send(profile, session, query) {
+  // The second argument is constructed by the desktop host after checking the route and configured resources.
+  async function send(profile, session, query, options) {
     const { sessionId, turnId, prompt } = query;
+    const mode = options?.mode ?? 'chat';
+    const background = options?.background === true;
     const occupied = store.sessions.find((candidate) => candidate.turns.some((turn) => turn.id === turnId));
     if (occupied) {
       const prior = occupied.turns.find((turn) => turn.id === turnId);
-      if (occupied.id !== sessionId || occupied.profileId !== profile.id || prior.prompt !== prompt) return failure('turn_conflict');
+      if (occupied.id !== sessionId || occupied.profileId !== profile.id || prior.prompt !== prompt ||
+          prior.execution?.fingerprint !== options?.fingerprint) return failure('turn_conflict');
       return { ...view(profile, occupied), duplicate: true };
     }
     const block = executionBlock();
     if (block) return failure(block);
-    if (!supportedProfile(profile)) return failure('invalid_profile');
+    const model = options?.model ?? profile.model;
+    const effort = options?.effort ?? profile.effort;
+    if (!supportedProfile({ model, effort })) return failure('invalid_profile');
+    if (session && ((session.mode ?? 'chat') !== mode || Boolean(session.background) !== background)) return failure('mode_conflict');
     if (session && view(profile, session).session.turns.some((turn) => turn.state === 'unknown')) return failure('unknown_outcome');
+    const workspace = options?.workspace ?? 'profile';
+    if (session && (session.turns[0].execution?.workspace ?? 'profile') !== workspace) return failure('session_conflict');
+    let branch;
+    let input = options?.input;
+    if (mode === 'design') {
+      const earlier = session?.turns ?? [];
+      if (earlier.length >= 100 || earlier.some(({ state }) => pending.has(state))) return failure('design_branch_unavailable');
+      const previous = earlier.findLast(({ state }) => state === 'completed');
+      const base = options.base ? earlier.find(({ id }) => id === options.base.parentTurnId) : previous;
+      if (options.base && (base?.state !== 'completed' || (!options.base.fork && base !== previous))) return failure('design_branch_unavailable');
+      branch = { parentTurnId: base?.id ?? null, fork: options.base?.fork ?? false, nativeThreadId: null };
+      input = options.designInput(base?.reply ?? '');
+    }
+    const execution = options && { fingerprint: options.fingerprint, model, effort, workspace, ...(branch && { branch }) };
     const currentRevocation = revocation;
     await commit((next) => {
       const updatedAt = new Date().toISOString();
       let saved = sessionById(sessionId, next);
       if (!saved) {
         const title = [...prompt.trim().replace(/\s+/g, ' ')].slice(0, 100).join('');
-        saved = { id: sessionId, profileId: profile.id, nativeThreadId: null, title, updatedAt, turns: [] };
+        saved = { id: sessionId, profileId: profile.id, nativeThreadId: null, title, updatedAt, turns: [],
+          ...(mode === 'design' && { mode }), ...(background && { background }) };
         next.sessions.push(saved);
       }
-      saved.turns.push({ id: turnId, prompt, reply: '', state: 'queued' });
+      saved.turns.push({ id: turnId, prompt, reply: '', state: 'queued', ...(execution && { execution }) });
       saved.updatedAt = updatedAt;
     });
-    schedule(profile, sessionId, turnId, currentRevocation !== revocation);
+    schedule(profile, sessionId, turnId, currentRevocation !== revocation, input, options);
     return view(profile, sessionById(sessionId));
   }
 
-  async function request(body) {
+  async function request(body, options) {
     const query = parseRequest(body);
     if (!query) return failure('invalid_request');
     return transact(async () => {
@@ -445,17 +515,18 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       const { op, sessionId, turnId } = query;
       if ((op === 'send' || op === 'stop') && (closing || !canExecute())) return failure('browse_only');
       if (op === 'list') {
-        const sessions = store.sessions.filter(({ profileId }) => profileId === profile.id)
-          .map(({ id, title, updatedAt }) => ({ id, title, updatedAt }))
+        const sessions = store.sessions.filter(({ profileId, background }) => profileId === profile.id && !background)
+          .map(({ id, title, updatedAt, mode }) => ({ id, title, updatedAt, ...(mode && { mode }) }))
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
         return { ok: true, location, targetId: profile.targetId, sessions };
       }
       const session = sessionById(sessionId);
       if (op === 'send') {
         if (session && session.profileId !== profile.id) return failure('session_conflict');
-        return send(profile, session, query);
+        return send(profile, session, query, options);
       }
-      if (!session || session.profileId !== profile.id) return failure('session_not_found');
+      if (!session || session.profileId !== profile.id || Boolean(session.background) !== (options?.background === true))
+        return failure('session_not_found');
       if (op === 'get') return view(profile, session);
       const turn = session.turns.find(({ id }) => id === turnId);
       if (!turn) return failure('turn_not_found');

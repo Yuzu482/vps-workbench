@@ -1,5 +1,6 @@
 export const workflowKey = 'dsh-vps-chat:workflows:v1';
 export const workflowRunKey = 'dsh-vps-chat:workflow-run:v1';
+export const localWorkflowRunKey = 'dsh-vps-chat:local-workflow-run:v1';
 export const workflowEditPrefix = '根据用户要求提出一份工作流草案。';
 export const maxWorkflowChatLength = 8192;
 

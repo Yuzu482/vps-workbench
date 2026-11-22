@@ -126,7 +126,7 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
 
   React.useLayoutEffect(() => {
     const root = header.current.parentElement;
-    const workbench = root.querySelector(location === 'local-sdk' ? '[data-local-sdk]' : '[data-vps-chat]');
+    const workbench = root.querySelector(location === 'local-sdk' ? ':scope > [data-local-sdk]' : ':scope > [data-vps-chat]:not([data-local-sdk])');
     // The standalone toggle uses the same narrow history state and automatic closing as the Workbench.
     const toggle = workbench.querySelector('.vc-history-toggle');
     historyButton.current = toggle;
@@ -236,5 +236,5 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
       h('span', { className: 'desktop-title-divider', 'aria-hidden': true }),
       h(TitleMenu, { kind: 'file', label: '文件', items: fileItems }, '文件', glyph('chevron')),
       h(TitleMenu, { kind: 'edit', label: '编辑', items: editItems }, '编辑', glyph('chevron')),
-      location !== 'local-sdk' ? h(TitleMenu, { kind: 'projects', label: '项目', items: projectItems }, '项目', glyph('chevron')) : null));
+      h(TitleMenu, { kind: 'projects', label: '项目', items: projectItems }, '项目', glyph('chevron'))));
 }

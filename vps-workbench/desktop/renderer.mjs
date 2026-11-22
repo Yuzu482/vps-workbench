@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { createWorkbench } from '../../remote-workbench/vps-chat/client/workbench.js';
 import { menuIcon } from '../../remote-workbench/vps-chat/client/menu-icons.js';
-import { createMarkdownReply } from '../../remote-workbench/vps-chat/client/markdown.js';
 import { readPreferences, workbenchPreferenceKey } from '../../remote-workbench/vps-chat/client/workbench-preferences.js';
 import { setWorkbenchStorage } from '../../remote-workbench/vps-chat/client/workbench-storage.js';
 import { createResourceLibrary } from '../resource-library/index.mjs';
@@ -15,7 +14,7 @@ import { createExtensionSettings } from '../extensions/settings.mjs';
 import { agentPresetKey, applyAgentPresetChange, legacyAgentPresetKey, readAgentPresets } from '../agent-presets/state.mjs';
 import { createAgentPresetSettings } from '../agent-presets/settings.mjs';
 import {
-  applyWorkflowChange, maxWorkflowAttachmentBytes, maxWorkflowAttachments, readWorkflows,
+  applyWorkflowChange, localWorkflowRunKey, maxWorkflowAttachmentBytes, maxWorkflowAttachments, readWorkflows,
   validWorkflowFileName, workflowKey, workflowRunKey,
 } from '../workflow-engine/state.mjs';
 import { readWorkflowRun } from '../workflow-engine/runner.mjs';
@@ -134,24 +133,29 @@ try {
     showLocalStatus(workflowError);
   }
   const saveWorkflowRun = (run) => saveLocalPreference(workflowRunKey, JSON.stringify(run));
+  let initialLocalRun = null;
+  let localRunError = '';
+  try { initialLocalRun = readWorkflowRun(values.get(localWorkflowRunKey) ?? null); }
+  catch { localRunError = '本机 SDK 的工作流运行回执无法读取。'; }
+  const saveLocalRun = (run) => saveLocalPreference(localWorkflowRunKey, JSON.stringify(run));
   let startingExtensions;
   try { startingExtensions = readExtensions(values.get(extensionPreferenceKey) ?? null); }
   catch {
     startingExtensions = readExtensions(null);
     showLocalStatus('扩展设置无法读取。');
   }
-  const Workbench = createWorkbench({ React, CodeBlock, writeClipboard, subscriptionRequiresRelay: false,
+  const workbenchOptions = { React, CodeBlock, writeClipboard, subscriptionRequiresRelay: false,
     hostThemeLabel: '跟随系统', parseStreamingMarkdown: createStreamingMarkdownParser(), stabilizeStreamingRecord,
     sidebarActions: true, ResourceLibrary: createResourceLibrary(React),
     editText: native.edit, saveConversationPreference: saveLocalPreference, saveModelParameters: saveLocalPreference,
     ExtensionSettings, extensionsForTurn, automaticMemoryPolicy, conversationIsolated, projectMemoryNotes,
-    AgentPresetSettings, WorkflowPanel, useWorkflows: useWorkflowControls, SetupGuide, setupConnectionKey,
-    VpsConnectionChecks, useVpsConnectionChecks,
+    AgentPresetSettings, WorkflowPanel, useWorkflows: useWorkflowControls,
     onThemeReveal: (element, progress) => element.dispatchEvent(
       new CustomEvent('workbench:theme-reveal', { detail: progress })),
-  });
-  const LocalWorkspace = createLocalWorkspace(React, { icon: menuIcon,
-    MarkdownReply: createMarkdownReply(React, CodeBlock, createStreamingMarkdownParser()) });
+  };
+  const Workbench = createWorkbench({ ...workbenchOptions, SetupGuide, setupConnectionKey, VpsConnectionChecks, useVpsConnectionChecks });
+  const LocalWorkspace = createLocalWorkspace(React, createWorkbench({ ...workbenchOptions, localSdk: true }));
+  const noTerminal = { subscribe: () => () => {}, getSnapshot: () => null };
   function DesktopApp() {
     const [newLocation, setNewLocation] = React.useState(() => readLocation(values.get(newLocationKey)));
     const [location, setLocation] = React.useState(() => readLocation(values.get(viewLocationKey)));
@@ -294,9 +298,14 @@ try {
         workflowStore: { items: workflowItems, change: changeWorkflows, initialRun: initialWorkflowRun,
           saveRun: saveWorkflowRun, saveAttachments: saveWorkflowAttachments, error: workflowError } }) : null,
       visited.has('local-sdk') ? h(LocalWorkspace, { native, active: !sshVisible, access, accessPending, changeAccess,
-        newConversation: localNew, onNewChat: startChat, defaultLocation: newLocation,
+        projectCatalog, terminalView: noTerminal, resourcesOpen, setResourcesOpen,
+        newChatRequest: localNew, onNewChat: startChat,
         settingsSurface: settingsSurface('local-sdk'),
-        appearance, changeAppearance, sendKey: appearance.sendKey, savePreference: saveLocalPreference }) : null,
+        applicationPreferences: { value: appearance, change: changeAppearance }, savePreference: saveLocalPreference,
+        extensions: { state: extensions, change: changeExtensions, busy: extensionsBusy },
+        agentPresets: { items: agentItems, change: changeAgentPresets, error: agentPresetError },
+        workflowStore: { items: workflowItems, change: changeWorkflows, initialRun: initialLocalRun,
+          saveRun: saveLocalRun, saveAttachments: saveWorkflowAttachments, error: workflowError || localRunError } }) : null,
       h('div', { ref: settingsLayer, className: 'desktop-settings-surface' }));
   }
   root.render(h(DesktopApp));

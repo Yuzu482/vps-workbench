@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -141,4 +141,41 @@ test('standalone separates trusted Local IPC from legacy SSH RPC and enforces br
   } finally {
     await app.close();
   }
+});
+
+test('private local jobs stage raster input for the SDK and clean it up', async (t) => {
+  const root = await temporaryRoot(t);
+  const vendor = join(root, 'local-codex', 'bin');
+  await mkdir(vendor, { recursive: true });
+  await writeFile(join(vendor, 'codex.exe'), 'Pinned SDK fixture.');
+  const profile = { id: randomUUID(), directory: root, model: localModels[0].id, effort: 'medium' };
+  const sessionId = 'local-' + randomUUID();
+  const raster = Buffer.from('89504e470d0a1a0a', 'hex');
+  let staged;
+  class FakeCodex {
+    constructor({ config, configOverrides }) {
+      assert.equal(config.features.shell_tool, false);
+      assert.equal(config.features.unified_exec, false);
+      assert.match(configOverrides[1], /mcp_servers = \{ +\}/u);
+    }
+    startThread({ workingDirectory, sandboxMode }) {
+      assert.equal(workingDirectory, join(root, 'workspaces', profile.id, sessionId));
+      assert.equal(sandboxMode, 'read-only');
+      return { async runStreamed(input) {
+        assert.deepEqual(input[0], { type: 'text', text: '只发送选定参考图' });
+        assert.equal(input[1].type, 'local_image');
+        staged = input[1].path;
+        assert.deepEqual(await readFile(staged), raster);
+        return { events: (async function* () { yield { type: 'turn.completed' }; })() };
+      } };
+    }
+  }
+  const runtime = await openCodexRuntime({ runtimeRoot: root, stateRoot: root, apiKey: 'sk-fixture-local-key',
+    environment: { SystemRoot: 'C:\\Windows' }, isWindowsX64: true, loadSdk: async () => ({ Codex: FakeCodex }) });
+  const thread = await runtime.createThread(profile, null, { workspace: 'private', sessionId, rasterInput: true });
+  const result = await thread.runStreamed([
+    { type: 'text', text: '只发送选定参考图' }, { type: 'raster', format: 'png', bytes: raster },
+  ], {});
+  for await (const _event of result.events) { /* Wait for the SDK response and cleanup. */ }
+  await assert.rejects(readFile(staged), { code: 'ENOENT' });
 });

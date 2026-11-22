@@ -84,7 +84,7 @@ function hasExactFields(value, fields) {
     Object.keys(value).length === fields.length && fields.every(field => Object.hasOwn(value, field));
 }
 
-function validDesignContext(context) {
+export function validDesignContext(context) {
   if (!hasExactFields(context, ['text', 'images']) || typeof context.text !== 'string' ||
       context.text.length > 24000 || context.text.includes('\0') ||
       !Array.isArray(context.images) || context.images.length > 2 || (!context.text.trim() && !context.images.length)) return false;

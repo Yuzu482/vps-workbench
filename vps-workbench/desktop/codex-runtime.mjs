@@ -1,4 +1,4 @@
-import { lstat, mkdir, realpath, stat } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, realpath, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve, win32 } from 'node:path';
 
 export const localCredentialVariable = 'VPS_WORKBENCH_LOCAL_CODEX_API_KEY';
@@ -54,6 +54,48 @@ function projectTrustOverride(directory) {
   }
 }
 
+function stageInputs(thread, temp) {
+  return {
+    async runStreamed(input, options) {
+      const files = [];
+      const directory = await mkdtemp(join(temp, 'turn-media-'));
+      const clean = async () => {
+        await Promise.allSettled(files.map((path) => unlink(path)));
+        await rmdir(directory).catch(() => {});
+      };
+      try {
+        const staged = [];
+        for (const item of input) {
+          options.signal?.throwIfAborted();
+          if (item.type === 'text') {
+            staged.push(item);
+            continue;
+          }
+          if (item.type !== 'raster' || !['png', 'jpeg', 'webp'].includes(item.format) ||
+              !Buffer.isBuffer(item.bytes) || item.bytes.length > 512 * 1024) throw error('invalid_environment');
+          const path = join(directory, files.length + '.' + item.format);
+          await writeFile(path, item.bytes, { flag: 'wx', mode: 0o600 });
+          files.push(path);
+          staged.push({ type: 'local_image', path });
+        }
+        const { events } = await thread.runStreamed(staged, options);
+        return { events: (async function* () {
+          try { yield* events; } finally { await clean(); }
+        })() };
+      } catch (cause) {
+        await clean();
+        throw cause;
+      }
+    },
+  };
+}
+
+export function localMcpOverride(servers) {
+  return 'mcp_servers = { ' + servers.map(({ id, local: { url, tools } }) =>
+    JSON.stringify(id) + ' = { url = ' + JSON.stringify(url) + ', enabled_tools = ' + JSON.stringify(tools) +
+      ', startup_timeout_sec = 5, tool_timeout_sec = 30 }').join(', ') + ' }';
+}
+
 export async function openCodexRuntime({ runtimeRoot, stateRoot, apiKey, environment = process.env,
   loadSdk = () => import('@openai/codex-sdk'), isWindowsX64 = process.platform === 'win32' && process.arch === 'x64' }) {
   const vendor = join(runtimeRoot, 'local-codex');
@@ -66,11 +108,14 @@ export async function openCodexRuntime({ runtimeRoot, stateRoot, apiKey, environ
   return {
     runtimeAvailable,
     credentialConfigured: () => credentialConfigured,
-    async createThread(profile, threadId) {
+    async createThread(profile, threadId, { workspace, sessionId, rasterInput, mcpServers = [] } = {}) {
       if (!credentialConfigured) throw error('auth_required');
       if (!runtimeAvailable) throw error('invalid_environment');
       // Recheck each run so a replaced directory cannot redirect an existing profile.
-      const directory = await canonicalLocalDirectory(profile.directory);
+      const registered = await canonicalLocalDirectory(profile.directory);
+      const directory = workspace === 'private'
+        ? await ensurePrivateDirectory(join(stateRoot, 'workspaces', profile.id, sessionId)) : registered;
+      if (workspace === 'private' && (await readdir(directory)).length) throw error('invalid_directory');
       const home = await ensurePrivateDirectory(join(stateRoot, 'threads', profile.id));
       const temp = await ensurePrivateDirectory(join(stateRoot, 'temp', profile.id));
       // Project trust and private SDK state are separate from the user's regular Codex configuration.
@@ -87,14 +132,15 @@ export async function openCodexRuntime({ runtimeRoot, stateRoot, apiKey, environ
         apiKey, baseUrl: 'https://api.openai.com/v1', codexPathOverride: binary,
         env: createEnvironment(environment, home, temp, vendor),
         // A quoted inline table preserves drive letters, backslashes and dots in Windows keys.
-        configOverrides: [projectTrustOverride(directory)],
+        configOverrides: [projectTrustOverride(directory), localMcpOverride(mcpServers)],
         config: {
           model_provider: 'openai', forced_login_method: 'api', cli_auth_credentials_store: 'keyring',
           windows: { sandbox: 'unelevated' }, check_for_update_on_startup: false,
           shell_environment_policy: { inherit: 'none', ignore_default_excludes: false },
           features: { apps: false, plugins: false, memories: false, memory_tool: false,
             multi_agent: false, multi_agent_v2: false, skip_host_skill_discovery: true,
-            skill_mcp_dependency_install: false, system_proxy_fallback: false },
+            skill_mcp_dependency_install: false, system_proxy_fallback: false,
+            ...(workspace === 'private' && { shell_tool: false, unified_exec: false, shell_snapshot: false }) },
         },
       });
       const options = {
@@ -102,7 +148,8 @@ export async function openCodexRuntime({ runtimeRoot, stateRoot, apiKey, environ
         skipGitRepoCheck: true, networkAccessEnabled: false, webSearchMode: 'disabled',
         model: profile.model, modelReasoningEffort: profile.effort,
       };
-      return threadId ? codex.resumeThread(threadId, options) : codex.startThread(options);
+      const thread = threadId ? codex.resumeThread(threadId, options) : codex.startThread(options);
+      return rasterInput ? stageInputs(thread, temp) : thread;
     },
   };
 }

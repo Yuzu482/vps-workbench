@@ -21,9 +21,16 @@ const defaultKey = 'dsh-vps-chat:desktop-new-location:v1';
 
 async function selectLocal(page) {
   await page.getByRole('button', { name: '本机 SDK', exact: true }).click();
-  await page.getByRole('heading', { name: '本地 Codex SDK', exact: true }).waitFor();
+  await page.getByRole('main', { name: '本地 Codex SDK 对话', exact: true }).waitFor();
 }
 
+async function browseLocally(page) {
+  const access = page.getByRole('button', { name: '访问权限', exact: true });
+  await access.press('Enter');
+  await page.getByRole('button', { name: '仅浏览', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[data-local-sdk] [data-control=access]')?.dataset.browse === 'true');
+  await page.keyboard.press('Escape');
+}
 async function registerProfile(page, name) {
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '设置' });
@@ -63,20 +70,20 @@ test('mock preview streams Local Codex, holds route binding, stops and restores 
   await draft.press('Enter');
   await page.locator('[data-turn-state=running]').getByRole('heading', { name: '本机 SDK 演示' }).waitFor();
   await page.getByLabel('新建位置').selectOption('ssh-vps');
-  await page.locator('[data-turn-state=completed]').getByText('收到 本机首轮', { exact: true }).waitFor();
+  await page.locator('[data-turn-state=complete]').getByText('收到 本机首轮', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '本机 SDK', exact: true }).getAttribute('aria-pressed'), 'true');
   assert.ok(!requests.some((url) => /dsh-vps-chat|dsh-terminal-workbench/.test(url)));
 
   await draft.fill('本机续聊');
   await submit.click();
-  await page.locator('[data-turn-state=completed]').getByRole('heading', { name: '续聊演示' }).waitFor();
+  await page.locator('[data-turn-state=complete]').getByRole('heading', { name: '续聊演示' }).waitFor();
   await draft.fill('本机停止轮');
   await submit.click();
-  await page.getByRole('button', { name: '停止', exact: true }).click();
+  await page.locator('[data-turn-state=running]').getByRole('heading', { name: '续聊演示' }).waitFor();
+  await page.getByRole('button', { name: '停止生成', exact: true }).click();
   await page.locator('[data-turn-state=unknown]').getByText('本机停止轮', { exact: true }).waitFor();
-  await page.getByRole('button', { name: '查询回执', exact: true }).click();
-  await page.getByRole('button', { name: '允许执行', exact: true }).click();
-  await page.getByRole('button', { name: '仅浏览', exact: true }).waitFor();
+  await page.getByRole('button', { name: '查询原任务', exact: true }).click();
+  await browseLocally(page);
   await draft.fill('浏览草稿');
   assert.equal(await submit.isDisabled(), true);
 
@@ -88,7 +95,7 @@ test('mock preview streams Local Codex, holds route binding, stops and restores 
   await selectLocal(page);
   await page.getByRole('button', { name: '展开会话侧栏', exact: true }).click();
   await page.getByRole('button', { name: '本机首轮', exact: true }).click();
-  await page.locator('[data-turn-state=completed]').getByText('收到 本机续聊', { exact: true }).waitFor();
+  await page.locator('[data-turn-state=complete]').getByText('收到 本机续聊', { exact: true }).waitFor();
   assert.deepEqual(errors, []);
 });
 
@@ -177,8 +184,7 @@ test('staged Windows app loads the pinned native files and restores local record
     page = await boot();
     await page.getByRole('button', { name: '包内历史', exact: true }).click();
     await page.getByRole('heading', { name: '重新打开的历史' }).waitFor();
-    await page.getByRole('button', { name: '允许执行', exact: true }).click();
-    await page.getByRole('button', { name: '仅浏览', exact: true }).waitFor();
+    await browseLocally(page);
     assert.equal((await dispatch({ ...turn, turnId: randomUUID() })).code, 'browse_only');
     assert.deepEqual(vpsRequests, []);
     assert.deepEqual(errors, []);

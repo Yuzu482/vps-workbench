@@ -14,6 +14,7 @@ const rejectedBeforeSend = new Set([
   'invalid_request', 'invalid_settings', 'session_blocked', 'turn_conflict', 'request_rejected', 'bridge_not_ready',
   'storage_before_send', 'mode_conflict', 'relay_required', 'workbench_browse_only', 'memory_scope_changed', 'target_changed',
   'workflow_stage_changed', 'workflow_modules_unavailable', 'workflow_file_access_changed', 'workflow_attachment_unavailable',
+  'runtime_unavailable', 'auth_required', 'invalid_profile', 'profile_not_found', 'session_conflict', 'browse_only',
 ]);
 const rejectedBeforeStop = new Set(['bridge_not_ready', 'relay_required', 'workbench_browse_only', 'target_changed']);
 
@@ -268,7 +269,7 @@ export function createWorkflowRunner({ initialRun = null, resolveRoute, readMode
     let route;
     try {
       signal.throwIfAborted();
-      route = await abortable(resolveRoute(stage.provider, signal, { dispatch }), signal);
+      route = await abortable(resolveRoute(stage.provider, signal, { dispatch, pinned }), signal);
     } catch (error) {
       signal.throwIfAborted();
       throw new RouteError(`无法确认步骤「${stage.name}」的连接。`, { cause: error });

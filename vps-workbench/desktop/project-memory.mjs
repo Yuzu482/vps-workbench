@@ -93,10 +93,11 @@ function replaceTurnMemory(body, memory, mcpServers) {
 
 export function createProjectMemoryBridge({ data, backend, extractor, access, onChange = () => {}, onError = () => {},
   pollInterval = 2000, pollLimit = 80, readRun = () => readWorkflowRun(data.preference(workflowRunKey) ?? null),
-  readSavedWorkflow = (id) => readWorkflows(data.preference(workflowKey) ?? null).find((workflow) => workflow.id === id) }) {
+  readSavedWorkflow = (id) => readWorkflows(data.preference(workflowKey) ?? null).find((workflow) => workflow.id === id),
+  journalKey = memoryJournalKey, prepareStage = prepareWorkflowStage, locationName = 'VPS', scopedPersonal = false }) {
   let journal;
   let journalUnavailable = false;
-  try { journal = journalFrom(data.preference(memoryJournalKey)); }
+  try { journal = journalFrom(data.preference(journalKey)); }
   catch { journalUnavailable = true; journal = emptyJournal(); }
   let writes = Promise.resolve();
   let worker = Promise.resolve();
@@ -109,7 +110,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
     const pending = writes.then(async () => {
       const next = change(journal);
       if (next === journal) return;
-      await data.setPreference(memoryJournalKey, JSON.stringify(next));
+      await data.setPreference(journalKey, JSON.stringify(next));
       journal = next;
     });
     writes = pending.catch(() => {});
@@ -148,7 +149,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
 
   function currentPolicy(job, current = state()) {
     if (!inMemoryScope(job.projectId, readMembership(job), job.workflowShared)) return false;
-    const policy = automaticMemoryPolicy(current, { targetId: job.memoryTargetId, projectId: job.projectId });
+    const policy = automaticMemoryPolicy(current, { targetId: job.memoryTargetId, projectId: job.projectId, scopedPersonal });
     return policy?.enabled && policy.revision === job.revision && !conversationIsolated(current, job);
   }
 
@@ -230,8 +231,8 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
         if (!eligible(job) || !sameChoice()) return settle(job);
         if (problem) {
           onError(problem === 'memory_extraction_catalog_unavailable'
-            ? '无法读取此 VPS 的 Codex 模型目录，本轮未提炼记忆。'
-            : '此 VPS 已不提供所选的记忆提炼模型或推理强度，请在记忆设置中调整。');
+            ? (scopedPersonal ? '无法读取本机 Codex 模型目录，本轮未提炼记忆。' : '无法读取此 VPS 的 Codex 模型目录，本轮未提炼记忆。')
+            : `${locationName}已不提供所选的记忆提炼模型或推理强度，请在记忆设置中调整。`);
           return settle(job);
         }
       }
@@ -247,7 +248,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
         ...(model === undefined ? {} : { model }), ...(effort === undefined ? {} : { effort }),
         ...(job.projectId === null ? { memoryScope: 'personal' } : {}) }, { current: true });
       if (launched?.ok === false && launched.code !== 'unknown') {
-        onError('本轮自动记忆提炼未完成，请检查 VPS 上的 Codex。');
+        onError(`本轮自动记忆提炼未完成，请检查${locationName}的 Codex。`);
         return settle(job);
       }
     }
@@ -270,7 +271,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
       }
       if ((result && !running.has(result.state) && result.state !== 'unknown') ||
           (packet?.ok === false && packet.code === 'session_missing')) {
-        onError('本轮自动记忆提炼未完成，请检查 VPS 上的 Codex。');
+        onError(`本轮自动记忆提炼未完成，请检查${locationName}的 Codex。`);
         return settle(job);
       }
       await delay(pollInterval, undefined, { signal: stop.signal, ref: false });
@@ -345,7 +346,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
       if (Object.hasOwn(incoming, 'workflowStage')) {
         if (!canExecute()) return disabled;
         if (!isLive() || projectMemory !== undefined) return changedWorkflowStage;
-        workflow = prepareWorkflowStage(incoming, workflowStage, readRun, state(), isProject, readSavedWorkflow);
+        workflow = prepareStage(incoming, workflowStage, readRun, state(), isProject, readSavedWorkflow);
         if (!workflow.ok) return workflow;
         if (access().workspace === 'isolated' && workflow.fileAccess?.paths.length) return changedWorkflowFileAccess;
         if (workflow.fileAccess?.attachments.length) {
@@ -400,7 +401,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
         const scopeMatches = inMemoryScope(projectId, readMembership(body), Boolean(workflow));
         if (workflow && (!scopeMatches || isolated)) return changedWorkflowStage;
         const policy = !isolated && scopeMatches && (projectId !== null || body.mode !== 'design') &&
-          automaticMemoryPolicy(snapshot, scope);
+          automaticMemoryPolicy(snapshot, { ...scope, scopedPersonal });
         if (isolated || policy?.enabled) {
           let priorPrompt;
           if (policy?.enabled && referencesPriorTurn.test(body.prompt.trim()) &&
@@ -446,7 +447,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
         }
       }
       if (workflow) {
-        const latest = prepareWorkflowStage(incoming, workflowStage, readRun, state(), isProject, readSavedWorkflow);
+        const latest = prepareStage(incoming, workflowStage, readRun, state(), isProject, readSavedWorkflow);
         const stillBound = latest.ok && latest.prompt === workflow.prompt && latest.memory === workflow.memory &&
           latest.projectId === workflow.projectId &&
            JSON.stringify(latest.fileAccess) === JSON.stringify(workflow.fileAccess) &&

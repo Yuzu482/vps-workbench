@@ -99,6 +99,8 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
   const watchers = [];
   const workflowRuns = new Map();
   const workflowApprovals = new Map();
+  const localWorkflowRuns = new Map();
+  const localWorkflowApprovals = new Map();
   const attachments = new Map();
   const data = {
     preference: (key) => fixtures.preferences[key],
@@ -140,7 +142,15 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
   }
 
   function localSdk() {
-    previewLocal ??= createPreviewLocalSdk(() => access);
+    previewLocal ??= createPreviewLocalSdk(() => access, { data,
+      readRun: (id) => id ? localWorkflowRuns.get(id) : [...localWorkflowRuns.values()].at(-1),
+      readSavedWorkflow: (id, runId) => {
+        const approved = localWorkflowApprovals.get(runId);
+        return approved?.id === id ? approved : null;
+      },
+      onChange: (state) => {
+        for (const client of clients) client.write('event: extensions\ndata: ' + JSON.stringify(state) + '\n\n');
+      } });
     return previewLocal;
   }
 
@@ -227,7 +237,19 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
         const change = await readPacket(request);
         if (change.op === 'accept-automatic-memory' || change.op === 'set-automatic-memory' &&
             !projects.some(({ workspaceId }) => workspaceId === change.projectId)) throw new Error('invalid_preview_change');
-        if (change.op === 'set-memory-extraction-model') return json(response, await chat.changeExtractionModel(change));
+        if (change.op === 'save-server') {
+          const local = await previewLocal;
+          const knownLocal = local?.status().profiles.some(({ targetId }) => targetId === change.server?.targetId);
+          if (Boolean(change.server?.local) !== Boolean(knownLocal) || (knownLocal && access.mode !== 'execute'))
+            throw new Error('invalid_preview_change');
+        }
+        if (['set-memory-extraction-model', 'set-scoped-personal-memory'].includes(change.op)) {
+          const local = await previewLocal;
+          const knownLocal = local?.status().profiles.some(({ targetId }) => targetId === change.targetId);
+          if (change.op === 'set-scoped-personal-memory' && !knownLocal) throw new Error('invalid_preview_change');
+          if (change.op === 'set-memory-extraction-model') return json(response,
+            await (knownLocal ? local : chat).changeExtractionModel(change));
+        }
         return json(response, await data.changeExtensions(change));
       } catch { return json(response, { ok: false, code: 'invalid_preview_change' }, 400); }
     }
@@ -239,13 +261,16 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
         if (![2, 3, 4].includes(snapshot?.version)) throw new Error('invalid_preview_workflow');
         const approved = packet.approval ? readWorkflows(JSON.stringify([packet.approval]))[0] : null;
         if (approved && snapshot.workflowId !== approved.id) throw new Error('invalid_preview_workflow');
-        workflowApprovals.set(snapshot.id, approved);
-        workflowRuns.delete(snapshot.id);
-        workflowRuns.set(snapshot.id, snapshot);
-        if (workflowRuns.size > 16) {
-          const oldest = workflowRuns.keys().next().value;
-          workflowRuns.delete(oldest);
-          workflowApprovals.delete(oldest);
+        if (packet.location !== undefined && packet.location !== 'local-sdk') throw new Error('invalid_preview_workflow');
+        const runs = packet.location === 'local-sdk' ? localWorkflowRuns : workflowRuns;
+        const approvals = packet.location === 'local-sdk' ? localWorkflowApprovals : workflowApprovals;
+        approvals.set(snapshot.id, approved);
+        runs.delete(snapshot.id);
+        runs.set(snapshot.id, snapshot);
+        if (runs.size > 16) {
+          const oldest = runs.keys().next().value;
+          runs.delete(oldest);
+          approvals.delete(oldest);
         }
         return json(response, { ok: true });
       } catch { return json(response, { ok: false, code: 'invalid_preview_workflow' }, 400); }

@@ -19,7 +19,7 @@ export function createStageFileAccessEditor(React) {
   const h = React.createElement;
 
   return function StageFileAccessEditor({ stage, connected, open, catalogScope, readFileTarget, saveAttachments,
-    busy, disabled, onChange, onRequest }) {
+    busy, disabled, onChange, onRequest, localSdk }) {
     const helpId = React.useId();
     const [path, setPath] = React.useState('');
     const [error, setError] = React.useState('');
@@ -131,7 +131,7 @@ export function createStageFileAccessEditor(React) {
     }
 
     const status = !canResolve ? '当前无法核验执行目标。启用并连接此执行工具后可添加授权。'
-      : targetResult === 'matched' ? '现有授权与当前远端目标匹配。'
+      : targetResult === 'matched' ? (localSdk ? '现有授权与当前本机配置匹配。' : '现有授权与当前远端目标匹配。')
       : targetResult === 'error' ? '无法核验现有授权的远端目标。请检查连接后重试。'
       : canCheck && !targetResult ? '正在核验现有授权的远端目标…' : '';
 
@@ -139,18 +139,19 @@ export function createStageFileAccessEditor(React) {
       h('legend', null, '阶段文件授权'),
       h('p', { id: helpId, className: 'vc-workflow-note' },
         !fileAccess && '此阶段默认无文件授权。',
-        '远端路径相对于项目工作区根目录，仅支持单个常规文件。附件快照位于 ',
-        h('code', null, '/attachments/<name>'), '，阶段产物写入 ', h('code', null, '/output'), '。上游文件需要单独授权。'),
+        localSdk ? '路径相对于已登记的本机工作目录。授权文件和附件以只读资料提供。回复可在阶段产物中导出。' :
+          h(React.Fragment, null, '远端路径相对于项目工作区根目录，仅支持单个常规文件。附件快照位于 ',
+            h('code', null, '/attachments/<name>'), '，阶段产物写入 ', h('code', null, '/output'), '。上游文件需要单独授权。')),
       status && h('p', { className: 'vc-workflow-note', role: 'status' }, status),
       (targetResult === 'mismatch' || error) && h('p', { className: 'vc-workflow-error', role: 'alert' },
         targetResult === 'mismatch' ? mismatchMessage : error),
       (targetResult === 'error' || targetResult === 'mismatch') && h('button', { type: 'button', className: 'vc-button',
         onClick: () => { setError(''); setRetry((value) => value + 1); } }, '重新核验目标'),
-      list('远端路径', paths, (index) => remove(paths.filter((_, position) => position !== index), attachments)),
+      list(localSdk ? '本机路径' : '远端路径', paths, (index) => remove(paths.filter((_, position) => position !== index), attachments)),
       list('本地附件', attachments.map(({ name }) => name),
         (index) => remove(paths, attachments.filter((_, position) => position !== index))),
       h('div', { className: 'vc-workflow-file-path-row' },
-        h('label', { className: 'vc-workflow-field' }, h('span', null, '远端相对路径'),
+        h('label', { className: 'vc-workflow-field' }, h('span', null, localSdk ? '本机相对路径' : '远端相对路径'),
           h('input', { value: path, placeholder: 'docs/brief.md', disabled: addDisabled, spellCheck: false,
             onChange: (event) => { setPath(event.target.value); setError(''); },
             onKeyDown: (event) => {
@@ -159,7 +160,8 @@ export function createStageFileAccessEditor(React) {
                 void addPath();
               }
             } })),
-        h('button', { type: 'button', className: 'vc-button', disabled: addDisabled || !path, onClick: addPath }, '添加远端路径')),
+        h('button', { type: 'button', className: 'vc-button', disabled: addDisabled || !path, onClick: addPath },
+          localSdk ? '添加本机路径' : '添加远端路径')),
       h('label', { className: 'vc-workflow-field' }, h('span', null, '选择本地附件'),
         h('input', { type: 'file', multiple: true, disabled: addDisabled || typeof saveAttachments !== 'function',
           onChange: addAttachments })),

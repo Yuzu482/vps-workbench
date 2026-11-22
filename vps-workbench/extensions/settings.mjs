@@ -1,4 +1,4 @@
-import { automaticMemoryPolicy } from './state.mjs';
+import { automaticMemoryPolicy, validLocalMcpEndpoint } from './state.mjs';
 import { effortName } from '../../remote-workbench/vps-chat/client/model-catalog.js';
 
 const styles = `
@@ -72,29 +72,45 @@ export function createExtensionSettings(React) {
     return h('div', { className: 'vc-extension-actions' }, ...children);
   }
 
-  function McpSettings({ state, submit, mcpTargetId: targetId, mcpProvider, disabled }) {
+  function McpSettings({ state, submit, mcpTargetId: targetId, mcpProvider, disabled, localSdk }) {
     const [id, setId] = React.useState('');
-    const servers = state.servers.filter(server => server.targetId === targetId);
+    const [url, setUrl] = React.useState('');
+    const [toolNames, setToolNames] = React.useState('');
+    const tools = toolNames.trim().split(/[\s,，]+/u).filter(Boolean);
+    const configured = { url: url.trim(), tools };
+    const servers = state.servers.filter(server => server.targetId === targetId && Boolean(server.local) === Boolean(localSdk));
     const idExists = servers.some(server => server.id === id);
 
     async function add() {
-      if (await submit({ op: 'save-server', server: { id, targetId, enabled: false } })) setId('');
+      if (await submit({ op: 'save-server', server: { id, targetId, enabled: false, ...(localSdk && { local: configured }) } })) {
+        setId('');
+        setUrl('');
+        setToolNames('');
+      }
     }
 
     return h(React.Fragment, null,
       h('p', null, mcpProvider === 'antigravity'
         ? '为 Antigravity 工作流登记 VPS 管理员已配置的 Python stdio 服务。'
-        : '为 Codex 登记 VPS 管理员已配置的 Python stdio 服务。'),
+        : localSdk ? '使用已有的本机 HTTP MCP 服务。只会提供你列出的工具，请核对这些工具的权限。'
+          : '为 Codex 登记 VPS 管理员已配置的 Python stdio 服务。'),
       h('section', { className: 'vc-settings-group' },
         h('h4', null, '添加 MCP 服务'),
         field('服务 ID', { value: id, placeholder: '例如 docs', maxLength: 32, spellCheck: false,
           autoComplete: 'off', disabled: disabled || !targetId, onChange: event => setId(event.target.value) }),
         h('p', null, targetId ? '以小写字母开头，只包含小写字母、数字、下划线或短横线。'
-          : '请连接 VPS 并核对 Codex 或 Antigravity 连接。'),
+          : localSdk ? '登记本机配置后可添加服务。' : '请连接 VPS 并核对 Codex 或 Antigravity 连接。'),
+        localSdk ? h(React.Fragment, null,
+          field('本机 HTTP 地址', { value: url, maxLength: 256, placeholder: 'http://127.0.0.1:8000/mcp',
+            disabled: disabled || !targetId, onChange: event => setUrl(event.target.value) }),
+          field('允许调用的工具', { value: toolNames, maxLength: 2100, placeholder: '例如 search, read',
+            disabled: disabled || !targetId, onChange: event => setToolNames(event.target.value) })) : null,
         idExists ? h('p', { role: 'status' }, '已添加此服务 ID。') : null,
-        actions(button('添加', add, disabled || !targetId || idExists || !registryId.test(id), true))),
+        actions(button('添加', add, disabled || !targetId || idExists || !registryId.test(id) ||
+          localSdk && !validLocalMcpEndpoint(configured.url, tools), true))),
       servers.map(server => h('section', { key: server.id, className: 'vc-settings-group' },
         h('h4', null, server.id),
+        server.local ? h('p', null, server.local.url + ' · ' + server.local.tools.join('、')) : null,
         actions(toggle('启用服务', server.enabled, enabled => submit({ op: 'save-server', server: { ...server, enabled } }), disabled),
           button('移除服务', () => submit({ op: 'remove-server', id: server.id, targetId }), disabled)))));
   }
@@ -144,7 +160,7 @@ export function createExtensionSettings(React) {
               h('p', { className: 'vc-extension-preview' }, prompt.text))))))));
   }
 
-  function MemoryExtractionModel({ state, memoryTargetId, readMemoryModels, submit, disabled }) {
+  function MemoryExtractionModel({ state, memoryTargetId, readMemoryModels, submit, disabled, localSdk }) {
     const saved = state.memoryExtractionModels.find(({ targetId }) => targetId === memoryTargetId);
     const savedModel = saved?.model ?? '';
     const savedEffort = saved?.effort ?? '';
@@ -176,7 +192,7 @@ export function createExtensionSettings(React) {
         const result = await readMemoryModels(controller.signal);
         if (!controller.signal.aborted) setModels(result);
       } catch {
-        if (!controller.signal.aborted) setError('无法读取此 VPS 的 Codex 模型目录。');
+        if (!controller.signal.aborted) setError(localSdk ? '无法读取本机 Codex 模型目录。' : '无法读取此 VPS 的 Codex 模型目录。');
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -189,10 +205,11 @@ export function createExtensionSettings(React) {
 
     return h('section', { className: 'vc-settings-group' },
       h('h4', null, '记忆提炼模型'),
-      h('p', { className: 'vc-settings-description' }, '个人和项目自动记忆共用此 VPS 的提炼设置，聊天模型单独设置。'),
+      h('p', { className: 'vc-settings-description' }, localSdk ? '个人和项目自动记忆共用此本机配置的提炼设置。'
+        : '个人和项目自动记忆共用此 VPS 的提炼设置，聊天模型单独设置。'),
       field('Codex 模型', { value: model, disabled: disabled || !ready || loading || (!models && !model),
         onChange: event => { setModel(event.target.value); setEffort(''); } }, 'select', [
-        h('option', { key: '', value: '' }, '使用 VPS 默认模型'),
+        h('option', { key: '', value: '' }, localSdk ? '使用本机配置的默认模型' : '使用 VPS 默认模型'),
         model && !selected ? h('option', { key: model, value: model }, models ? `${model}（当前不可用）` : model) : null,
         ...Array.from(models ?? [], ({ id, displayName }) => h('option', { key: id, value: id }, displayName)),
       ]),
@@ -203,25 +220,30 @@ export function createExtensionSettings(React) {
           models ? `${effortName(effort)}（当前不可用）` : effortName(effort)) : null,
         ...offeredEfforts.map(id => h('option', { key: id, value: id }, effortName(id))),
       ]),
-      !ready ? h('p', { className: 'vc-settings-description' }, '连接 VPS 并切换为 VPS 执行后可调整提炼模型。') : null,
-      models?.length === 0 ? h('p', { role: 'status' }, '此 VPS 没有返回可选的 Codex 模型。') : null,
+      !ready ? h('p', { className: 'vc-settings-description' }, localSdk ? '选择本机配置并开启本机执行后可调整。'
+        : '连接 VPS 并切换为 VPS 执行后可调整提炼模型。') : null,
+      models?.length === 0 ? h('p', { role: 'status' }, '当前配置没有返回可选的 Codex 模型。') : null,
       error ? h('p', { className: 'vc-settings-inline-error', role: 'alert' }, error) : null,
       actions(button(loading ? '正在读取模型目录…' : '读取 Codex 模型目录', load, disabled || !ready || loading),
         button('保存提炼设置', save, disabled || !ready || loading || !dirty || !available, true)));
   }
 
-  function MemorySettings({ state, submit, targetId, memoryTargetId, connectionName, readMemoryModels, projects, selectedProject, disabled }) {
+  function MemorySettings({ state, submit, targetId, memoryTargetId, connectionName, readMemoryModels, projects, selectedProject, disabled, localSdk }) {
     const [draft, setDraft] = React.useState(null);
     const [automaticProject, setAutomaticProject] = React.useState(selectedProject);
     React.useEffect(() => setAutomaticProject(selectedProject), [selectedProject]);
     const projectId = projects.has(automaticProject) ? automaticProject : '';
     const policy = automaticMemoryPolicy(state, { targetId: memoryTargetId, projectId });
+    const personalPolicy = automaticMemoryPolicy(state, { targetId: memoryTargetId, projectId: null, scopedPersonal: localSdk });
+    const location = localSdk ? '本机 SDK' : 'VPS SSH';
+    const scope = localSdk ? '此本机配置' : '此 VPS';
+    const allProjects = localSdk ? '此本机配置的所有项目' : '此 VPS 的所有项目';
     const personalNotes = state.memories.filter(note => note.source && note.targetId === memoryTargetId && note.projectId === null);
     const automaticNotes = state.memories.filter(note => note.source && note.targetId === memoryTargetId && note.projectId === projectId);
     const manualNotes = state.memories.filter(note => !note.source && note.targetId === targetId);
     const projectLabel = id => projects.get(id) ?? '已移除的项目';
     const scopeLabel = note => note.projectId !== null ? projectLabel(note.projectId) :
-      (note.source ? '此 VPS 的个人自动记忆' : '此 VPS 的所有项目');
+      (note.source ? (localSdk ? '此本机配置的个人自动记忆' : '此 VPS 的个人自动记忆') : allProjects);
     const projectOptions = Array.from(projects, ([value, label]) => h('option', { key: value, value }, label));
 
     function edit(key, value) {
@@ -257,7 +279,7 @@ export function createExtensionSettings(React) {
       h('p', null, '正文最多 2,000 个字符和 2,400 个 UTF-8 字节。'),
       draft.source ? h('p', null, scopeLabel(draft)) : field('生效范围', { value: draft.projectId ?? '', disabled,
         onChange: event => edit('projectId', event.target.value || null) }, 'select', [
-        h('option', { key: '', value: '' }, '此 VPS 的所有项目'), ...projectOptions,
+        h('option', { key: '', value: '' }, allProjects), ...projectOptions,
         draft.projectId && !projects.has(draft.projectId) ? h('option', { key: draft.projectId, value: draft.projectId },
           projectLabel(draft.projectId)) : null,
       ]),
@@ -266,12 +288,14 @@ export function createExtensionSettings(React) {
         button('取消', () => setDraft(null), disabled))) : null;
 
     return h(React.Fragment, null,
-      h('p', { className: 'vc-settings-current' }, memoryTargetId ? `作用范围 · VPS SSH · ${connectionName || '当前 VPS'}`
-        : '配置 VPS SSH 后可查看此连接的记忆。'),
+      h('p', { className: 'vc-settings-current' }, memoryTargetId ? [ '作用范围', location, connectionName || scope ].join(' · ')
+        : '完成 ' + location + ' 配置后可查看记忆。'),
       h('section', { className: 'vc-settings-group' },
-        toggle('开启个人自动记忆', state.personalMemory?.enabled ?? false,
-          enabled => submit({ op: 'set-personal-memory', enabled }), disabled, {
-            title: '个人自动记忆', description: '用于未归类的普通聊天。记忆按 VPS 保存和使用，提炼使用 VPS 上的 Codex 额度。',
+        toggle('开启个人自动记忆', localSdk ? personalPolicy?.enabled ?? false : state.personalMemory?.enabled ?? false,
+          enabled => submit(localSdk ? { op: 'set-scoped-personal-memory', targetId: memoryTargetId, enabled } :
+            { op: 'set-personal-memory', enabled }), disabled || (localSdk && !memoryTargetId), {
+            title: '个人自动记忆', description: localSdk ? '用于此配置下未归类的普通聊天。提炼使用本机 Codex 的额度。'
+              : '用于未归类的普通聊天。记忆按 VPS 保存和使用，提炼使用 VPS 上的 Codex 额度。',
           })),
       draft?.source && draft.projectId === null ? draftForm : null,
       personalNotes.map(noteCard),
@@ -279,24 +303,27 @@ export function createExtensionSettings(React) {
         toggle('开启此项目的自动记忆', policy?.enabled ?? false,
           enabled => submit({ op: 'set-automatic-memory', targetId: memoryTargetId, projectId, enabled }),
           disabled || !memoryTargetId || !projectId, {
-            title: '自动项目记忆', description: '同一 VPS 下，项目会话可以跨工具引用相关记忆，包括手动添加的项目记忆。',
+            title: '自动项目记忆', description: localSdk ? '此配置下同一项目的对话和 Agent 可以引用相关记忆。'
+              : '同一 VPS 下，项目会话可以跨工具引用相关记忆，包括手动添加的项目记忆。',
           }),
         field('记忆所属项目', { 'aria-label': '记忆所属项目', value: projectId,
           disabled: disabled || !projects.size || Boolean(draft?.source && draft.projectId !== null),
           onChange: event => setAutomaticProject(event.target.value) }, 'select', [
           h('option', { key: '', value: '' }, '选择项目'), ...projectOptions,
         ]),
-        h('p', { className: 'vc-settings-description' }, '笔记保存在本机。提炼使用 VPS 上的 Codex 额度，可在输入栏选择独立上下文。'),
-        !memoryTargetId ? h('p', null, '连接 VPS 后可设置自动项目记忆。') : null),
+        h('p', { className: 'vc-settings-description' }, localSdk ? '笔记保存在本机。输入栏可将会话切换为独立上下文。'
+          : '笔记保存在本机。提炼使用 VPS 上的 Codex 额度，可在输入栏选择独立上下文。'),
+        !memoryTargetId ? h('p', null, '完成连接配置后可设置自动项目记忆。') : null),
       draft?.source && draft.projectId !== null ? draftForm : null,
       automaticNotes.map(noteCard),
-      h(MemoryExtractionModel, { state, memoryTargetId, readMemoryModels, submit, disabled }),
+      h(MemoryExtractionModel, { state, memoryTargetId, readMemoryModels, submit, disabled, localSdk }),
       h('section', { className: 'vc-settings-group' },
         toggle('随消息发送手动记忆', state.memoryEnabled,
           enabled => submit({ op: 'set-memory-enabled', enabled }), disabled, {
-            title: '手动记忆', description: '会话未使用自动记忆时，随消息向 VPS 上的 Codex 发送匹配的手动笔记。',
+            title: '手动记忆', description: localSdk ? '会话未使用自动记忆时，随消息向本机 Codex 发送匹配的手动笔记。'
+              : '会话未使用自动记忆时，随消息向 VPS 上的 Codex 发送匹配的手动笔记。',
           })),
-      !targetId ? h('p', null, '请先连接 VPS 并切换到 Codex。') : null,
+      !targetId ? h('p', null, '选择 Codex 执行配置后可添加笔记。') : null,
       draft && !draft.source ? draftForm : actions(button('添加记忆',
         () => setDraft(blankNote(projects.has(selectedProject) ? selectedProject : null)), disabled || !targetId || Boolean(draft))),
       manualNotes.map(noteCard));
@@ -323,7 +350,7 @@ export function createExtensionSettings(React) {
         await change(update);
         return true;
       } catch {
-        setError(op === 'set-memory-extraction-model' ? '无法保存记忆提炼设置。请核对 VPS 连接和 Codex 模型目录，或恢复默认。'
+        setError(op === 'set-memory-extraction-model' ? '无法保存记忆提炼设置。请核对连接和 Codex 模型目录，或恢复默认。'
           : section === 'plugins' ? '无法保存提示词模板，请检查清单格式、内容长度和清单 ID。' : '无法保存，请检查设置内容和长度后重试。');
         return false;
       } finally {

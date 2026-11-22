@@ -32,7 +32,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
   editText, saveConversationPreference, saveModelParameters,
   ExtensionSettings, extensionsForTurn, automaticMemoryPolicy, conversationIsolated, projectMemoryNotes,
   AgentPresetSettings, WorkflowPanel, useWorkflows = () => null, SetupGuide, setupConnectionKey,
-  VpsConnectionChecks, useVpsConnectionChecks = () => null }) {
+  VpsConnectionChecks, useVpsConnectionChecks = () => null, localSdk = false }) {
   const h = React.createElement;
   const MarkdownReply = createMarkdownReply(React, CodeBlock, parseStreamingMarkdown);
   const DesignCanvas = createDesignCanvas(React);
@@ -45,6 +45,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
   const apiPath = '/dsh-vps-chat/api/';
   const maxPromptLength = 8192;
   const maxSteerLength = 1200;
+  const unboundDraft = 'local-unconfigured';
+  const localSendRejections = new Set(['auth_required', 'runtime_unavailable', 'invalid_profile', 'invalid_directory',
+    'session_conflict', 'profile_not_found', 'browse_only']);
+  const localStartFailures = new Set(['invalid_environment', 'invalid_directory', 'start_failed', 'resources_changed']);
   const emptyList = [];
   const defaultModelParameters = Object.freeze({});
   const streamPollInterval = 650;
@@ -63,7 +67,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     'storage_before_send', 'mode_conflict', 'relay_required', 'workbench_browse_only', 'memory_scope_changed',
   ]);
   const statusLabels = {
-    pending: '等待 VPS 确认', running: 'VPS 正在处理', stopping: '正在停止', stopped: '已停止',
+    pending: localSdk ? '等待本机 SDK 确认' : '等待 VPS 确认',
+    running: localSdk ? '本机 Codex 正在处理' : 'VPS 正在处理', stopping: '正在停止', stopped: '已停止',
     complete: '已完成', failed: '执行失败', unknown: '结果待确认',
   };
   const steerLabels = {
@@ -113,8 +118,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     setup: '在 VPS 上安装官方 Claude Code 并登录 Claude 订阅。',
     capabilities: '在 VPS 原生终端中选择模型和继续历史会话。',
   };
-  const toolIds = [...chatTools.map(({ id }) => id), subscriptionProvider];
-  const toolsWithModels = chatTools.filter(({ modelCatalog }) => modelCatalog).map(({ id }) => id);
+  const toolIds = localSdk ? ['codex'] : [...chatTools.map(({ id }) => id), subscriptionProvider];
+  const toolsWithModels = chatTools.filter(({ id, modelCatalog }) => toolIds.includes(id) && modelCatalog).map(({ id }) => id);
 
   const css = chatSurfaceCss(separatorWidth) + projectFoldersCss + accountDialogCss + providerPickerCss + themeRippleCss + settingsCss + contextMenuCss +
     (saveConversationPreference ? conversationActionsCss : '') +
@@ -260,6 +265,13 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
   function readPreset({ preset }) {
     if (preset === null) return null;
     const { settings, name } = preset ?? {};
+    if (localSdk) {
+      if (typeof name !== 'string' || !name.trim() || name.length > 80 ||
+          settings?.location !== 'local-sdk' || settings.provider !== 'codex' || !identifier.test(settings.profileId)) {
+        throw new Error('本机配置暂不可用。');
+      }
+      return { name, settings, ...readList(preset) };
+    }
     if (typeof name !== 'string' || !name.trim() || name.length > 64 ||
         settings?.hostKeyConfirmed !== true || typeof settings.provider !== 'string' ||
         !Object.hasOwn(providers, settings.provider) ||
@@ -328,7 +340,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       if (note.turnId !== turn.id || steering.some((entry) => entry.id.toLowerCase() === note.id)) continue;
       steering.push({ ...note, state: sendingSteer === note.id ? 'submitting' : 'unknown' });
     }
-    return h('article', { className: 'vc-turn', 'data-turn-id': turn.id, tabIndex: -1 },
+    return h('article', { className: 'vc-turn', 'data-turn-id': turn.id, 'data-turn-state': state, tabIndex: -1 },
       h('div', { className: 'vc-user vc-text', 'aria-label': '你的消息' }, workflowEdit?.prompt ?? turn.prompt),
       steering.length ? h('ol', { className: 'vc-steering', 'aria-label': '本轮补充' },
         steering.map((note) => h('li', { key: note.id, 'data-steer-id': note.id, 'data-state': note.state },
@@ -341,6 +353,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           turn.model || turn.effort ? h('span', { className: 'vc-answer-model' },
             turn.model || '推理强度', turn.effort ? ` · ${turn.effort}` : '') : null,
           h('span', { className: 'vc-answer-state', 'data-state': state }, statusLabels[state]),
+          localSdk && turn.message ? h('span', { className: 'vc-answer-state', 'data-state': state }, turn.message) : null,
           turn.reply ? h(ReplyCopy, { source: turn.reply }) : null),
         turn.reply ? h(MarkdownReply, { source: turn.reply, collapseHtml: design, onStreamingRender,
           streaming: Boolean(onStreamingRender && turn.streaming && isActive(state)) }) : null,
@@ -365,7 +378,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
   function Workbench({ projectCatalog, terminalView, active = true, visible = true, resourcesOpen, setResourcesOpen,
     access, accessPending, changeAccess, extensions, agentPresets, workflowStore, onNewChat, newChatRequest = 0,
-    settingsSurface, applicationPreferences }) {
+    settingsSurface, applicationPreferences, local }) {
     const workspaceSnapshot = React.useSyncExternalStore(projectCatalog.subscribe, projectCatalog.getSnapshot);
     const SubscriptionTerminal = React.useSyncExternalStore(terminalView.subscribe, terminalView.getSnapshot);
     const [subscriptionOpen, setSubscriptionOpen] = React.useState(false);
@@ -403,6 +416,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [hostPreferences, setPreferences] = React.useState(readPreferences);
     const preferences = applicationPreferences?.value ?? hostPreferences;
     const [toolProfiles, setToolProfiles] = React.useState({});
+    const [localToolProfiles, setLocalToolProfiles] = React.useState({});
     const toolProfileWrites = React.useRef(Promise.resolve());
     const activeToolKey = React.useRef(toolPreferences.key);
     activeToolKey.current = toolPreferences.key;
@@ -424,7 +438,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [pollPaused, setPollPaused] = React.useState(false);
     const [settingsView, setSettingsView] = React.useState({ tab: false, visit: 0 });
     const [savedConfiguration, setSavedConfiguration] = React.useState(null);
-    const settingsLabel = VpsConnectionChecks ? '设置' : 'VPS 设置';
+    const settingsLabel = localSdk || VpsConnectionChecks ? '设置' : 'VPS 设置';
     const [setupOpen, setSetupOpen] = React.useState(false);
     const [accountOpen, setAccountOpen] = React.useState(null);
     const [requestedAccount, setRequestedAccount] = React.useState(null);
@@ -459,7 +473,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [savingModelParameters, setSavingModelParameters] = React.useState(false);
     const modelParameterWrite = React.useRef(false);
     const [acknowledgeSwitch, setAcknowledgeSwitch] = React.useState(null);
-    const [rpc] = React.useState(createRpc);
+    const [sshRpc] = React.useState(createRpc);
+    const rpc = localSdk ? local.request : sshRpc;
     const viewId = React.useId();
     const workbench = React.useRef(null);
     const body = React.useRef(null);
@@ -478,13 +493,23 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const scroll = React.useRef(null);
     const followReply = React.useRef(true);
     const ready = Boolean(connection && scope);
-    const tools = [...chatTools.map((tool) => ({ ...tool, available: true })),
-      { ...subscriptionTool, available: Boolean(SubscriptionTerminal) }];
+    const tools = localSdk ? [{ ...chatTools[0], available: true }] :
+      [...chatTools.map((tool) => ({ ...tool, available: true })), { ...subscriptionTool, available: Boolean(SubscriptionTerminal) }];
     const configuredTools = tools.filter(({ id, available }) => available && toolPreferences.ids.includes(id));
     const chatEnabled = ready && toolPreferences.ids.includes(connection.provider);
     const remoteEnabled = access?.mode !== 'browse' && !accessPending;
     const settingsTab = settingsSurface ? settingsSurface.tab : settingsView.tab;
-    const configuration = savedConfiguration ?? { settings: connection, targetId: scope, memoryTargetId,
+    const configProfile = local?.settingsProfile;
+    const configPreferences = React.useMemo(() => {
+      if (!configProfile) return null;
+      const key = 'dsh-vps-chat:local-tools:v1:' + configProfile.id;
+      return { tools: { key, ids: ['codex'] }, profiles: localToolProfiles[key] ?? readToolProfiles(key, toolIds) };
+    }, [configProfile?.id, localToolProfiles]);
+    const localConfiguration = configProfile && configProfile.id !== connection?.profileId && {
+      ...local.routeForTarget(configProfile.targetId), memoryTargetId: configProfile.targetId,
+      name: configProfile.name, ...configPreferences,
+    };
+    const configuration = localConfiguration || savedConfiguration || { settings: connection, targetId: scope, memoryTargetId,
       name: connectionName, tools: toolPreferences, profiles: toolProfiles };
     const configurationReady = Boolean(configuration.settings && configuration.targetId);
     const modelAllowed = remoteEnabled && chatEnabled && providers[connection.provider]?.modelCatalog === true;
@@ -520,7 +545,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       : !selectedProject && !design && !projectWarning ? null : undefined;
     const automaticMemory = !memoryIsolated && !projectMemorySuppressed && memoryAvailable &&
       memoryProject !== undefined && memoryTargetId &&
-      automaticMemoryPolicy(extensions.state, { targetId: memoryTargetId, projectId: memoryProject })?.enabled;
+      automaticMemoryPolicy(extensions.state, { targetId: memoryTargetId, projectId: memoryProject, scopedPersonal: localSdk })?.enabled;
     const automaticMemoryLabel = memoryProject === null ? '个人记忆' : '项目记忆';
     const turnExtensions = extensions && activeTool === 'codex' ? extensionsForTurn(extensions.state, {
       targetId: scope, projectId: projects.has(selectedProject) ? selectedProject : '',
@@ -536,7 +561,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const antigravityTargetId = !remoteEnabled || !antigravityConfigured || !connection?.hostKeyConfirmed ? ''
       : connection.provider === 'antigravity' ? scope
         : antigravityRoute?.connection === connection && antigravityRoute?.scope === scope ? antigravityRoute.targetId : '';
-    const moduleCatalog = extensions ? { servers: extensions.state.servers, plugins: extensions.state.plugins,
+    const moduleCatalog = extensions ? { servers: extensions.state.servers.filter((server) => Boolean(server.local) === localSdk),
+      plugins: extensions.state.plugins, localSdk,
       codexTargetId, antigravityTargetId } : null;
     const category = projectFilter && !projects.has(projectFilter) ? null : projectFilter;
     const visibleRows = category === null ? rows : rows.filter((row) => {
@@ -582,7 +608,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const attached = design && designSubmission?.targetId === scope && designSubmission?.sessionId === selected
       ? designSubmission : null;
     const designStorageKey = design ? `dsh-vps-design:v1:${scope}:${selected}` : '';
-    const draft = drafts[selected] ?? '';
+    const draftId = selected ?? (localSdk ? unboundDraft : selected);
+    const draft = drafts[draftId] ?? '';
     const prompt = draft.trim();
     const attempt = attempts[selected];
     const turns = snapshot?.session.turns ?? emptyList;
@@ -603,7 +630,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const modelKey = `${scope}:${selected}`;
     const catalog = modelCatalogs[scope];
     const savedModel = modelAllowed && toolProfiles[connection.provider]?.model;
-    const defaultModel = savedModel?.targetId === scope ? savedModel : undefined;
+    const defaultModel = savedModel?.targetId === scope ? savedModel : localSdk && local.profile?.targetId === scope
+      ? { id: local.profile.model, effort: local.profile.effort, targetId: scope } : undefined;
     const unavailableModel = defaultModel && catalog?.models && !catalog.models.some(({ id }) => id === defaultModel.id);
     const sessionModel = modelSelections[modelKey];
     const modelSelection = sessionModel === null ? undefined : sessionModel ?? (unavailableModel ? undefined : defaultModel);
@@ -647,14 +675,15 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const approvalDisabled = Boolean(working || attempt || pollPaused);
     const approvalUnconfirmed = approvalOffered && (lastTurn.approvals ?? emptyList).some((request) =>
       request.state === 'unknown' || currentApprovalAttempts?.[request.id]?.state === 'unknown');
-    const canSend = Boolean(remoteEnabled && chatEnabled && !parametersBlocked && !savingModelParameters &&
+    const canSend = Boolean(remoteEnabled && (!localSdk || local.runtimeReady && local.profile?.id === connection?.profileId) &&
+      chatEnabled && !parametersBlocked && !savingModelParameters &&
       (!design || designAvailable) && !attached?.error &&
       (attached?.base ? canBranchDesign : snapshot?.canSend) && !attempt && !working && !pollPaused &&
       !unconfirmedPrompt && !isActive(lastState) && lastState !== 'unknown' && prompt && draft.length <= maxPromptLength);
     const shouldPoll = Boolean(visible && remoteEnabled && ready && selected && !working && !attempt && !pollPaused && isActive(lastState));
     const pollInterval = lastTurn?.streaming === true ? streamPollInterval : legacyPollInterval;
     const workflows = useWorkflows({ store: workflowStore, rpc, readList, connection, remoteEnabled,
-      toolIds: toolPreferences.ids, scope, sessionId: selected, prepareChat: prepareWorkflowChat,
+      toolIds: toolPreferences.ids, scope, sessionId: selected, prepareChat: prepareWorkflowChat, local,
       savePreference: saveConversationPreference, report: setFeedback });
 
     const moduleCatalogEnabled = Boolean(extensions);
@@ -724,6 +753,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }, [split]);
 
     React.useEffect(() => {
+      if (localSdk) setLoadingPreset(true);
+    }, [local?.profile?.id]);
+
+    React.useEffect(() => {
       if (!visible || !loadingPreset) return undefined;
       const controller = new AbortController();
       presetRequest.current = controller;
@@ -731,7 +764,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         try {
           const preset = readPreset(await rpc('preset', {}, controller.signal));
           if (!preset || controller.signal.aborted) return;
-          const preferences = await readToolPreferences(preset.settings, toolIds);
+          const preferences = localSdk ? { key: 'dsh-vps-chat:local-tools:v1:' + preset.settings.profileId, ids: ['codex'] }
+            : await readToolPreferences(preset.settings, toolIds);
           if (controller.signal.aborted) return;
           setToolPreferences({ ...preferences, ids: preferences.ids ?? [preset.settings.provider] });
           setToolProfiles(readToolProfiles(preferences.key, toolIds));
@@ -739,7 +773,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           activateConnection(preset.settings, preset, preset.name);
         } catch (error) {
           if (!controller.signal.aborted) {
-            setFeedback(error.code === 'target_changed'
+            setFeedback(localSdk ? '无法读取本机配置，请检查设置。' : error.code === 'target_changed'
               ? `VPS 预设的主机指纹需要重新核对。请打开「${settingsLabel}」。`
               : `无法读取 VPS 预设。请在「${settingsLabel}」中手动配置。`);
           }
@@ -752,10 +786,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         controller.abort();
         if (presetRequest.current === controller) presetRequest.current = null;
       };
-    }, [visible, loadingPreset, rpc]);
+    }, [visible, loadingPreset, rpc, local?.profile?.id]);
 
     const settingsRequireTarget = ['connection', 'tools', 'accounts', 'agents', 'mcp', 'memory', 'tool-overrides'].includes(settingsTab);
-    const readingConfiguration = Boolean(settingsSurface && settingsRequireTarget && !visible && !ready && !savedConfiguration);
+    const readingConfiguration = Boolean(!localSdk && settingsSurface && settingsRequireTarget && !visible && !ready && !savedConfiguration);
     React.useEffect(() => {
       if (!readingConfiguration) return undefined;
       const controller = new AbortController();
@@ -779,9 +813,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }, [readingConfiguration, rpc]);
 
     React.useEffect(() => {
-      if (!visible || working || handledNewChat.current === newChatRequest) return;
+      if (!visible || working || (localSdk && (loadingPreset || local.profile?.id !== connection?.profileId)) ||
+          handledNewChat.current === newChatRequest) return;
       if (startNewChat()) handledNewChat.current = newChatRequest;
-    }, [visible, chatEnabled, working, newChatRequest, savedConfiguration]);
+    }, [visible, chatEnabled, working, newChatRequest, savedConfiguration, loadingPreset, local?.profile?.id]);
 
     function updateDraft(id, value) {
       if (submittedDraft.current?.sessionId === id) submittedDraft.current = null;
@@ -847,7 +882,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         }
         if (!stop) return previous;
         const observed = messages.find((turn) => turn.id === stop.turnId);
-        if (!isSettled(observed?.state) && !(refreshed && stop.state === 'unknown' && isStopEligible(observed))) {
+        if (!isSettled(observed?.state) && !(localSdk && observed?.state === 'unknown') &&
+            !(refreshed && stop.state === 'unknown' && isStopEligible(observed))) {
           return previous;
         }
         const updated = { ...previous };
@@ -865,6 +901,13 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         if (sent.sharedDesign) setDesignReceipt({ targetId: route, sessionId: id, turnId: sent.id });
         clearAttempt(id, sent);
         clearMatchingDraft(route, id, sent.draft);
+      }
+      const latest = messages.at(-1);
+      const submission = submittedDraft.current;
+      if (localSdk && latest?.state === 'failed' && localStartFailures.has(latest.code) &&
+          submission?.id === latest.id && submission.sessionId === id) {
+        submittedDraft.current = null;
+        setDrafts((previous) => previous[id] ? previous : { ...previous, [id]: submission.draft });
       }
       const key = steerSessionKey(route, id);
       setApprovalAttempts((previous) => {
@@ -926,7 +969,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           if (controller.signal.aborted) return;
           const record = readSession(response, selected, mode);
           const state = record.session.turns.at(-1)?.state;
-          if (state === 'unknown' && retry()) return;
+          if (!localSdk && state === 'unknown' && retry()) return;
           accept(record, scope, { refreshed: true, steering: pendingSteers });
           retries = 0;
           setFeedback((previous) => previous === automaticStatusRetry ? '' : previous);
@@ -1381,6 +1424,9 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     function activateConnection(settings, { targetId: route, sessions: list, memoryTargetId: memoryRoute }, name = '') {
       const local = (allRows[route] ?? []).filter((row) => row.local && !list.some(({ id }) => id === row.id));
       const row = draftRow(local, 'chat', category ?? '');
+      if (localSdk && !scope && drafts[unboundDraft]) {
+        setDrafts((previous) => ({ ...previous, [row.id]: previous[unboundDraft], [unboundDraft]: '' }));
+      }
       try {
         setProjectMemberships(readProjectMemberships(route));
         setProjectWarning('');
@@ -1484,6 +1530,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       try {
         const saved = await write;
         if (key === activeToolKey.current) setToolProfiles(saved);
+        if (localSdk) setLocalToolProfiles((previous) => ({ ...previous, [key]: saved }));
         setSavedConfiguration((previous) => previous?.tools.key === key ? { ...previous, profiles: saved } : previous);
       } catch {
         setSettingsError('执行端的独立设置未能保存到本机。');
@@ -1514,7 +1561,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }
 
     async function readMemoryModels(signal) {
-      if (!remoteEnabled || !configurationReady || !configuration.memoryTargetId || !configuration.settings?.hostKeyConfirmed) {
+      if (!remoteEnabled || !configurationReady || !configuration.memoryTargetId ||
+          (!localSdk && !configuration.settings?.hostKeyConfirmed)) {
         throw new Error('请连接并确认当前 VPS 后读取记忆提炼模型。');
       }
       const settings = { ...configuration.settings, provider: 'codex' };
@@ -1605,7 +1653,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }
 
     function prepareWorkflowChat() {
-      if (!remoteEnabled || !chatEnabled || providerSwitchLocked || action.current) return null;
+      if (!remoteEnabled || (localSdk && !local.runtimeReady) || !chatEnabled || providerSwitchLocked || action.current) return null;
       const sessionId = newSession('chat', { projectId: '' });
       if (!sessionId) return null;
       setSubscriptionOpen(false);
@@ -1860,7 +1908,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           if (!record.session.turns.some((turn) => turn.id === sent.id)) setFeedback('未能确认提交回执。请查询这轮任务。');
         } catch (error) {
           if (signal.aborted) return;
-          if (error.code === 'target_changed' || rejectedBeforeSend.has(error.code)) {
+          if (error.code === 'target_changed' || rejectedBeforeSend.has(error.code) || localSdk && localSendRejections.has(error.code)) {
             discardUnsentRevision();
             clearAttempt(selected, sent);
             if (submittedDraft.current === sent) submittedDraft.current = null;
@@ -2006,7 +2054,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       if (!selected || draft || attempt || action.current) return;
       updateDraft(selected, design
         ? '为一家独立书店设计网站。制作首页和活动详情两个画板，突出本周推荐与读书会报名，采用米白与深绿配色。'
-        : '请阅读 VPS 工作区的项目说明，用三条要点介绍这个项目，再列出值得先看的文件。');
+        : localSdk ? '请阅读本机只读工作目录的项目说明，用三条要点介绍这个项目，再列出值得先看的文件。'
+          : '请阅读 VPS 工作区的项目说明，用三条要点介绍这个项目，再列出值得先看的文件。');
       editor.current?.focus();
     }
 
@@ -2022,7 +2071,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         : approvalUnconfirmed ? '工具授权结果待确认。可查询原任务。'
           : needsCheck ? '请查询原任务状态后继续。' : blockedAfterTurn ? '请新建对话以继续使用。'
           : parametersBlocked ? '请在「模型 → 高级参数」确认该执行端的参数，或恢复默认后发送。' : '');
-    const title = conversationOptions?.[selected]?.title ?? snapshot?.session.title ?? selectedRow?.title ?? 'VPS 对话';
+    const title = conversationOptions?.[selected]?.title ?? snapshot?.session.title ?? selectedRow?.title ??
+      (localSdk ? '本地 Codex SDK' : 'VPS 对话');
     const routeStatus = ready ? `${connectionName ? `${connectionName} · ` : ''}VPS 已配置` : 'VPS 待配置';
     const stopBusy = working === 'stop' || stopPending;
     const steerBusy = working === 'steer';
@@ -2032,7 +2082,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const sendKey = activePreferences.sendKey === 'ctrl-enter' ? 'Ctrl+Enter' : 'Enter';
     const newlineKey = activePreferences.sendKey === 'ctrl-enter' ? 'Enter' : 'Shift+Enter';
     const composerHint = !remoteEnabled ? '仅浏览 · 可以编辑并保留草稿'
-      : working === 'send' ? '正在发送至 VPS' : stopBusy ? '等待 VPS 确认停止'
+      : working === 'send' ? (localSdk ? '正在发送至本机 Codex' : '正在发送至 VPS')
+        : stopBusy ? (localSdk ? '等待本机 SDK 确认停止' : '等待 VPS 确认停止')
       : steerBusy ? '正在提交给当前轮次'
         : waitingForApproval ? '等待工具审批 · 可以保留补充草稿或停止生成'
         : steerOffered ? (earlierSupplement ? '这是前一轮的补充草稿。编辑后可用于当前轮次。' : `${sendKey} 补充当前轮次 · ${newlineKey} 换行`)
@@ -2050,12 +2101,15 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const currentProjectTitle = selectedProject
       ? projects.get(selectedProject) ?? (workspaceSnapshot.phase === 'pending' ? '正在读取项目' : '项目不可用')
       : '未归类';
-    const toolPicker = ready && configuredTools.length ? h(ProviderPicker, {
+    const toolPicker = localSdk ? h('div', { className: 'vc-tool-picker' },
+      h('div', { className: 'vc-tool-summary', title: local.profile?.name },
+        h('span', { className: 'vc-tool-badge' }, menuIcon(h, 'codex')), h('span', { className: 'vc-tool-label' }, 'Codex')))
+      : ready && configuredTools.length ? h(ProviderPicker, {
       value: activeTool, tools: configuredTools, disabled: providerSwitchLocked, active,
       select: changeProvider, closeOnSelect: crossesSubscriptionView, docked: sidebarActions,
     }) : null;
     const accessProvider = showingSubscription ? subscriptionProvider : connection?.provider;
-    const accessButton = access ? h(AccessTrigger, { access, provider: accessProvider,
+    const accessButton = access ? h(AccessTrigger, { access, provider: accessProvider, localSdk,
       expanded: expandedComposerKind === 'access', open: openComposerPanel }) : null;
     const closeResources = React.useCallback(() => setResourcesOpen(false), [setResourcesOpen]);
     const groups = new Map([['', []], ...[...projects.keys()].map((id) => [id, []])]);
@@ -2153,13 +2207,13 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         onStreamingRender: parseStreamingMarkdown && turn.id === lastTurn?.id ? followLatestReply : undefined,
       }))
         : h('div', { className: 'vc-welcome' },
-          h('h1', null, !ready ? `通过 VPS 与 ${providerName} 对话` : !chatEnabled ? '选择一个执行端'
+          h('h1', null, !ready ? (localSdk ? '开始一段对话' : `通过 VPS 与 ${providerName} 对话`) : !chatEnabled ? '选择一个执行端'
             : working === 'history' ? '正在读取会话'
             : design ? '从设计需求开始' : '开始一段对话'),
           !ready ? h(React.Fragment, null,
-            h('p', null, '在此输入消息、查看回复，模型请求由 VPS 发出。'),
+            h('p', null, localSdk ? '配置工作目录和模型后开始聊天。' : '在此输入消息、查看回复，模型请求由 VPS 发出。'),
             h('button', { type: 'button', className: 'vc-button vc-primary',
-              onClick: SetupGuide ? openSetup : () => openSettings() }, SetupGuide ? '开始 VPS 接入' : '配置 VPS'))
+              onClick: SetupGuide ? openSetup : () => openSettings() }, localSdk ? '配置本机 SDK' : SetupGuide ? '开始 VPS 接入' : '配置 VPS'))
             : !chatEnabled ? h(React.Fragment, null,
               h('p', null, configuredTools.length ? '从切换菜单选择已配置的执行端。' : '配置执行端后即可对话。'),
               SetupGuide && !configuredTools.length ? h('button', { type: 'button', className: 'vc-button vc-primary',
@@ -2180,14 +2234,15 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         h('form', { className: 'vc-composer', onSubmit: (event) => { event.preventDefault(); submitComposer(); } },
           h('textarea', {
             ref: editor, 'data-vc-focus-area': 'composer',
-            rows: 2, value: draft, maxLength: steerOffered ? maxSteerLength : maxPromptLength, 'aria-label': '消息',
+            rows: 2, value: draft, maxLength: steerOffered ? maxSteerLength : maxPromptLength,
+            'aria-label': localSdk ? '本地对话草稿' : '消息',
             'aria-describedby': chatEnabled ? hintId : undefined,
             placeholder: workflows?.editLabel ? '描述要如何配置工作流'
               : chatEnabled ? (steerOffered ? (design ? '补充当前设计的修改要求，最多 1,200 字符' : '补充当前轮次，最多 1,200 字符')
               : design ? '描述页面、目标用户和视觉方向' : `给 ${providerName} 发消息`)
-              : ready ? '选择执行端后即可发送消息' : '配置 VPS 后即可发送消息',
-            disabled: !chatEnabled || !selected, readOnly: working === 'provider' || working === 'send' || steerBusy,
-            onChange: (event) => updateDraft(selected, event.target.value),
+              : ready ? '选择执行端后即可发送消息' : localSdk ? '配置本机 SDK 后可发送消息' : '配置 VPS 后即可发送消息',
+            disabled: !localSdk && (!chatEnabled || !selected), readOnly: working === 'provider' || working === 'send' || steerBusy,
+            onChange: (event) => updateDraft(draftId, event.target.value),
             onContextMenu: openEditorMenu,
             onKeyDown: (event) => { if (!openEditorMenu(event)) handleKey(event); }, onCompositionStart: () => {
               composing.current = true;
@@ -2227,7 +2282,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             }, menuIcon(h, 'chat'), h('span', { className: 'vc-option-label' }, '历史')) : null,
             openMaterials: design && chatEnabled && snapshot ? () => setMaterialsOpen(true) : undefined,
             materialsDisabled: waitingForReceipt, wideActions: Boolean(steerOffered || supplementDraft),
-            mode, report, attached, selection: modelSelection, catalog, showModeIcon: sidebarActions,
+            mode, report, attached, selection: modelSelection, catalog, showModeIcon: sidebarActions, localSdk,
             accessButton: showingSubscription ? null : accessButton,
             memoryMode: memoryAvailable ? memoryIsolated ? '独立上下文'
               : projectMemorySuppressed ? '项目记忆关闭' : automaticMemory ? automaticMemoryLabel : '记忆' : null,
@@ -2263,17 +2318,36 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       settingsSurface.show(element, { 'data-vps-chat': '', 'data-vc-color': preferences.color,
         'data-vc-accent': preferences.accent, 'data-vc-motion': preferences.motion });
     const configuredProvider = configuration.settings?.provider;
-    return h('div', { ref: workbench, 'data-vps-chat': '', 'data-resizing': resizing, hidden: !visible, inert: !visible,
+    const localPanels = local?.exampleReady && workflows ? { ...local.panels,
+      connection: h(React.Fragment, null, local.panels.connection,
+        h('section', { className: 'vc-settings-group' },
+          h('h4', null, '示例工作流'),
+          h('p', null, '使用已验证的本机配置运行简报和审校示例。运行会使用本机 Codex 额度。'),
+          h('button', { type: 'button', className: 'vc-button vc-settings-outline',
+            disabled: !remoteEnabled || Boolean(workflows.example.blocked) || scope !== local.profile.targetId,
+            onClick() {
+              setSettingsOpen(false);
+              void workflows.example.start('codex', local.profile.model, local.profile.targetId);
+            },
+          }, '运行示例工作流'))) } : local?.panels;
+    return h('div', { ref: workbench, 'data-vps-chat': '', 'data-local-sdk': localSdk ? '' : undefined,
+      'data-resizing': resizing, hidden: !visible, inert: !visible,
       'data-subscription-open': showingSubscription,
       'data-vc-color': activePreferences.color, 'data-vc-accent': activePreferences.accent,
       'data-vc-text-size': activePreferences.textSize, 'data-vc-width': activePreferences.width,
       'data-vc-motion': activePreferences.motion,
-      onKeyDown: showingSubscription ? undefined : cycleAreaFocus },
+      onKeyDown: showingSubscription ? undefined : (event) => {
+        if (historyOpen && event.key === 'Escape' && !event.defaultPrevented && !event.nativeEvent.isComposing &&
+            !workbench.current.querySelector('dialog[open], :popover-open')) {
+          setHistoryOpen(false);
+          workbench.current.parentElement.querySelector('.desktop-sidebar-button')?.focus({ preventScroll: true });
+        } else cycleAreaFocus(event);
+      } },
       h('style', null, css),
       h('aside', {
         className: 'vc-rail', 'data-open': historyOpen, 'data-design': design,
         style: showingSubscription ? { display: 'none' } : undefined,
-        'aria-label': 'VPS 对话列表', tabIndex: -1, 'data-vc-focus-area': 'history',
+        'aria-label': localSdk ? '本地对话历史' : 'VPS 对话列表', tabIndex: -1, 'data-vc-focus-area': 'history',
       },
         sidebarActions ? h('div', { className: 'vc-rail-content' }, newActions,
           ResourceLibrary ? h('button', { type: 'button', className: 'vc-button vc-resource-entry',
@@ -2326,13 +2400,13 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           type: 'button', className: 'vc-button vc-account-entry', disabled: !ready || providerSwitchLocked,
           onClick: () => openSettings('accounts'),
         }, '账号管理'))),
-      sidebarActions ? h('div', { className: 'vc-sidebar-actions', role: 'group', 'aria-label': 'VPS 操作' },
+      sidebarActions ? h('div', { className: 'vc-sidebar-actions', role: 'group', 'aria-label': localSdk ? '本机操作' : 'VPS 操作' },
         toolPicker,
         h('button', {
           type: 'button', className: 'vc-button vc-sidebar-settings', disabled: providerSwitchLocked,
-          onClick: () => openSettings(),
+          onClick: () => openSettings(), title: localSdk && local.profile ? '配置 · ' + local.profile.name : undefined,
         }, menuIcon(h, 'settings'), settingsLabel)) : null,
-      h('main', { className: 'vc-main' },
+      h('main', { className: 'vc-main', 'aria-label': localSdk ? '本地 Codex SDK 对话' : undefined },
         h('header', { className: 'vc-header', 'data-design': design, 'data-playground': floatingChat },
           h('button', {
             type: 'button', className: 'vc-button vc-history-toggle', 'aria-expanded': historyOpen,
@@ -2356,7 +2430,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             h('div', { className: 'vc-route', 'data-ready': ready },
               sidebarActions ? null : toolPicker,
               h('span', { className: 'vc-route-status', role: 'status' },
-                loadingPreset ? '正在读取 VPS 预设' : working === 'provider' ? '正在切换执行端'
+                localSdk ? local.runtimeStatus : loadingPreset ? '正在读取 VPS 预设' : working === 'provider' ? '正在切换执行端'
                   : ready ? routeStatus : `${providerName} · ${routeStatus}`))),
           !showingSubscription && floatingChat ? h('button', {
             type: 'button', className: 'vc-button vc-playground-back', onClick: leavePlayground,
@@ -2423,7 +2497,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           apply: applyModelParameters, retry: () => setModelParameterRevision((value) => value + 1),
         } : null,
         toolDefault: unavailableModel ? undefined : defaultModel, followsTool: Boolean(defaultModel && modelSelection === defaultModel),
-        access, accessProvider, accessBusy: accessPending || (remoteEnabled && providerSwitchLocked), changeAccess,
+        access, accessProvider, accessBusy: accessPending || (remoteEnabled && providerSwitchLocked), changeAccess, localSdk,
         pluginPrompts, insertPluginPrompt, templateLabel: settingsSurface ? '提示词模板' : undefined,
       })),
       saveConversationPreference || floatingChat ? h('div', { className: 'vc-context-notice', role: 'status' }, contextNotice?.text) : null,
@@ -2444,7 +2518,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       }) : null,
       accountOpen && remoteEnabled && configurationReady && accountOpen.settings === configuration.settings
         ? showSettingsOverlay(h(AccountDialog, { rpc, ...accountOpen, close: () => setAccountOpen(null) })) : null,
-      ResourceLibrary && resourcesOpen ? h(ResourceLibrary, { key: scope, scope, projects, sessions: resourceSessions,
+      ResourceLibrary && resourcesOpen && visible ? h(ResourceLibrary, { key: scope, scope, projects, sessions: resourceSessions,
         readSession: readResourceSession, onClose: closeResources, onOpenSource: openResourceSource, writeClipboard,
         initialProject: category || (projects.has(selectedProject) ? selectedProject : ''),
       }) : null,
@@ -2460,10 +2534,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         tab: settingsTab, ready: configurationReady, name: configuration.name, tools, activeTool: visible ? activeTool : undefined,
         savedTools: configuration.tools.ids, toolKey: configuration.tools.key,
         setTab: (tab) => { setSettingsError(''); setSettingsOpen(tab); },
-        error: settingsError, busy: providerSwitchLocked || readingConfiguration || (visible && loadingPreset),
+        error: settingsError, busy: providerSwitchLocked || readingConfiguration || (visible && loadingPreset) || local?.registerBusy,
         close: () => setSettingsOpen(false), saveConnection: saveSettings, saveTools,
         VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired,
-        navigateLocation: settingsSurface?.navigate, settingsLabel,
+        navigateLocation: settingsSurface?.navigate, settingsLabel, localPanels,
         restoreFocus: settingsSurface?.restoreFocus,
         focusFallback: () => {
           const entry = Array.from(workbench.current?.querySelectorAll('.vc-sidebar-settings, .vc-header-settings') ?? [])
@@ -2474,7 +2548,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         preferences, updatePreferences, profiles: configuration.profiles, updateTool, readModels: readSettingsModels,
         modelTools: remoteEnabled ? toolsWithModels : emptyList, openAccount, remoteEnabled,
         agentSettings: AgentPresetSettings && agentPresets ? { Component: AgentPresetSettings, props: {
-          ...agentPresets, moduleCatalog: savedConfiguration && moduleCatalog ? {
+          ...agentPresets, moduleCatalog: (savedConfiguration || localConfiguration) && moduleCatalog ? {
             ...moduleCatalog, codexTargetId: configuration.memoryTargetId,
             antigravityTargetId: configuredProvider === 'antigravity' ? configuration.targetId :
               connectionDiagnostics?.resultFor('antigravity')?.checked?.list.targetId ?? '',
@@ -2483,7 +2557,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           readModels: async (provider, signal) => (await readSettingsModels(provider, signal)).models,
         } } : null,
         extensionSettings: ExtensionSettings && extensions ? { Component: ExtensionSettings, props: {
-          ...extensions, targetId: configuredProvider === 'codex' ? configuration.targetId : '',
+          ...extensions, localSdk, targetId: configuredProvider === 'codex' ? configuration.targetId : '',
           memoryTargetId: configuration.memoryTargetId, connectionName: configuration.name, projects,
           selectedProject: configuration.targetId === scope ? selectedProject : null,
           readMemoryModels: remoteEnabled && configurationReady && configuration.memoryTargetId ? readMemoryModels : undefined,

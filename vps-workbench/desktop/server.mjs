@@ -14,8 +14,10 @@ import { workflowRunKey } from '../workflow-engine/state.mjs';
 import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
 import { localModels, openCodexRuntime } from './codex-runtime.mjs';
 import { openLocalSdk } from '../local-sdk/service.mjs';
+import { createLocalWorkbench } from '../local-sdk/workbench.mjs';
 
 export { canonicalLocalDirectory, localCredentialVariable } from './codex-runtime.mjs';
+export { localMemoryJournalKey } from '../local-sdk/workbench.mjs';
 
 const staticRoutes = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -53,6 +55,8 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
       // Failure to open local state leaves the original SSH workbench available.
     }
   }
+  const localWorkbench = local && createLocalWorkbench({ service: local, runtimeAvailable, access, data,
+    onChange: onMemoryChanged, onError: onMemoryError });
   const localUnavailable = { ok: false, code: 'local_sdk_unavailable', message: '本机 SDK 记录无法读取。' };
   const bridgeOptions = { pythonPath, executable: join(runtimeRoot, 'DshVpsChatBridge.exe'),
     compatibilityDirectory: join(runtimeRoot, 'compat'), useCurrentAntigravity: true, readRoute };
@@ -165,6 +169,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     host?.dispose();
     bridge.dispose?.();
     server.close();
+    localWorkbench?.dispose();
     await local?.close();
     throw error;
   }
@@ -175,12 +180,21 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     async requestLocal(body) {
       if (body?.location !== 'local-sdk' || body.backend !== 'codex')
         return { ok: false, code: 'execution_location_mismatch', message: '请选择本机 SDK 的 Codex 配置。' };
+      if (body.op === 'workbench') {
+        if (Object.keys(body).length !== 4 || !Object.hasOwn(body, 'payload')) return {
+          ok: false, code: 'invalid_request', message: '本机工作台请求格式不正确。',
+        };
+        return localWorkbench ? localWorkbench.request(body.payload) : localUnavailable;
+      }
       if (local && !runtimeAvailable && body.op === 'send')
         return { ok: false, code: 'runtime_unavailable', message: '找不到打包的本机 Codex 运行时。' };
       return local ? local.request(body) : localUnavailable;
     },
     async registerLocalProfile(profile) { return local ? local.registerProfile(profile) : localUnavailable; },
-    changeMemoryExtractionModel(change) { return chat.changeExtractionModel(change); },
+    changeMemoryExtractionModel(change) {
+      return local?.status().profiles.some(({ targetId }) => targetId === change?.targetId)
+        ? localWorkbench.changeExtractionModel(change) : chat.changeExtractionModel(change);
+    },
     accessChanged() {
       if (access().mode !== 'browse') return;
       host.revokeAccount();
@@ -189,6 +203,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     async close() {
       terminal.dispose();
       host.dispose();
+      localWorkbench?.dispose();
       await local?.close();
       await new Promise((resolve) => {
         server.close(resolve);

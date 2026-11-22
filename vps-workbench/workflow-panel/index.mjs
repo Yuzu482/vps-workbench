@@ -241,7 +241,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
   return function WorkflowPanel({ open, preferRunPane, onClose, workflows, availableProviders, catalogScope, readModels, onChange, onEditInChat,
     proposal, onDismissProposal, run, running, canStart, onStart, onResume, onPause, onStop, exampleError,
     agentPresets = [], onManageAgentPresets, moduleCatalog, projects = emptyProjects, selectedProject,
-    readFileTarget, saveAttachments, readArtifacts }) {
+    readFileTarget, saveAttachments, readArtifacts, localSdk }) {
     const titleId = React.useId();
     const memoryProjectErrorId = React.useId();
     const configurationId = React.useId();
@@ -645,7 +645,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
               dependencies: stageDependencies(draft.stages, draft.edges, stage.id), onDisconnect: disconnectStages,
               catalog: catalogs[stage.provider], load, disabled: writeBusy, presetChoices, onManageAgentPresets, moduleCatalog,
               fileEditor: { key: `${working?.id ?? selected?.id}:${working?.revision ?? selected?.revision ?? 0}:${stage.id}:${stage.provider}`,
-                open, catalogScope, readFileTarget, saveAttachments, busy: fileBusy, disabled: writeBusy || stale,
+                open, catalogScope, readFileTarget, saveAttachments, localSdk, busy: fileBusy, disabled: writeBusy || stale,
                 onChange: changeStageFileAccess, onRequest: requestStageFileAccess },
               onChange: (next) => update({ ...draft, stages: draft.stages.map((item, position) => position === activeStage ? next : item) }),
               onMove: linear ? (next) => moveStage(activeStage, next) : null, onDelete: deleteStage }),

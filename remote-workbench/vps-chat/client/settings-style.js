@@ -83,6 +83,11 @@ export const settingsCss = `
     border:1px solid var(--vc-line); border-radius:11px;
   }
   [data-vps-chat] .vc-settings-group h4 {font-size:14px; margin:0; font-weight:680}
+  [data-vps-chat] .local-config-details {
+    display:grid; grid-template-columns:auto minmax(0,1fr); gap:4px 12px; margin:0;
+  }
+  [data-vps-chat] .local-config-details dt {color:var(--vc-muted)}
+  [data-vps-chat] .local-config-details dd {margin:0; overflow-wrap:anywhere}
   [data-vps-chat] .vc-settings-address {display:grid; grid-template-columns:minmax(0,1fr) minmax(86px,.3fr); gap:10px}
   [data-vps-chat] .vc-workbench-settings .vc-field,
   [data-vps-chat] .vc-tool-profile-fields label {

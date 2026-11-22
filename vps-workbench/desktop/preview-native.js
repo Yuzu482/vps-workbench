@@ -73,12 +73,13 @@
           body: JSON.stringify({ op: 'save-connection', value }) });
         if (!response.ok) throw new Error('preview_connection_unavailable');
       }
-      if (name === 'dsh-vps-chat:workflow-run:v1' && value !== null) {
+      if (['dsh-vps-chat:workflow-run:v1', 'dsh-vps-chat:local-workflow-run:v1'].includes(name) && value !== null) {
         const record = JSON.parse(value);
         const approvals = JSON.parse(state.preferences['dsh-vps-chat:workflows:v1'] ?? '[]');
         const approval = approvals.find(({ id }) => id === record.workflowId) ?? null;
         const response = await fetch('/__preview/workflow-run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ op: 'save-workflow-run', value, approval }) });
+          body: JSON.stringify({ op: 'save-workflow-run', value, approval,
+            ...(name === 'dsh-vps-chat:local-workflow-run:v1' && { location: 'local-sdk' }) }) });
         if (!response.ok) throw new Error('preview_workflow_unavailable');
       }
       const membership = /^dsh-vps-chat-projects:v1:([a-f0-9]{64})$/.exec(name);

@@ -9,7 +9,7 @@ import { workflowKey } from '../workflow-engine/state.mjs';
 import { agentPresetKey, legacyAgentPresetKey } from '../agent-presets/state.mjs';
 import { accessPreference, readAccess, validAccess } from './access.mjs';
 import { importWorkbenchSnapshot } from './migrate.mjs';
-import { canonicalLocalDirectory, localCredentialVariable, startWorkbenchServer } from './server.mjs';
+import { canonicalLocalDirectory, localCredentialVariable, localMemoryJournalKey, startWorkbenchServer } from './server.mjs';
 
 const localApiKey = process.env[localCredentialVariable];
 delete process.env[localCredentialVariable];
@@ -180,7 +180,7 @@ async function start() {
   });
   ipcMain.handle('workbench:set-preference', (event, key, value) => {
     trustedRenderer(event);
-    if ([accessPreference, extensionPreferenceKey, memoryJournalKey, workflowKey, agentPresetKey,
+    if ([accessPreference, extensionPreferenceKey, memoryJournalKey, localMemoryJournalKey, workflowKey, agentPresetKey,
       legacyAgentPresetKey].includes(key)) {
       throw new Error('use_dedicated_settings');
     }
@@ -202,6 +202,13 @@ async function start() {
     trustedRenderer(event);
     if (change?.op === 'accept-automatic-memory') throw new Error('invalid_extension_change');
     if (change?.op === 'set-memory-extraction-model') return runtime.changeMemoryExtractionModel(change);
+    if (change?.op === 'save-server') {
+      const target = change.server?.targetId;
+      if (Boolean(change.server?.local) !== Boolean(runtime.localStatus().profiles?.some(({ targetId }) => targetId === target)) ||
+          (change.server?.local && readAccess(data.preference(accessPreference)).mode !== 'execute')) throw new Error('invalid_mcp_scope');
+    }
+    if (change?.op === 'set-scoped-personal-memory' && !runtime.localStatus().profiles?.some(({ targetId }) => targetId === change.targetId))
+      throw new Error('invalid_local_profile');
     if (change?.op === 'set-automatic-memory' && !data.projects().some(({ workspaceId }) => workspaceId === change.projectId))
       throw new Error('invalid_project');
     return data.changeExtensions(change);

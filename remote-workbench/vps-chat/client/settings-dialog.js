@@ -615,7 +615,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
             tab === 'interaction' ? h(PreferenceRows, {
               rows: interactionRows, values: preferences, change: changePreferences, disabled: locked,
             }) : null,
-            !localPanels && tab === 'tool-overrides' ? ready
+            !localPanels?.['tool-overrides'] && tab === 'tool-overrides' ? ready
               ? h(ToolOverrides, { tools, profiles, preferences, updateTool, busy: locked })
               : h('p', { role: 'status' }, '保存 VPS SSH 配置后可设置执行端偏好。') : null,
             customPanel ? h(extensionSettings.Component, { ...extensionSettings.props, section: tab,

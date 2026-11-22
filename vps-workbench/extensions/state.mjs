@@ -55,12 +55,23 @@ function validateEnabled(value) {
 }
 
 function serverEntry(value) {
-  fields(value, 'id', 'targetId', 'enabled');
+  const hasLocal = Object.hasOwn(value ?? {}, 'local');
+  fields(value, 'id', 'targetId', 'enabled', ...(hasLocal ? ['local'] : []));
   const { id, targetId, enabled } = value;
   validateId(id);
   validateId(targetId, targetPattern);
   validateEnabled(enabled);
-  return Object.freeze({ id, targetId, enabled });
+  if (!hasLocal) return Object.freeze({ id, targetId, enabled });
+  const { local } = value;
+  fields(local, 'url', 'tools');
+  requireValid(validLocalMcpEndpoint(local.url, local.tools));
+  return Object.freeze({ id, targetId, enabled, local: Object.freeze({ url: local.url, tools: Object.freeze([...local.tools]) }) });
+}
+
+export function validLocalMcpEndpoint(url, tools) {
+  const endpoint = typeof url === 'string' && url.length <= 256 && /^http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})\/[A-Za-z0-9._/-]*$/.exec(url);
+  return Boolean(endpoint && Number(endpoint[1]) <= 65535 && Array.isArray(tools) && tools.length > 0 && tools.length <= 32 &&
+    tools.every((tool) => typeof tool === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(tool)) && new Set(tools).size === tools.length);
 }
 
 function noteContent(value) {
@@ -109,7 +120,8 @@ function validateRevision(revision) {
 function policyEntry(value) {
   fields(value, 'targetId', 'projectId', 'enabled', 'revision');
   const { targetId, projectId, enabled, revision } = value;
-  validateProjectScope(targetId, projectId);
+  validateId(targetId, targetPattern);
+  validateProjectId(projectId);
   validateEnabled(enabled);
   validateRevision(revision);
   return Object.freeze({ targetId, projectId, enabled, revision });
@@ -251,9 +263,9 @@ function findProjectPolicy(state, targetId, projectId) {
   return state.automaticMemory.find(item => item.targetId === targetId && item.projectId === projectId);
 }
 
-function findAutomaticPolicy(state, targetId, projectId) {
+function findAutomaticPolicy(state, targetId, projectId, scopedPersonal = false) {
   if (typeof targetId !== 'string' || !targetPattern.test(targetId)) return null;
-  return projectId === null ? state.personalMemory : findProjectPolicy(state, targetId, projectId);
+  return findProjectPolicy(state, targetId, projectId) ?? (projectId === null && !scopedPersonal ? state.personalMemory : null);
 }
 
 function isIsolated(state, targetId, sessionId) {
@@ -331,7 +343,8 @@ export function applyExtensionChange(state, change) {
     case 'save-server': {
       fields(change, 'op', 'server');
       const server = serverEntry(change.server);
-      requireValid(!server.enabled || next.servers.some(item => targetEntryMatches(item, server)));
+      const saved = next.servers.find(item => targetEntryMatches(item, server));
+      requireValid(!server.enabled || saved && JSON.stringify(saved.local) === JSON.stringify(server.local));
       next.servers = replaceEntry(next.servers, server);
       break;
     }
@@ -401,6 +414,18 @@ export function applyExtensionChange(state, change) {
       }
       break;
     }
+    case 'set-scoped-personal-memory': {
+      fields(change, 'op', 'targetId', 'enabled');
+      validateId(change.targetId, targetPattern);
+      validateEnabled(change.enabled);
+      const previous = findProjectPolicy(next, change.targetId, null);
+      if ((previous?.enabled ?? false) !== change.enabled) {
+        next.automaticMemory = [...next.automaticMemory.filter(item => item !== previous), {
+          targetId: change.targetId, projectId: null, enabled: change.enabled, revision: (previous?.revision ?? 0) + 1,
+        }];
+      }
+      break;
+    }
     case 'set-memory-extraction-model': {
       const choice = readMemoryExtractionChange(change);
       const remaining = next.memoryExtractionModels.filter(({ targetId }) => targetId !== choice.targetId);
@@ -425,8 +450,8 @@ export function applyExtensionChange(state, change) {
   return validateState(next);
 }
 
-export function automaticMemoryPolicy(state, { targetId, projectId } = {}) {
-  const policy = findAutomaticPolicy(validateState(state), targetId, projectId);
+export function automaticMemoryPolicy(state, { targetId, projectId, scopedPersonal } = {}) {
+  const policy = findAutomaticPolicy(validateState(state), targetId, projectId, scopedPersonal);
   return policy ? { enabled: policy.enabled, revision: policy.revision } : null;
 }
 

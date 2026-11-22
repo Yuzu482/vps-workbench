@@ -18,7 +18,7 @@ function readEdit(key) {
   return null;
 }
 
-export function useWorkflowControls({ store, rpc, readList, connection, remoteEnabled, toolIds,
+export function useWorkflowControls({ store, rpc, readList, connection, remoteEnabled, toolIds, local,
   scope, sessionId, prepareChat, savePreference, report }) {
   const [open, setOpen] = React.useState(false);
   const [preferRunPane, setPreferRunPane] = React.useState(false);
@@ -30,14 +30,25 @@ export function useWorkflowControls({ store, rpc, readList, connection, remoteEn
   const runner = React.useRef(null);
   const availableProviders = toolIds.filter((id) => Object.hasOwn(workflowProviders, id));
   const context = React.useRef(null);
-  context.current = { connection, remoteEnabled, availableProviders };
+  context.current = { connection, remoteEnabled, availableProviders, local, scope };
   const canDispatch = React.useCallback(({ settings }) => {
-    const { connection, remoteEnabled, availableProviders } = context.current;
+    const { connection, remoteEnabled, availableProviders, local, scope } = context.current;
+    if (local) return Boolean(remoteEnabled && local.runtimeReady && availableProviders.includes(settings.provider) &&
+      settings.location === 'local-sdk' && settings.profileId === connection?.profileId &&
+      settings.profileId === local.profile?.id && local.profile?.targetId === scope);
     return Boolean(remoteEnabled && connection?.hostKeyConfirmed && availableProviders.includes(settings.provider) &&
       Object.entries(connection).every(([key, value]) => key === 'provider' || settings[key] === value));
   }, []);
-  const resolveRoute = React.useCallback(async (provider, signal, { dispatch }) => {
+  const resolveRoute = React.useCallback(async (provider, signal, { dispatch, pinned }) => {
     const active = context.current;
+    if (active.local) {
+      signal.throwIfAborted();
+      const route = active.local.routeForTarget(pinned ?? active.scope);
+      if (provider !== 'codex' || !route || (dispatch && (!canDispatch(route) || route.targetId !== active.scope))) {
+        throw new Error('请核对步骤的原本机配置、模型和访问权限。');
+      }
+      return route;
+    }
     if (dispatch && !active.remoteEnabled) throw new Error('请切换为 VPS 执行后继续。');
     if (dispatch && !active.availableProviders.includes(provider)) throw new Error('请先在 VPS 设置中启用此执行端。');
     if (!active.connection?.hostKeyConfirmed) throw new Error('请先配置并核对 VPS 连接。');
@@ -57,7 +68,8 @@ export function useWorkflowControls({ store, rpc, readList, connection, remoteEn
     const stage = activeRun?.workflow.stages[index];
     const row = activeRun?.rows[index];
     if (!stage || !row) throw new Error('这个工作流阶段的产物记录已变化。');
-    const { settings, targetId } = await resolveRoute(stage.provider, signal, { dispatch: true });
+    const { settings, targetId } = await resolveRoute(stage.provider, signal,
+      { dispatch: !context.current.local, pinned: row.targetId });
     if (targetId !== row.targetId) throw new Error('当前 VPS 与该阶段的原连接不匹配。');
     const packet = await rpc('workflow-artifacts', { settings, targetId, workflowRunId: activeRun.id,
       sessionId: row.sessionId, turnId: row.turnId, ...(path === undefined ? {} : { path }),
@@ -86,7 +98,7 @@ export function useWorkflowControls({ store, rpc, readList, connection, remoteEn
     }
     const target = prepareChat();
     if (!target) {
-      report('需要一个可发送消息的 VPS 对话来配置工作流。');
+      report('需要一个可发送消息的对话来配置工作流。');
       return false;
     }
     setEdit({ ...target, workflow });
@@ -156,7 +168,9 @@ export function useWorkflowControls({ store, rpc, readList, connection, remoteEn
       open, preferRunPane, onClose: () => { setOpen(false); setProposal(null); setExampleError(''); }, workflows: store.items, exampleError,
       availableProviders, catalogScope: scope, readModels: readPanelModels, onChange: store.change, onEditInChat: startChatEdit,
       proposal, onDismissProposal: () => setProposal(null), run, running,
-      canStart: !error && remoteEnabled && connection?.hostKeyConfirmed && availableProviders.length > 0,
+      canStart: !error && remoteEnabled && (local ? local.runtimeReady && local.profile?.targetId === scope : connection?.hostKeyConfirmed) &&
+        availableProviders.length > 0,
+      localSdk: Boolean(local),
       onStart: (draft, task, projectId, workflowId) => invoke('start', draft, task, projectId, null, workflowId),
       readFileTarget: async (provider, signal) => (await resolveRoute(provider, signal, { dispatch: true })).targetId,
       saveAttachments: store.saveAttachments, readArtifacts,

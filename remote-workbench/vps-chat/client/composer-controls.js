@@ -269,8 +269,8 @@ export function createComposerControls(React) {
   const h = React.createElement;
   const AdvancedModelOptions = createAdvancedModelOptions(React);
 
-  function AccessTrigger({ access, provider, expanded, open }) {
-    const label = access.mode === 'browse' ? '仅浏览' : (scopedWorkspaceProviders.has(provider) &&
+  function AccessTrigger({ access, provider, expanded, open, localSdk }) {
+    const label = access.mode === 'browse' ? '仅浏览' : localSdk ? '本机执行' : (scopedWorkspaceProviders.has(provider) &&
       workspaceChoices.find(([id]) => access.workspace !== 'default' && id === access.workspace)?.[1]) || 'VPS 执行';
     return h('button', {
       type: 'button', className: 'vc-button vc-composer-option', 'data-control': 'access', 'data-browse': access.mode === 'browse',
@@ -280,7 +280,7 @@ export function createComposerControls(React) {
   }
 
   function Toolbar({ panel, open, openMaterials, materialsDisabled, available, mode, report, attached, selection, catalog,
-    wideActions, showModeIcon, accessButton, hasPluginPrompts, templateLabel, memoryMode, historyButton, children }) {
+    wideActions, showModeIcon, accessButton, hasPluginPrompts, templateLabel, memoryMode, historyButton, children, localSdk }) {
     const tooltipId = React.useId();
     const tooltipRef = React.useRef(null);
     const dismissTimer = React.useRef(0);
@@ -359,28 +359,29 @@ export function createComposerControls(React) {
           modelName && effort ? h('span', { className: 'vc-option-effort' }, effortName(effort)) : null),
         children),
       showTooltip ? h(Panel, {
-        kind: 'context', tooltip: true, id: tooltipId, anchor: contextAnchor, close: clearTooltip, report, attached, mode,
+        kind: 'context', tooltip: true, id: tooltipId, anchor: contextAnchor, close: clearTooltip, report, attached, mode, localSdk,
         surfaceRef: tooltipRef,
         onPointerEnter: keepTooltip, onPointerLeave: dismissTooltipSoon,
       }) : null);
   }
 
-  function ContextDetails({ report, attached, design }) {
+  function ContextDetails({ report, attached, design, localSdk }) {
     const { usage, usageModel, earlierUsage } = report;
     const percent = occupancy(usage);
+    const source = localSdk ? '本机 Codex' : 'VPS';
     return h(React.Fragment, null,
       usage ? h(React.Fragment, null,
         h('dl', null,
-          h('dt', null, '数据来源'), h('dd', null, earlierUsage ? '较早轮次的 VPS 报告' : '当前轮次的 VPS 报告'),
+          h('dt', null, '数据来源'), h('dd', null, (earlierUsage ? '较早轮次的 ' : '当前轮次的 ') + source + ' 报告'),
           h('dt', null, '已用'), h('dd', null, `${numbers.format(usage.usedTokens)} tokens`),
-          h('dt', null, '上下文窗口'), h('dd', null, usage.contextWindow === null ? 'VPS 尚未报告' : `${numbers.format(usage.contextWindow)} tokens`),
+          h('dt', null, '上下文窗口'), h('dd', null, usage.contextWindow === null ? source + ' 尚未报告' : `${numbers.format(usage.contextWindow)} tokens`),
           percent ? h(React.Fragment, null, h('dt', null, '占用比例'), h('dd', null, percent)) : null,
           usageModel ? h(React.Fragment, null, h('dt', null, '报告模型'), h('dd', null, usageModel)) : null),
         percent ? h('progress', {
           'aria-label': '上下文占用', max: usage.contextWindow, value: Math.min(usage.usedTokens, usage.contextWindow),
           'aria-valuetext': `${numbers.format(usage.usedTokens)} / ${numbers.format(usage.contextWindow)} tokens`,
         }) : null,
-        earlierUsage ? h('p', null, '当前轮次尚未报告用量。') : null) : h('p', null, '尚无 VPS 上下文用量报告。'),
+        earlierUsage ? h('p', null, '当前轮次尚未报告用量。') : null) : h('p', null, '尚无 ' + source + ' 上下文用量报告。'),
       design ? h('dl', null, h('dt', null, '待发送设计资料'),
         h('dd', null, attached?.error || (attached?.labels?.length ? attached.labels.join('、') : '未选中'))) : null);
   }
@@ -397,7 +398,7 @@ export function createComposerControls(React) {
           h('span', { className: 'vc-mode-detail' }, hint, menuIcon(h, 'check'))))));
   }
 
-  function AccessChoices({ access, provider, busy, change }) {
+  function AccessChoices({ access, provider, busy, change, localSdk }) {
     function choices(field, options) {
       return h('div', { className: 'vc-mode-options vc-access-options' }, options.map(([id, label, detail]) =>
         h('button', { key: id, type: 'button', className: 'vc-button', 'aria-label': label,
@@ -407,10 +408,11 @@ export function createComposerControls(React) {
     }
     return h(React.Fragment, null,
       h('h3', { className: 'vc-access-heading' }, '工作台'),
-      choices('mode', [['execute', 'VPS 执行', '可向当前执行端发起远端操作'],
+      choices('mode', [localSdk ? ['execute', '本机执行', '可向本机 Codex 发起操作'] : ['execute', 'VPS 执行', '可向当前执行端发起远端操作'],
         ['browse', '仅浏览', '查看已保存的会话与项目资源']]),
-      h('h3', { className: 'vc-access-heading' }, 'VPS 工作区'),
-      scopedWorkspaceProviders.has(provider) ? choices('workspace', workspaceChoices)
+      h('h3', { className: 'vc-access-heading' }, localSdk ? '本机工作区' : 'VPS 工作区'),
+      localSdk ? h('p', null, '本机 Codex 在所选配置的只读工作目录中运行。') :
+        scopedWorkspaceProviders.has(provider) ? choices('workspace', workspaceChoices)
         : h('p', null, '此工具采用执行端原生的工作区权限。'));
   }
 
@@ -538,7 +540,7 @@ export function createComposerControls(React) {
     modelAllowed, catalog, selection, toolDefault, followsTool, chooseModel, retryModels, advanced,
     access, accessProvider, accessBusy, changeAccess, pluginPrompts, insertPluginPrompt, templateLabel,
     memoryIsolated, automaticMemory, projectMemorySuppressed, memoryBusy, memoryStartsNew, changeMemoryMode, openMemorySettings,
-    tooltip = false, id, surfaceRef, onPointerEnter, onPointerLeave }) {
+    tooltip = false, id, surfaceRef, onPointerEnter, onPointerLeave, localSdk }) {
     const localRef = React.useRef(null);
     const ref = surfaceRef ?? localRef;
     React.useLayoutEffect(() => {
@@ -613,8 +615,8 @@ export function createComposerControls(React) {
     }) : h(React.Fragment, null,
       h('div', { className: 'vc-composer-panel-heading' },
         h('h2', { className: 'vc-menu-label' }, menuIcon(h, kind === 'mode' ? 'effort' : ['plugins', 'memory'].includes(kind) ? 'library' : kind), name), closeButton),
-      tooltip ? h(ContextDetails, { report, attached, design: mode === 'design' })
-        : kind === 'access' ? h(AccessChoices, { access, provider: accessProvider, busy: accessBusy, change: changeAccess })
+      tooltip ? h(ContextDetails, { report, attached, design: mode === 'design', localSdk })
+        : kind === 'access' ? h(AccessChoices, { access, provider: accessProvider, busy: accessBusy, change: changeAccess, localSdk })
           : kind === 'memory' ? h(MemoryChoices, { isolated: memoryIsolated, automatic: automaticMemory,
             projectMemorySuppressed, busy: memoryBusy,
             startsNew: memoryStartsNew, change: changeMemoryMode, settings: openMemorySettings })
