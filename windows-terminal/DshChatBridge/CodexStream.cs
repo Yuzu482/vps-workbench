@@ -20,7 +20,7 @@ internal static class CodexStream
     internal const int MaxDesignReply = 16384;
     private const int MaxArgument = 12288;
     private const int MaxStreamHelper = 50 * 1024; // Also enforced by Antigravity's support loader.
-    private const int MaxAntigravityHelper = 40 * 1024;
+    private const int MaxAntigravityHelper = 46 * 1024;
     private const int MaxApprovals = 16;
     private const string Loader = "import base64,sys,zlib;exec(zlib.decompress(base64.b64decode(sys.argv[1]+sys.argv.pop(2))),{'__name__':'__main__'})";
 

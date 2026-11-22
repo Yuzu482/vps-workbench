@@ -3,6 +3,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -586,6 +587,147 @@ class StreamControlTests(unittest.TestCase):
         for private in ("rpc-allow", "internal-allow", "tool-a", "not-in-the-approval"):
             self.assertNotIn(private, evidence)
         self.assertEqual([row["state"] for row in self.control("snapshot")["approvals"]], ["submitted", "submitted"])
+
+    def test_antigravity_ordinary_reads_allow_once_without_using_manual_slots(self):
+        antigravity, process, reply = self.acp_fixture()
+        workspace = self.directory / "mounted-work"
+        workspace.mkdir()
+        (workspace / "说明.md").write_text("ordinary fixture", encoding="utf-8")
+        path = "/workspace/说明.md"
+        reads = self.stream.MAX_APPROVALS + 1
+
+        def frames(_):
+            yield from self.acp_handshake()
+            for number in range(reads):
+                tool_id = f"file-{number}"
+                yield self.acp_update(sessionUpdate="tool_call", toolCallId=tool_id, name="view_file",
+                                      kind="read", title="Read notes", status="pending",
+                                      rawInput={"AbsolutePath": path, "StartLine": 1, "EndLine": 3},
+                                      locations=[{"path": path, "line": 1}])
+                callback = self.acp_permission(f"read-{number}", {"toolCallId": tool_id})
+                yield callback
+                yield callback
+            yield self.acp_permission("list", {"toolCallId": "list-root", "name": "list_dir", "kind": "search",
+                                               "rawInput": {"DirectoryPath": "/workspace"}})
+            self.assertEqual(self.control("snapshot")["approvals"], [])
+            yield self.acp_permission("reuse", {"toolCallId": "file-0"})
+            yield self.acp_permission("read-0", {"toolCallId": "different-tool", "name": "list_dir", "kind": "read",
+                                                 "rawInput": {"DirectoryPath": "/workspace"}})
+            yield self.acp_permission("shell", {"toolCallId": "command", "name": "run_command", "kind": "execute",
+                                                "title": "Local command", "rawInput": {"CommandLine": "pwd", "Cwd": "/workspace"}})
+            row, = self.control("snapshot")["approvals"]
+            self.assertEqual((row["kind"], row["state"], row["canAllow"]), ("execute", "pending", True))
+            self.assertEqual(self.control("approval", request={"id": row["id"], "decision": "deny"})["outcome"], "queued")
+            yield None
+            yield self.acp_answer("result")
+            yield {"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}}
+
+        support = dict(vars(self.stream), read_frames=frames)
+        self.assertEqual(antigravity.consume_acp(process, support, reply, None, self.identifier, "first", None,
+                                                 interactive=True, read_only_workspace=(workspace, antigravity.workspace_identity(workspace.stat()))),
+                         ("complete", self.thread, None))
+        outcomes = [(value["id"], value["result"]["outcome"]) for value in
+                    map(json.loads, process.stdin.getvalue().splitlines()) if "result" in value]
+        allowed = {"outcome": "selected", "optionId": "internal-allow"}
+        self.assertEqual(outcomes, [(f"read-{number}", allowed) for number in range(reads)] + [
+            ("list", allowed), ("reuse", {"outcome": "cancelled"}),
+            ("shell", {"outcome": "selected", "optionId": "internal-deny"}),
+        ])
+
+    def test_antigravity_workspace_read_requires_a_known_tool_and_an_ordinary_mount_target(self):
+        antigravity, _, _ = self.acp_fixture()
+        workspace = self.directory / "mounted-work"
+        workspace.mkdir()
+        ordinary = workspace / "notes.txt"
+        ordinary.write_text("fixture", encoding="utf-8")
+        (workspace / ".env").write_text("fixture", encoding="utf-8")
+        (workspace / "auth.json").write_text("fixture", encoding="utf-8")
+        outside = self.directory / "other.txt"
+        outside.write_text("fixture", encoding="utf-8")
+        (workspace / "link.txt").symlink_to(outside)
+        (workspace / "linked-dir").symlink_to(self.directory, target_is_directory=True)
+        os.link(outside, workspace / "linked-copy.txt")
+        path = "/workspace/notes.txt"
+        call = {"name": "view_file", "kind": "read", "rawInput": {"AbsolutePath": path}}
+        binding = workspace, antigravity.workspace_identity(workspace.stat())
+        self.assertTrue(antigravity.ordinary_workspace_read(call, binding))
+        for target in ("/home/codex/notes.txt", "/workspace-other/notes.txt", "/workspace/missing",
+                       "/workspace/../other.txt", "/workspace//notes.txt", "/workspace/notes.txt\n",
+                       "/workspace/.env", "/workspace/auth.json", "/workspace/link.txt",
+                       "/workspace/linked-dir/other.txt", "/workspace/linked-copy.txt"):
+            with self.subTest(target=target):
+                self.assertFalse(antigravity.ordinary_workspace_read({**call, "rawInput": {"AbsolutePath": target}}, binding))
+        for unknown in (
+            {**call, "name": "mcp_docs_view_file"}, {**call, "name": "ask_permission"},
+            {**call, "kind": "execute"}, {**call, "kind": "edit"}, {**call, "status": "in_progress"},
+            {**call, "_meta": {"scope": "external"}}, {**call, "locations": [{"path": "/workspace/another"}]},
+            {**call, "rawInput": {"AbsolutePath": path, "IsSkillFile": True}},
+            {**call, "rawInput": {"AbsolutePath": path, "CommandLine": "pwd"}},
+            {**call, "rawInput": {"AbsolutePath": path, "StartLine": 5, "EndLine": 4}},
+            {**call, "rawInput": {"AbsolutePath": path, "StartLine": True}},
+            {"name": "list_dir", "kind": "read", "rawInput": {"DirectoryPath": path}},
+        ):
+            with self.subTest(tool=unknown):
+                self.assertFalse(antigravity.ordinary_workspace_read(unknown, binding))
+        workspace.rename(self.directory / "original-work")
+        workspace.mkdir()
+        (workspace / "notes.txt").write_text("replacement", encoding="utf-8")
+        self.assertFalse(antigravity.ordinary_workspace_read(call, binding))
+
+    def test_antigravity_auto_read_checks_option_ambiguity_updates_and_active_stop(self):
+        antigravity, process, reply = self.acp_fixture()
+        workspace = self.directory / "mounted-work"
+        workspace.mkdir()
+        for name in ("old.txt", "new.txt"):
+            (workspace / name).write_text("fixture", encoding="utf-8")
+        support = dict(vars(self.stream), read_frames=lambda _: iter(()))
+        binding = workspace, antigravity.workspace_identity(workspace.stat())
+        turn = antigravity.AcpTurn(process, support, reply, self.identifier, read_only_workspace=binding)
+        turn.session = self.thread
+        turn.submitted = True
+        turn.enable_controls()
+        tool = {"name": "view_file", "kind": "read", "title": "Read file",
+                "rawInput": {"AbsolutePath": "/workspace/new.txt"}}
+
+        turn.incoming(self.acp_permission("always", {**tool, "toolCallId": "always"}, [
+            {"optionId": "always", "kind": "allow_always"}, {"optionId": "deny", "kind": "reject_once"},
+        ]))
+        turn.incoming(self.acp_permission("ambiguous", {**tool, "toolCallId": "ambiguous"}, [
+            {"optionId": "first", "kind": "allow_once"}, {"optionId": "second", "kind": "allow_once"},
+        ]))
+        turn.incoming(self.acp_update(sessionUpdate="tool_call", toolCallId="changed", **{
+            **tool, "rawInput": {"AbsolutePath": "/workspace/old.txt"},
+        }))
+        turn.incoming(self.acp_permission("changed", {**tool, "toolCallId": "changed"}))
+        turn.incoming(self.acp_permission("out-of-scope", {**tool, "toolCallId": "out-of-scope",
+                     "rawInput": {"AbsolutePath": "/home/codex/auth.json"}}))
+        turn.incoming(self.acp_update(sessionUpdate="tool_call", toolCallId="opaque", approvedResources=[], **tool))
+        turn.incoming(self.acp_permission("opaque", {"toolCallId": "opaque"}))
+        turn.incoming(self.acp_update(sessionUpdate="tool_call", toolCallId="terminal", status="completed", **tool))
+        turn.incoming(self.acp_permission("terminal", {**tool, "toolCallId": "terminal", "status": "pending"}))
+        turn.supplement_sent = True
+        turn.incoming(self.acp_permission("steered", {**tool, "toolCallId": "steered"}))
+        turn.supplement_sent = False
+        rows = turn.approvals.read()
+        self.assertEqual(len(rows), 7)
+        self.assertTrue(all(row["state"] == "pending" for row in rows))
+        self.assertFalse(rows[0]["canAllow"])
+        self.assertEqual(rows[3]["detail"], "/home/codex/auth.json")
+        self.assertEqual(process.stdin.getvalue(), b"")
+
+        invalid_tool = {**tool, "toolCallId": "initially-invalid"}
+        turn.incoming(self.acp_permission("initially-invalid", invalid_tool, session="different-session"))
+        turn.incoming(self.acp_permission("initially-invalid", invalid_tool))
+        support["stop_requested"] = lambda _: True
+        stopped = self.acp_permission("stopped", {**tool, "toolCallId": "stopped"})
+        turn.incoming(stopped)
+        support["stop_requested"] = lambda _: False
+        turn.incoming(stopped)
+        outcomes = [(row["id"], row["result"]["outcome"]) for row in
+                    map(json.loads, process.stdin.getvalue().splitlines())]
+        self.assertEqual(outcomes, [(identifier, {"outcome": "cancelled"})
+                                    for identifier in ("initially-invalid", "stopped")])
+        self.assertEqual(len(turn.approvals.read()), 7)
 
     def test_antigravity_approval_never_grants_persistent_or_obscured_permissions(self):
         antigravity, process, reply = self.acp_fixture()

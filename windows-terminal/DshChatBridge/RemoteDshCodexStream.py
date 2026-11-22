@@ -389,7 +389,7 @@ def approval_display(tool):
     locations = tool.get("locations")
     paths = [item["path"] for item in locations[:8] if isinstance(item, dict) and
              isinstance(item.get("path"), str)] if isinstance(locations, list) else []
-    path_fields = ("path", "filePath", "FilePath", "AbsolutePath", "TargetFile", "source", "destination", "sourcePath", "destinationPath",
+    path_fields = ("path", "filePath", "FilePath", "AbsolutePath", "DirectoryPath", "TargetFile", "source", "destination", "sourcePath", "destinationPath",
                    "old_path", "new_path", "targetPath")
     paths.extend(args[key] for key in path_fields if isinstance(args.get(key), str) and args[key] not in paths)
     cwd = next((args[key] for key in ("cwd", "Cwd", "workingDirectory") if isinstance(args.get(key), str)), None)
@@ -425,14 +425,15 @@ def remote_control(task, action, identifier, request=None):
             if observation["state"] in ("finished", "launch_failed"):
                 result["outcome"] = "settled"
             elif record.get("phase") in ("reserved", "running"):
-                try:
-                    fd = os.open(directory / STOP, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-                except FileExistsError:
-                    stop_requested(directory)
-                else:
-                    with os.fdopen(fd, "wb") as marker:
-                        os.fsync(marker.fileno())
-                    task["sync_directory"](directory)
+                with chat_lock(ApprovalMailbox(directory).lock):
+                    try:
+                        fd = os.open(directory / STOP, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    except FileExistsError:
+                        stop_requested(directory)
+                    else:
+                        with os.fdopen(fd, "wb") as marker:
+                            os.fsync(marker.fileno())
+                        task["sync_directory"](directory)
                 result["outcome"] = "requested"
         elif action == "snapshot":
             result.update(observation)

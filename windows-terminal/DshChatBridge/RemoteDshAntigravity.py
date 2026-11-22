@@ -18,7 +18,12 @@ import zlib
 HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+", re.ASCII)
 CONVERSATION = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", re.ASCII)
 TURN_TIMEOUT = 615
+MAX_AUTO_READS = 128
+MAX_PERMISSION_REQUESTS = 256
 SANDBOX_ENV = {"PATH": "/usr/bin:/usr/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/nonexistent"}
+PRIVATE_PATH = re.compile(
+    r"(?:^|[._-])(?:auth|credentials?|passwords?|secrets?|tokens?|api[-_]?key)(?:[._-]|$)"
+    r"|(?:^id_(?:rsa|dsa|ecdsa|ed25519)$|\.(?:key|pem|pfx|p12)$)", re.IGNORECASE)
 
 
 def allowed_hosts(value):
@@ -184,8 +189,70 @@ def valid_model(model, support):
     return support["valid_choice"](model, 100, "_.:-") and model.startswith("gemini-")
 
 
+def workspace_read_path(tool):
+    args = tool.get("rawInput")
+    if (not isinstance(args, dict) or tool.get("opaque") or tool.get("_meta") not in (None, {}) or
+            tool.get("status") not in (None, "pending")):
+        return None
+    if tool.get("name") == "view_file" and tool.get("kind") == "read":
+        if set(args) - {"AbsolutePath", "StartLine", "EndLine", "IsSkillFile"} or args.get("IsSkillFile", False) is not False:
+            return None
+        lines = [args[field] for field in ("StartLine", "EndLine") if field in args]
+        if any(type(line) is not int or not 1 <= line <= 2147483647 for line in lines) or lines != sorted(lines):
+            return None
+        target, directory = args.get("AbsolutePath"), False
+    elif tool.get("name") == "list_dir" and tool.get("kind") in ("read", "search") and set(args) == {"DirectoryPath"}:
+        target, directory = args["DirectoryPath"], True
+    else:
+        return None
+    if (not isinstance(target, str) or len(target) > 1024 or "\\" in target or not target.isprintable() or
+            (target != "/workspace" and not target.startswith("/workspace/"))):
+        return None
+    locations = tool.get("locations")
+    if locations is not None and (not isinstance(locations, list) or len(locations) > 8 or any(
+            not isinstance(location, dict) or set(location) - {"path", "line"} or location.get("path") != target
+            for location in locations)):
+        return None
+    parts = target.split("/")[2:]
+    if (not parts and not directory) or len(parts) > 24 or any(
+            not part or part.startswith(".") or PRIVATE_PATH.search(part) for part in parts):
+        return None
+    return parts, directory
+
+
+def workspace_identity(info):
+    return info.st_dev, info.st_ino
+
+
+def ordinary_workspace_read(tool, workspace_binding):
+    target = workspace_read_path(tool)
+    if target is None:
+        return False
+    parts, directory = target
+    workspace, identity = workspace_binding
+    flags = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        with contextlib.ExitStack() as opened:
+            fd = os.open(workspace, flags)
+            opened.callback(os.close, fd)
+            if workspace_identity(os.fstat(fd)) != identity:
+                return False
+            device = identity[0]
+            for part in parts if directory else parts[:-1]:
+                fd = os.open(part, flags, dir_fd=fd)
+                opened.callback(os.close, fd)
+                if os.fstat(fd).st_dev != device:
+                    return False
+            if directory:
+                return True
+            info = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+            return stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_dev == device
+    except OSError:
+        return False
+
+
 class AcpTurn:
-    def __init__(self, process, support, reply, workbench_session):
+    def __init__(self, process, support, reply, workbench_session, *, read_only_workspace=None):
         self.process, self.support, self.reply = process, support, reply
         self.workbench_session = workbench_session
         self.frames = support["read_frames"](process)
@@ -196,6 +263,9 @@ class AcpTurn:
         self.approvals = self.steering = self.supplement = None
         self.supplement_sent = False
         self.permissions, self.tool_details, self.tool_requests = {}, {}, {}
+        self.read_only_workspace = read_only_workspace
+        self.auto_reads = set()
+        self.permission_ids = set()
         self.mcp_prefixes = ()
 
     def enable_controls(self):
@@ -297,8 +367,7 @@ class AcpTurn:
         approval = self.approvals.claim() if self.permissions else None
         if approval:
             identifier, options, _ = self.permissions.pop(approval["id"])
-            stopped = self.support["stop_requested"](self.reply.directory)
-            self.permission_outcome(identifier, None if stopped else options.get(approval["decision"]))
+            stopped = self.dispatch_permission(identifier, options.get(approval["decision"]))
             self.approvals.settle(approval["id"], "closed" if stopped else "submitted")
         if self.supplement is None and self.reply.steer_ready:
             note = self.steering.claim()
@@ -332,17 +401,35 @@ class AcpTurn:
         outcome = {"outcome": "selected", "optionId": option} if option else {"outcome": "cancelled"}
         self.write({"id": identifier, "result": {"outcome": outcome}})
 
+    def dispatch_permission(self, identifier, option):
+        # The stop marker and dispatch use the same lock on this turn.
+        with self.support["chat_lock"](self.approvals.lock):
+            stopped = self.support["stop_requested"](self.reply.directory)
+            self.permission_outcome(identifier, None if stopped else option)
+        return stopped
+
     def withdraw_permission(self, receipt):
         request, _, _ = self.permissions.pop(receipt)
         self.approvals.settle(receipt, "closed")
         self.permission_outcome(request, None)
 
-    def remember_tool(self, tool_id, update):
+    def remember_tool(self, tool_id, update, *, exact_frame=True):
+        if tool_id in self.auto_reads:
+            return None
         previous = self.tool_details.get(tool_id, {})
         if previous is None or (tool_id not in self.tool_details and len(self.tool_details) >= 32):
             return None
-        current = {**previous, **{key: update[key] for key in ("title", "kind", "rawInput", "locations")
-                                 if key in update}}
+        fields = ("title", "name", "kind", "status", "rawInput", "locations")
+        current = {**previous, **{key: update[key] for key in fields if key in update}}
+        # A v1 permission can refer to its earlier tool_call by ID alone. Preserve any
+        # ambiguity across updates so a later partial frame cannot make it auto-eligible.
+        opaque = (not exact_frame or set(update) - {*fields, "sessionUpdate", "toolCallId", "_meta", "content", "rawOutput"} or
+                  update.get("_meta") not in (None, {}) or update.get("content") not in (None, []) or
+                  update.get("rawOutput") is not None or
+                  (not previous and update.get("sessionUpdate") == "tool_call_update") or
+                  any(key in previous and key in update and previous[key] != update[key] for key in fields[1:]))
+        if opaque:
+            current["opaque"] = True
         if len(json.dumps(current, ensure_ascii=True)) > 16384:
             current = None
         if previous != current:
@@ -352,13 +439,23 @@ class AcpTurn:
         self.tool_details[tool_id] = current
         return current
 
-    def permission(self, identifier, params):
+    def permission(self, identifier, params, *, exact_frame=False):
         valid = self.support["valid_id"]
+        tool = params.get("toolCall") if isinstance(params, dict) else None
+        tool_id = tool.get("toolCallId") if isinstance(tool, dict) else None
+        known = (valid(tool_id) and self.tool_requests.get(tool_id) == identifier and
+                 any(request == identifier for request, _, _ in self.permissions.values()))
+        if identifier in self.permission_ids and not known:
+            return
+        if len(self.permission_ids) >= MAX_PERMISSION_REQUESTS and not known:
+            self.permission_outcome(identifier, None)
+            return
+        self.permission_ids.add(identifier)
         if not self.submitted or self.cancel_deadline is not None or (
                 not isinstance(params, dict) or params.get("sessionId") != self.session):
             self.permission_outcome(identifier, None)
             return
-        tool, offered = params.get("toolCall"), params.get("options")
+        offered = params.get("options")
         if not isinstance(offered, list) or len(offered) > 16:
             offered = []
         pairs = [(item.get("kind"), item["optionId"]) for item in offered
@@ -366,7 +463,6 @@ class AcpTurn:
         options = {decision: next((value for kind, value in pairs if kind == option and
                                   sum(o == value for _, o in pairs) == 1), None)
                    for decision, option in (("allow", "allow_once"), ("deny", "reject_once"))}
-        tool_id = tool.get("toolCallId") if isinstance(tool, dict) else None
         if self.approvals is None:
             # The stage's registered servers are the only MCP namespace in this sandbox.
             name = tool.get("name") if isinstance(tool, dict) and tool.get("kind") == "other" else None
@@ -383,11 +479,11 @@ class AcpTurn:
                     option = options["allow"]
             self.permission_outcome(identifier, option)
             return
-        known = valid(tool_id) and self.tool_requests.get(tool_id) == identifier
+        if valid(tool_id) and tool_id in self.auto_reads:
+            self.permission_outcome(identifier, None)
+            return
         if known:
             self.remember_tool(tool_id, tool)
-        elif any(identifier == req for req, _, _ in self.permissions.values()):
-            return
         elif not valid(tool_id) or tool_id in self.tool_requests or len(self.tool_requests) >= self.support["MAX_APPROVALS"]:
             self.permission_outcome(identifier, None)
             return
@@ -400,6 +496,15 @@ class AcpTurn:
             self.permission_outcome(identifier, None)
             return
         operation = self.remember_tool(tool_id, tool)
+        single_allow = sum(isinstance(item, dict) and item.get("kind") == "allow_once" for item in offered) == 1
+        if (exact_frame and self.read_only_workspace is not None and operation is not None and options["allow"] and
+                len(self.auto_reads) < MAX_AUTO_READS and single_allow and not self.supplement_sent and
+                params.get("_meta") in (None, {}) and not (params.keys() - {"sessionId", "toolCall", "options", "_meta"}) and
+                ordinary_workspace_read(operation, self.read_only_workspace)):
+            self.auto_reads.add(tool_id)
+            self.tool_details.pop(tool_id, None)
+            self.dispatch_permission(identifier, options["allow"])
+            return
         title, detail, kind, described = self.support["approval_display"](operation or {})
         receipt = self.approvals.add(title, detail, kind, bool(options["allow"] and described))
         if receipt is None:
@@ -419,7 +524,8 @@ class AcpTurn:
             if type(identifier) is not int and not self.support["valid_id"](identifier):
                 raise ValueError("invalid Antigravity ACP callback")
             if method == "session/request_permission":
-                self.permission(identifier, frame.get("params"))
+                self.permission(identifier, frame.get("params"),
+                                exact_frame=frame.keys() == {"jsonrpc", "id", "method", "params"})
             else:
                 self.write({"id": identifier, "error": {"code": -32601, "message": "Method not available"}})
             return
@@ -434,7 +540,8 @@ class AcpTurn:
                 self.reply.set_steer_ready(True)
             tool_id = update.get("toolCallId")
             if event in ("tool_call", "tool_call_update") and self.support["valid_id"](tool_id):
-                self.remember_tool(tool_id, update)
+                self.remember_tool(tool_id, update, exact_frame=(
+                    frame.keys() == {"jsonrpc", "method", "params"} and params.keys() == {"sessionId", "update"}))
         if isinstance(update, dict) and update.get("sessionUpdate") == "agent_message_chunk":
             content = update.get("content")
             if isinstance(content, dict) and content.get("type") == "text" and isinstance(content.get("text"), str):
@@ -500,8 +607,9 @@ class AcpTurn:
 
 
 def consume_acp(process, support, reply, previous, workbench_session, prompt, effort, model=None, workflow=False,
-                mcp_servers=(), interactive=False):
-    turn = AcpTurn(process, support, reply, workbench_session)
+                mcp_servers=(), interactive=False, *, read_only_workspace=None):
+    turn = AcpTurn(process, support, reply, workbench_session,
+                   read_only_workspace=read_only_workspace if interactive and not workflow else None)
     try:
         if interactive and not workflow:
             turn.enable_controls()
@@ -658,6 +766,11 @@ def run(privacy, isolation, support, config, reply, workflow=None, extensions=No
                 elif config.get("workspaceAccess") == "isolated":
                     sandbox_work = lifetime.enter_context(tempfile.TemporaryDirectory(prefix="antigravity-empty-"))
                 with isolation["Gateway"](os.path.join(gate, "proxy.sock"), isolation["global_connection"], hosts):
+                    read_binding = None
+                    if acp and not workflow:
+                        info = os.stat(sandbox_work, follow_symlinks=False)
+                        if stat.S_ISDIR(info.st_mode):
+                            read_binding = sandbox_work, workspace_identity(info)
                     command = sandbox_command(isolation, executable, sandbox_work, profile, gate, previous,
                                               effort, mounts, credentials, acp=acp, model=model)
                     command[1:1] = ["--sync-fd", str(lock.fileno())]
@@ -685,7 +798,8 @@ def run(privacy, isolation, support, config, reply, workflow=None, extensions=No
                         if acp:
                             state, native, reason = consume_acp(
                                 process, support, reply, previous, session, prompt, effort, model,
-                                workflow=bool(workflow), mcp_servers=mcp_servers, interactive=not workflow)
+                                workflow=bool(workflow), mcp_servers=mcp_servers, interactive=not workflow,
+                                read_only_workspace=read_binding)
                         else:
                             state, native, text = consume(process, support, reply, previous)
                             reason = "agy_rejected" if state == "failed" else None
