@@ -67,7 +67,10 @@ export async function transitionSubscriptionView(root, animate, commit, signal, 
   try {
     await commit();
     if (signal?.aborted || reducedMotion.matches) return;
-    arrival = main.animate([
+    const surface = main.querySelector(root.dataset.subscriptionOpen === 'true'
+      ? ':scope > .vc-subscription-session' : ':scope > .vc-main-body');
+    if (!surface) return;
+    arrival = surface.animate([
       { opacity: 0, transform: 'translateY(6px)' },
       { opacity: 1, transform: 'translateY(0)' },
     ], { id: 'vc-subscription-arrival', duration: 240, easing: 'cubic-bezier(.22, 1, .36, 1)' });
@@ -172,6 +175,7 @@ export async function transitionToolView(root, tool, origin, commit, signal, onR
 }
 
 export const themeRippleCss = `
+  [data-vps-chat][data-subscription-transition] > .vc-main {overflow:clip}
   @keyframes ${animationName} {from,to {opacity:1}}
   [data-vps-chat][data-theme-ripple] .vc-tool-highlight {transition-property:transform,opacity}
   [data-vps-chat][data-theme-ripple] :is(.vc-tool-option,.vc-tool-trigger,.vc-composer-option,.vc-effort-steps span) {

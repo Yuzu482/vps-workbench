@@ -315,7 +315,7 @@ test('subscription entry and exit use the same brief arrival and preserve focus 
         function sample(now) {
           const root = document.querySelector(selector);
           const main = root.querySelector(':scope > .vc-main');
-          const animation = main.getAnimations().find(({ id }) => id === 'vc-subscription-arrival');
+          const animation = main.getAnimations({ subtree: true }).find(({ id }) => id === 'vc-subscription-arrival');
           if (root.dataset.subscriptionOpen === String(entering) && animation && first === undefined) {
             first = now;
             snapshot = {
@@ -323,6 +323,8 @@ test('subscription entry and exit use the same brief arrival and preserve focus 
               from: animation.effect.getKeyframes()[0].transform,
               oldRipple: root.hasAttribute('data-theme-ripple'),
               menuVisible: getComputedStyle(root.querySelector('.vc-tool-palette')).display !== 'none',
+              mainOverlapsDock: main.getBoundingClientRect().bottom >
+                root.querySelector('.vc-sidebar-actions').getBoundingClientRect().top + 1 && entering,
               chatVisible: main.querySelector('.vc-main-body').getClientRects().length > 0,
               terminalVisible: main.querySelector('[aria-label="VPS 订阅会话"]').getClientRects().length > 0,
             };
@@ -346,6 +348,7 @@ test('subscription entry and exit use the same brief arrival and preserve focus 
       assert.equal(result.from, 'translateY(6px)');
       assert.equal(result.oldRipple, false);
       assert.equal(result.menuVisible, false);
+      assert.equal(result.mainOverlapsDock, false);
       assert.equal(result.chatVisible, !entering);
       assert.equal(result.terminalVisible, entering);
       assert.equal(await picker.evaluate((button) => button === document.activeElement), true);

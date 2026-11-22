@@ -2377,7 +2377,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         showingSubscription && feedback ? h('p', { className: 'vc-project-warning', role: 'status' }, feedback) : null,
         !showingSubscription && projectWarning ? h('p', { className: 'vc-project-warning', role: 'status' }, projectWarning) : null,
         SubscriptionTerminal && subscriptionPreset ? h('section', {
-          'aria-label': 'VPS 订阅会话', hidden: !showingSubscription,
+          className: 'vc-subscription-session', 'aria-label': 'VPS 订阅会话', hidden: !showingSubscription,
           style: { display: showingSubscription ? 'block' : 'none', flex: '1 1 auto', minHeight: 0, overflow: 'hidden' },
         }, h(SubscriptionTerminal, {
           active: active && showingSubscription, subscriptionPreset, activation: subscriptionActivation,
