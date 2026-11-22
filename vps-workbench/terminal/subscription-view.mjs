@@ -182,6 +182,13 @@ const subscriptionCss = `
     border-radius:12px; background:#181a1b;
   }
   [data-ntw][data-subscription=true] .ntw-terminal {height:100%; min-height:0}
+  /* The remote program can request blinking with ANSI, so suppress the animation at the renderer. */
+  [data-vps-chat][data-vc-motion=reduce] [data-ntw][data-subscription=true] .xterm-cursor-blink {
+    animation:none !important;
+  }
+  @media (prefers-reduced-motion:reduce) {
+    [data-ntw][data-subscription=true] .xterm-cursor-blink {animation:none !important}
+  }
   [data-ntw][data-subscription=true] .vc-activity {margin-top:12px}
   [data-ntw][data-subscription=true][data-session=true] .vc-activity {margin-top:6px; max-height:35%; overflow:auto}
   [data-ntw][data-subscription=true] .vc-activity[open] summary {margin-bottom:6px}

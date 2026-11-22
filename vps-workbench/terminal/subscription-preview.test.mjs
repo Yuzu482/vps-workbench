@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { startPreview } from '../desktop/preview-server.mjs';
+import { openSettingsSection } from '../desktop/test-settings.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('../../dsh-terminal-workbench/client/browser-test/node_modules/playwright-core');
@@ -229,6 +231,9 @@ for (const [width, height] of [[365, 480], [420, 640], [1280, 720]]) {
         bounds.x + bounds.width <= width + 1 && bounds.y + bounds.height <= height + 1, JSON.stringify(bounds));
     }
     assert.ok(calls.some(({ op, after }) => op === 'native-poll' && after === before + 64));
+    if (process.env.VPS_WORKBENCH_TERMINAL_PREVIEW_DIR) {
+      await page.screenshot({ path: join(process.env.VPS_WORKBENCH_TERMINAL_PREVIEW_DIR, `terminal-${width}x${height}.png`) });
+    }
 
     await screen.hover();
     await page.mouse.wheel(0, -260);
@@ -368,4 +373,63 @@ test('subscription entry and exit use the same brief arrival and preserve focus 
       assert.equal(await picker.evaluate((button) => button === document.activeElement), true);
     }
     t.diagnostic(JSON.stringify(samples));
+  });
+
+test('the subscription cursor follows system and effective app motion settings on the running terminal',
+  { timeout: 30_000 }, async (t) => {
+    const fixture = await openTerminalPreview(t, { reducedMotion: 'no-preference' });
+    const { page, terminal, calls, events } = fixture;
+    await fixture.start();
+    const marker = fixture.after(events.length + 1);
+    fixture.append('\x1b[?25h\x1b[1 q');
+    await marker;
+    const focus = terminal.getByRole('button', { name: '聚焦终端', exact: true });
+    const terminalInput = terminal.locator('.xterm-helper-textarea');
+    const cursor = terminal.locator('.xterm-cursor-blink.xterm-cursor-block');
+    await focus.click();
+    await cursor.waitFor();
+
+    async function assertCursor(blinking) {
+      const style = await cursor.evaluate((element) => {
+        const css = getComputedStyle(element);
+        return { animation: css.animationName, background: css.backgroundColor, width: element.getBoundingClientRect().width };
+      });
+      assert.equal(style.animation !== 'none', blinking, JSON.stringify(style));
+      if (!blinking) assert.ok(style.width > 0 && style.background !== 'rgba(0, 0, 0, 0)', JSON.stringify(style));
+      assert.equal(await terminalInput.evaluate((element) => element === document.activeElement), true);
+    }
+
+    await assertCursor(true);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await assertCursor(false);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await assertCursor(true);
+
+    const settingsEntry = page.getByRole('button', { name: '设置', exact: true });
+    const settings = page.getByRole('dialog', { name: '设置', exact: true });
+    async function setAppMotion(label) {
+      await settingsEntry.click();
+      await openSettingsSection(settings, '交互');
+      await settings.getByRole('group', { name: '动画', exact: true }).getByRole('button', { name: label, exact: true }).click();
+      await settings.getByText('应用偏好已保存', { exact: true }).waitFor();
+      await settings.getByRole('button', { name: '完成', exact: true }).click();
+      await settings.waitFor({ state: 'hidden' });
+      assert.equal(await settingsEntry.evaluate((element) => element === document.activeElement), true);
+      await focus.click();
+    }
+    await setAppMotion('减少动画');
+    await assertCursor(false);
+    await setAppMotion('跟随系统');
+    await assertCursor(true);
+
+    const input = page.waitForRequest((request) => request.url().endsWith(terminalPath) &&
+      request.method() === 'POST' && request.postDataJSON()?.op === 'native-input');
+    const composer = terminal.getByRole('textbox', { name: 'Claude Code 消息', exact: true });
+    await composer.fill('光标运行时测试');
+    await composer.press('Enter');
+    const packet = (await input).postDataJSON();
+    assert.equal(packet.sessionId, sessionId);
+    assert.equal(Buffer.from(packet.data, 'base64').toString('utf8'), '光标运行时测试\r');
+    assert.equal(await composer.evaluate((element) => element === document.activeElement), true);
+    assert.equal(calls.filter(({ op }) => op === 'native-subscription-start').length, 1);
   });
