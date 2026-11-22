@@ -157,6 +157,20 @@ test('staged Windows app loads the pinned native files and restores local record
     const claudeVersion = execFileSync(claudeBinary, ['--version'], { timeout: 7000, windowsHide: true, encoding: 'utf8',
       env: { SystemRoot: process.env.SystemRoot, HOME: dataRoot, USERPROFILE: dataRoot, APPDATA: appData, LOCALAPPDATA: appData } });
     assert.match(claudeVersion.trim(), /^2[.]1[.]296\b/u);
+    if (claude.personalSubscriptionAvailable) {
+      const loginHelp = execFileSync(claudeBinary, ['auth', 'login', '--help'], { timeout: 7000, windowsHide: true,
+        encoding: 'utf8', env: { SystemRoot: process.env.SystemRoot, HOME: dataRoot, USERPROFILE: dataRoot, APPDATA: appData,
+          LOCALAPPDATA: appData, CLAUDE_CONFIG_DIR: dataRoot, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' } });
+      assert.match(loginHelp, /auth login/u);
+      assert.match(loginHelp, /--claudeai\s+Use Claude subscription/u);
+      const localSubscription = await page.evaluate(() => window.vpsWorkbench.registerLocalSdkProfile({
+        name: '包内 Claude 订阅', backend: 'claude-sdk', model: 'default', effort: 'default', authMode: 'subscription',
+      }));
+      assert.ok(localSubscription.ok);
+      assert.equal(localSubscription.profile.authMode, 'subscription');
+      assert.equal((await page.evaluate(() => window.vpsWorkbench.checkLocalClaudeSubscription('missing-profile'))).code,
+        'credential_unavailable');
+    }
     const profile = status.profiles[0];
     assert.equal(profile.directory, directory);
     const binding = { location: 'local-sdk', backend: 'codex', profileId: profile.id,

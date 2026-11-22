@@ -171,6 +171,8 @@ Antigravity 聊天生成时可以补充指令。针对已挂载只读工作区�
 
 从仓库根目录分别运行 `npm ci --ignore-scripts --prefix vps-workbench` 和 `npm ci --ignore-scripts --prefix remote-workbench/vps-chat`，再运行 `pwsh -File ./vps-workbench/Build.ps1`。构建使用同一工作区的共享组件和 `windows-terminal` 运行时源码。脚本校验缓存的 Electron 44.7.0 归档及两份兼容执行器归档。`Build.ps1` 和 `Sync-Local.ps1 -StageOnly` 都可通过 `-ElectronZip`、`-CompatibilityArchive` 和 `-SubscriptionArchive` 指定归档路径。Codex SDK、Windows CLI 及平台包完整性由 npm lockfile 固定，包内保留许可证与原生资源声明。
 
+个人 Windows 构建可用 `Build.ps1 -PersonalClaudeSubscription` 启用本机 Claude 个人订阅。启动 `dist/VPS-Workbench-<版本>-win-x64-personal` 中的程序，在「设置 → 连接 → 本机 SDK」注册 Claude Agent SDK 配置时选择「Claude 个人订阅」，再从账号页打开官方 Claude Code 登录窗口。登录完成后检查此配置的登录状态，可另行发起模型试跑。Claude Code 管理登录凭据，每个订阅配置有独立的登录目录和会话。个人构建默认使用 `%APPDATA%\VPS Workbench Personal`。正常构建使用 API Key 认证。个人使用及对外发布的认证边界见 [Claude Agent SDK 订阅说明](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) 和 [第三方认证规则](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)。
+
 发布输出在 `dist/VPS-Workbench-<版本>-win-x64`。DSH 插件由原来的 remote-workbench/vps-chat/Build.ps1 单独打包。运行 npm test 检查独立本机状态、导入、接口授权、订阅终端回执与界面预览。运行 npm run test:desktop 验证打包窗口和工作台交互。
 
 VPS 后端独立打包。运行 `python vps-workbench/vps-package/build.py --revision <Git提交哈希>`，产物位于 `vps-workbench/dist/vps-backend/`。同一归档适用于满足运行条件的 Linux x86‑64 与 ARM64。分别检查宿主和安装选中的执行端，步骤见 [VPS 后端安装说明](vps-package/README.md)。

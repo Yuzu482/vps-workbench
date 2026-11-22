@@ -74,6 +74,12 @@
     registerLocalSdkProfile(config) {
       return this.localSdkRequest({ ...config, op: 'register' });
     },
+    loginLocalClaudeSubscription(profileId) {
+      return this.localSdkRequest({ op: 'subscription-login', backend: 'claude-sdk', profileId });
+    },
+    checkLocalClaudeSubscription(profileId) {
+      return this.localSdkRequest({ op: 'subscription-status', backend: 'claude-sdk', profileId });
+    },
     async localComponentsStatus() {
       const response = await fetch('/__preview/local-components');
       return response.ok ? response.json() : null;

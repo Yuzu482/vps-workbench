@@ -53,7 +53,7 @@ function hasSession(header, ticket) {
 export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoot, runtimeRoot, pythonPath,
   makeBridge = createBridge, makeSubscriptionHost = createStandaloneSubscriptionHost, access = () => defaultAccess,
   data, onMemoryChanged, onMemoryError, localStateRoot, localApiKey, localAgentOptions, localCredentials,
-  componentRoot, componentMode = 'bundled', makeComponentInstaller = createComponentInstaller,
+  componentRoot, componentMode = 'bundled', makeComponentInstaller = createComponentInstaller, personalClaudeSubscription = false,
   makeLocalRuntime = openCodexRuntime, makeLocalAgentRuntime = openLocalAgentRuntime }) {
   const ticket = randomBytes(32).toString('base64url');
   const readRoute = createWorkbenchRouteReader(workbenchRoot);
@@ -71,7 +71,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
       const runtime = await makeLocalRuntime({ ...options, apiKey });
       return { ...runtime, workflowCredentialPin: createHash('sha256').update(apiKey ?? '').digest('hex') };
     }
-    return makeLocalAgentRuntime({ ...localAgentOptions, ...options, backend,
+    return makeLocalAgentRuntime({ ...localAgentOptions, ...options, backend, personalSubscription: personalClaudeSubscription,
       claudeKey: stored?.key ?? (stored?.state === 'unavailable' ? undefined : localAgentOptions?.claudeKey) });
   }
   if (localStateRoot) {
@@ -82,8 +82,9 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
         const record = { stateRoot, provisioned };
         record.sdk = await loadRuntime(backend, stateRoot, provisioned);
         const service = await openLocalSdk({ root: stateRoot, backend, models: record.sdk.models ?? localModels,
+          personalSubscription: personalClaudeSubscription,
           createThread: (...args) => record.sdk.createThread(...args), canExecute,
-          credentialConfigured: () => record.sdk.credentialConfigured() });
+          credentialConfigured: (profile) => record.sdk.credentialConfigured(profile) });
         const workbench = createLocalWorkbench({ service, runtimeAvailable: () => record.sdk.runtimeAvailable, backend, access, data,
           onChange: onMemoryChanged, onError: onMemoryError });
         local.set(backend, Object.assign(record, { service, workbench }));
@@ -99,11 +100,20 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
       const { profiles, ...status } = service.status();
       const loginPending = sdk.credentialSource === 'agy-local-login' && sdk.runtimeAvailable;
       return { ...status, ...(loginPending && { credentialConfigured: false, credentialPending: true }),
+        ...(status.backend === 'claude-sdk' && personalClaudeSubscription && { personalSubscriptionAvailable: true }),
         runtimeAvailable: sdk.runtimeAvailable, credentialSource: sdk.credentialSource ?? 'codex-api-key',
         profiles: profiles.map((profile) => ({ ...profile, backend: status.backend,
           ...(sdk.accountDirectory && { accountDirectory: sdk.accountDirectory(profile.id) }) })) };
     });
     return { ...providers[0], providers, profiles: providers.flatMap(({ profiles }) => profiles) };
+  }
+  async function claudeSubscriptionAuth(profileId, action) {
+    if (!canExecute()) return { ok: false, code: 'browse_only' };
+    const selected = local.get('claude-sdk');
+    const profile = selected?.service.status().profiles.find(({ id, authMode }) => id === profileId && authMode === 'subscription');
+    if (!personalClaudeSubscription || !profile || !selected.sdk[action]) return { ok: false, code: 'credential_unavailable' };
+    try { return await selected.sdk[action](profile, canExecute); }
+    catch { return { ok: false, code: 'credential_unavailable' }; }
   }
   function localComponentsStatus() {
     if (!components) return null;
@@ -373,6 +383,8 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
       try { return await selected.sdk.login(profile, canExecute); }
       catch { return { ok: false, code: 'credential_unavailable' }; }
     },
+    loginLocalClaudeSubscription: (profileId) => claudeSubscriptionAuth(profileId, 'loginSubscription'),
+    checkLocalClaudeSubscription: (profileId) => claudeSubscriptionAuth(profileId, 'checkSubscription'),
     async requestLocal(body) {
       if (body?.location !== 'local-sdk' || !isLocalBackend(body.backend))
         return { ok: false, code: 'execution_location_mismatch', message: '请选择对应的本机配置。' };

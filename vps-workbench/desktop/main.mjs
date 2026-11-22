@@ -45,7 +45,10 @@ function canonicalDestination(path) {
   }
   return join(realpathSync(ancestor), relative(ancestor, path));
 }
-const root = canonicalDestination(resolve(process.env.VPS_WORKBENCH_DATA_DIR || join(app.getPath('appData'), 'VPS Workbench')));
+const buildMetadata = JSON.parse(await readFile(join(directory, '../package.json'), 'utf8'));
+const personalClaudeSubscription = buildMetadata.personalClaudeSubscription === true;
+const dataDirectory = personalClaudeSubscription ? 'VPS Workbench Personal' : 'VPS Workbench';
+const root = canonicalDestination(resolve(process.env.VPS_WORKBENCH_DATA_DIR || join(app.getPath('appData'), dataDirectory)));
 const dshRoot = canonicalDestination(resolve(app.getPath('appData'), 'dsh-desktop')).toLowerCase();
 const workbenchRoot = join(root, 'conversations');
 const terminalRoot = join(root, 'terminal');
@@ -119,12 +122,11 @@ async function start() {
   data = await openAppData(root, { onBackupFailure: () => publishStatus('本机数据已保存，备份暂时无法更新。') });
   const pythonPath = process.env.VPS_WORKBENCH_PYTHON;
   if (pythonPath && !isAbsolute(pythonPath)) throw new Error('python_must_be_absolute');
-  const { componentMode } = JSON.parse(await readFile(join(directory, '../package.json'), 'utf8'));
   runtime = await startWorkbenchServer({
     webRoot: join(directory, 'web'), workbenchRoot, terminalRoot,
     runtimeRoot: join(directory, '../helper'), pythonPath, access: () => readAccess(data.preference(accessPreference)),
     localStateRoot: join(root, 'local-sdk'), localApiKey, localAgentOptions,
-    componentRoot: join(root, 'components'), componentMode,
+    componentRoot: join(root, 'components'), componentMode: buildMetadata.componentMode, personalClaudeSubscription,
     localCredentials: openLocalCredentials({ root: join(root, 'local-credentials'), encryption: safeStorage }),
     data, onMemoryChanged: (state) => {
       if (window && !window.isDestroyed()) window.webContents.send('workbench:extensions-changed', state);
@@ -248,6 +250,14 @@ async function start() {
     trustedRenderer(event);
     return runtime.loginLocalAntigravity(profileId);
   });
+  ipcMain.handle('workbench:local-claude-subscription-login', (event, profileId) => {
+    trustedRenderer(event);
+    return runtime.loginLocalClaudeSubscription(profileId);
+  });
+  ipcMain.handle('workbench:local-claude-subscription-status', (event, profileId) => {
+    trustedRenderer(event);
+    return runtime.checkLocalClaudeSubscription(profileId);
+  });
   ipcMain.handle('workbench:local-sdk-request', (event, body) => {
     trustedRenderer(event);
     return runtime.requestLocal(body);
@@ -261,14 +271,16 @@ async function start() {
     }
     const backend = config?.backend ?? 'codex';
     const provider = status.providers?.find((item) => item.backend === backend);
-    if (!provider || !config || Object.keys(config).some((key) => !['name', 'model', 'effort', 'backend'].includes(key)) ||
+    if (!provider || !config || Object.keys(config).some((key) => !['name', 'model', 'effort', 'backend', 'authMode'].includes(key)) ||
+        (Object.hasOwn(config, 'authMode') && !(config.authMode === 'subscription' && provider.personalSubscriptionAvailable)) ||
         typeof config.name !== 'string' || !config.name.trim() || config.name.length > 80 ||
         !provider.models.some(({ id, efforts }) => id === config.model && efforts.includes(config.effort))) {
       return { ok: false, code: 'invalid_profile', message: '请选择受支持的模型和推理档位，并填写配置名。' };
     }
     const selected = await withDirectory({ title: '选择本机执行端的只读工作目录' }, async (path) => {
       const directory = await canonicalLocalDirectory(path);
-      return runtime.registerLocalProfile({ backend, name: config.name, model: config.model, effort: config.effort, directory });
+      return runtime.registerLocalProfile({ backend, name: config.name, model: config.model, effort: config.effort, directory,
+        ...(config.authMode === 'subscription' && { authMode: 'subscription' }) });
     }, () => ({ ok: false, code: 'invalid_directory', message: '请选择可用的本机目录。' }));
     return selected ?? { ok: false, code: 'directory_cancelled', message: '未选择工作目录。' };
   });

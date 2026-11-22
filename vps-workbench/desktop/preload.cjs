@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('vpsWorkbench', {
   cancelLocalComponents: () => ipcRenderer.invoke('workbench:local-components-cancel'),
   saveLocalCredential: (backend, key) => ipcRenderer.invoke('workbench:local-credential-save', backend, key),
   loginLocalAntigravity: (profileId) => ipcRenderer.invoke('workbench:local-antigravity-login', profileId),
+  loginLocalClaudeSubscription: (profileId) => ipcRenderer.invoke('workbench:local-claude-subscription-login', profileId),
+  checkLocalClaudeSubscription: (profileId) => ipcRenderer.invoke('workbench:local-claude-subscription-status', profileId),
   localSdkRequest: (body) => ipcRenderer.invoke('workbench:local-sdk-request', body),
   registerLocalSdkProfile: (config) => ipcRenderer.invoke('workbench:local-sdk-register', config),
   changeExtensions: (change) => ipcRenderer.invoke('workbench:extensions', change),

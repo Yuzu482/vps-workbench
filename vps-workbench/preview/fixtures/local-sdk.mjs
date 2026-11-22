@@ -8,15 +8,18 @@ import { openLocalSdk } from '../../local-sdk/service.mjs';
 import { createLocalWorkbench } from '../../local-sdk/workbench.mjs';
 import { localBackends, providerDefaultModels, usesLocalControls } from '../../local-sdk/providers.mjs';
 
-export async function createPreviewLocalSdk(access, { runtimeAvailable = () => true, ...options } = {}) {
+export async function createPreviewLocalSdk(access, { runtimeAvailable = () => true, personalSubscription = false, ...options } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'vps-workbench-preview-sdk-'));
   const directory = join(root, '示例工作目录');
   await mkdir(directory);
   const backends = new Map();
+  const signedIn = new Set();
   for (const backend of Object.keys(localBackends)) {
     const service = await openLocalSdk({
     root: join(root, backend), backend, models: backend === 'codex' ? localModels : providerDefaultModels,
-    credentialConfigured: () => runtimeAvailable(backend), canExecute: () => access().mode === 'execute',
+    personalSubscription,
+    credentialConfigured: (profile) => runtimeAvailable(backend) &&
+      (profile?.authMode !== 'subscription' || signedIn.has(profile.id)), canExecute: () => access().mode === 'execute',
     createThread(_profile, priorThreadId, { interaction } = {}) {
       const id = priorThreadId ?? randomUUID();
       return { async runStreamed(input, { signal }) {
@@ -68,6 +71,7 @@ export async function createPreviewLocalSdk(access, { runtimeAvailable = () => t
       const current = service.status();
       return { ...current, runtimeAvailable: runtimeAvailable(current.backend), credentialSource: current.backend === 'antigravity' ? 'agy-local-login' :
         current.backend === 'claude-sdk' ? 'claude-api-key' : 'codex-api-key',
+      ...(current.backend === 'claude-sdk' && personalSubscription && { personalSubscriptionAvailable: true }),
       profiles: current.profiles.map((profile) => ({ ...profile, backend: current.backend })) };
     });
     return { ...providers[0], providers, profiles: providers.flatMap(({ profiles }) => profiles) };
@@ -78,11 +82,20 @@ export async function createPreviewLocalSdk(access, { runtimeAvailable = () => t
       const selected = backends.get(body?.backend ?? 'codex');
       if (!selected) return { ok: false, code: 'invalid_request' };
       const { service, workbench } = selected;
+      if (['subscription-login', 'subscription-status'].includes(body.op)) {
+        if (access().mode !== 'execute') return { ok: false, code: 'browse_only' };
+        if (!personalSubscription || body.backend !== 'claude-sdk' || !service.status().profiles.some(({ id, authMode }) =>
+          id === body.profileId && authMode === 'subscription')) return { ok: false, code: 'credential_unavailable' };
+        if (body.op === 'subscription-status') return { ok: true, status: signedIn.has(body.profileId) ? 'signed_in' : 'sign_in_required' };
+        signedIn.add(body.profileId);
+        return { ok: true };
+      }
       if (body.op === 'workbench' && body.location === 'local-sdk')
         return workbench.request(body.payload, options);
       if (body.op !== 'register') return service.request(body);
-      const { name, model, effort } = body;
-      const result = await service.registerProfile({ name, model, effort, directory });
+      const { name, model, effort, authMode } = body;
+      const result = await service.registerProfile({ name, model, effort, directory,
+        ...(Object.hasOwn(body, 'authMode') && { authMode }) });
       return result.ok ? { ...result, profile: status().profiles.find(({ id }) => id === result.profile.id) } : result;
     },
     revokeExecution() { for (const { service } of backends.values()) service.revokeExecution(); },

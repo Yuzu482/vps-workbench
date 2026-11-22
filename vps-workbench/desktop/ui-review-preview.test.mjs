@@ -400,6 +400,7 @@ test('P0 keeps unsaved workflow names and links until a guarded action succeeds'
   await name.fill('第二个工作流 · 保存后切换');
   await choices.selectOption(original.id);
   await save.click();
+  await prompt.waitFor({ state: 'hidden' });
   assert.equal(await choices.inputValue(), original.id);
   assert.equal(await name.inputValue(), edited);
   const second = (await readSavedWorkflows(page)).find(({ id }) => id === otherId);
@@ -1201,6 +1202,45 @@ test('local tools and memory settings stay on the selected configuration and kee
   assert.equal(await page.getByLabel('新建位置', { exact: true }).inputValue(), 'local-sdk');
   assert.equal(await entry.evaluate((node) => node === document.activeElement), true);
   assert.deepEqual(requests, []);
+});
+
+test('personal Claude subscription is selected per profile and has its own login check and model trial', { timeout: 35_000 }, async (t) => {
+  const page = await openPreview(t, { viewport: { width: 420, height: 640 },
+    previewOptions: { localAgents: true, personalSubscription: true } });
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettingsSection(settings, '连接');
+  await settings.getByLabel('本机执行端', { exact: true }).selectOption('claude-sdk');
+  const auth = settings.getByLabel('认证方式', { exact: true });
+  assert.equal(await auth.inputValue(), 'api-key');
+  await auth.selectOption('subscription');
+  await settings.getByLabel('配置名称', { exact: true }).fill('订阅测试配置');
+  await settings.getByRole('button', { name: '选择工作目录并保存', exact: true }).click();
+  await settings.locator('dd').getByText('Claude 个人订阅', { exact: true }).waitFor();
+  const status = await page.evaluate(() => window.vpsWorkbench.localSdkStatus());
+  const profile = status.profiles.find(({ name }) => name === '订阅测试配置');
+  const api = status.profiles.find(({ backend, authMode }) => backend === 'claude-sdk' && !authMode);
+  assert.equal(profile.authMode, 'subscription');
+  assert.notEqual(profile.targetId, api.targetId);
+  await openSettingsSection(settings, '账号');
+  const account = settings.getByLabel('查看本机账号配置');
+  assert.equal(await account.inputValue(), profile.id);
+  assert.equal(await settings.locator('input[type=password]').count(), 0);
+  const probe = settings.getByRole('button', { name: '检查订阅登录', exact: true });
+  await probe.click();
+  await settings.getByText(/此配置尚未通过|尚未登录|请通过 Claude 登录/).first().waitFor();
+  await settings.getByRole('button', { name: '打开 Claude 登录', exact: true }).click();
+  await settings.getByText(/请在 Claude 登录窗口完成登录/).waitFor();
+  await probe.click();
+  await settings.getByText(/已核验此配置的 Claude 个人订阅登录/).waitFor();
+  await account.selectOption(api.id);
+  assert.equal(await probe.count(), 0);
+  assert.equal(await settings.getByText('本机 API 密钥已配置。', { exact: true }).count(), 1);
+  await account.selectOption(profile.id);
+  await settings.getByRole('button', { name: '打开本机连接检查', exact: true }).click();
+  await settings.getByRole('button', { name: '测试本机配置', exact: true }).click();
+  await settings.getByRole('button', { name: '试跑模型', exact: true }).click();
+  await settings.getByText('试跑已收到完整模型回复。', { exact: true }).waitFor();
 });
 
 test('local Claude and Antigravity share streaming, supplement and approval UI with isolated histories', { timeout: 60_000 }, async (t) => {

@@ -337,9 +337,9 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data, 
         return memory && !['steer', 'approval'].includes(body.op) ? memory.request(body) : dispatch(body);
       }
       if (!(typeof runtimeAvailable === 'function' ? runtimeAvailable() : runtimeAvailable)) return unavailable();
-      if (!service.status().credentialConfigured) return authRequired();
       const profile = profileFor(body.settings);
       if (!profile || profile.targetId !== body.targetId) return missing;
+      if (!service.credentialConfigured(profile)) return authRequired();
       const signature = fingerprint(body);
       const existing = requests.get(body.turnId);
       if (existing) return existing.signature === signature ? existing.result : conflicted;

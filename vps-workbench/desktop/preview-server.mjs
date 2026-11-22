@@ -96,6 +96,7 @@ async function buildPreview(instance) {
 }
 
 export async function startPreview({ localAgents = false, localComponents = false, componentFailure = null, componentDelay = 550,
+  personalSubscription = false,
   backendPlatform, backendFailure,
   port = localComponents ? localComponentsPort : localAgents ? localAgentsPort : previewPort, watch = true, log = () => {} } = {}) {
   const instance = randomBytes(8).toString('hex');
@@ -187,7 +188,7 @@ export async function startPreview({ localAgents = false, localComponents = fals
   }
 
   function localSdk() {
-    previewLocal ??= createPreviewLocalSdk(() => access, { data,
+    previewLocal ??= createPreviewLocalSdk(() => access, { data, personalSubscription,
       runtimeAvailable: (backend) => !localComponents || installedComponents.has(backend),
       readRun: (id) => id ? localWorkflowRuns.get(id) : [...localWorkflowRuns.values()].at(-1),
       readSavedWorkflow: (id, runId) => {

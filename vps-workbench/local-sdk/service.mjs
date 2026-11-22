@@ -62,8 +62,14 @@ function stateResult(state, code) {
   return code ? { state, code, message: messages[code] } : { state };
 }
 
-function targetFor(backend, id) {
-  return createHash('sha256').update(`${location}:${backend}:${id}`).digest('hex');
+function targetFor(backend, id, authMode) {
+  const suffix = authMode === 'subscription' ? ':subscription' : '';
+  return createHash('sha256').update(`${location}:${backend}:${id}${suffix}`).digest('hex');
+}
+
+function validProfileFields(profile, fields, allowPersonalSubscription) {
+  return exact(profile, fields) || (allowPersonalSubscription &&
+    exact(profile, [...fields, 'authMode']) && profile.authMode === 'subscription');
 }
 
 function plain(value) {
@@ -156,8 +162,10 @@ function settleInteractions(turn, uncertain) {
 function validateStore(store, backend) {
   if (!exact(store, ['version', 'profiles', 'sessions']) || store.version !== 1 ||
       !Array.isArray(store.profiles) || !Array.isArray(store.sessions)) return false;
-  if (!store.profiles.every((profile) => exact(profile, ['id', 'targetId', 'name', 'directory', 'model', 'effort']) &&
-    identifier(profile.id) && profile.id === profile.id.toLowerCase() && profile.targetId === targetFor(backend, profile.id) &&
+  if (!store.profiles.every((profile) => validProfileFields(profile,
+    ['id', 'targetId', 'name', 'directory', 'model', 'effort'], backend === 'claude-sdk') &&
+    identifier(profile.id) && profile.id === profile.id.toLowerCase() &&
+    profile.targetId === targetFor(backend, profile.id, profile.authMode) &&
     validText(profile.name) && validText(profile.directory) && isAbsolute(profile.directory) &&
     validText(profile.model) && validText(profile.effort))) return false;
   const profiles = indexById(store.profiles);
@@ -290,7 +298,8 @@ function sdkFailure(message) {
     ? 'network_error' : null;
 }
 
-export async function openLocalSdk({ root, models, createThread, canExecute, credentialConfigured, backend = 'codex' }) {
+export async function openLocalSdk({ root, models, createThread, canExecute, credentialConfigured, backend = 'codex',
+  personalSubscription = false }) {
   if (!isLocalBackend(backend)) throw new Error('unsupported local backend');
   const path = join(root, 'receipts.json');
   let store = await loadStore(path, backend);
@@ -334,10 +343,10 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
   const supportedProfile = ({ model, effort }) => availableModels.some((entry) =>
     entry.id === model && entry.efforts.includes(effort));
 
-  function executionBlock() {
+  function executionBlock(profile) {
     if (closing || !canExecute()) return 'browse_only';
     if (storageFailed) return 'storage_unavailable';
-    if (!credentialConfigured()) return 'auth_required';
+    if (!credentialConfigured(profile)) return 'auth_required';
     return null;
   }
 
@@ -366,7 +375,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       targetId: profile.targetId,
       session: {
         id: session.id, profileId: profile.id, title: session.title, mode: session.mode ?? 'chat',
-        canSend: !executionBlock() && supportedProfile(profile) && !turns.some((turn) => turn.state === 'unknown'), turns,
+        canSend: !executionBlock(profile) && supportedProfile(profile) && !turns.some((turn) => turn.state === 'unknown'), turns,
       },
     };
   }
@@ -382,17 +391,19 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
     return transact(async () => {
       if (closing || !canExecute()) return failure('browse_only');
       if (storageFailed) return failure('storage_unavailable');
-      if (!exact(body, ['name', 'directory', 'model', 'effort']) || !validText(body.name) ||
+      if (!validProfileFields(body, ['name', 'directory', 'model', 'effort'], backend === 'claude-sdk' && personalSubscription) ||
+          !validText(body.name) ||
           body.name.length > 80 || !validText(body.directory) || !isAbsolute(body.directory) || !supportedProfile(body)) {
         return failure('invalid_profile');
       }
-      const { directory, model, effort } = body;
+      const { directory, model, effort, authMode } = body;
       const name = body.name.trim();
       const existing = store.profiles.find((profile) =>
-        profile.name === name && profile.directory === directory && profile.model === model && profile.effort === effort);
+        profile.name === name && profile.directory === directory && profile.model === model && profile.effort === effort &&
+        profile.authMode === authMode);
       if (existing) return { ok: true, profile: { ...existing } };
       const id = randomUUID();
-      const profile = { id, targetId: targetFor(backend, id), name, directory, model, effort };
+      const profile = { id, targetId: targetFor(backend, id, authMode), name, directory, model, effort, ...(authMode && { authMode }) };
       await commit((next) => next.profiles.push(profile));
       return { ok: true, profile: { ...profile } };
     }).catch(() => failure('storage_unavailable'));
@@ -536,7 +547,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
         const session = sessionById(sessionId);
         const turn = session.turns.find(({ id }) => id === turnId);
         if (!pending.has(turn.state)) return null;
-        const block = executionBlock();
+        const block = executionBlock(profile);
         if (signal.aborted || block === 'browse_only') return stateResult('stopped');
         if (session.turns.some((turn) => turn.state === 'unknown')) return stateResult('failed', 'unknown_outcome');
         if (block) return stateResult('failed', block);
@@ -546,7 +557,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       if (!start) return;
       if (start.state) return await finish(start);
 
-      const beforeCreate = executionBlock();
+      const beforeCreate = executionBlock(profile);
       if (signal.aborted || beforeCreate === 'browse_only') return await finish(stateResult('stopped'));
       if (beforeCreate) return await finish(stateResult('failed', beforeCreate));
       if (options?.permittedResources && !options.permittedResources()) return await finish(stateResult('failed', 'resources_changed'));
@@ -556,7 +567,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
         verbosity: start.execution?.verbosity, turnId, bindSession: (id) => bindNative(sessionId, turnId, id),
         ...(usesLocalControls(backend) && options?.fingerprint && !options.background && { interaction: controlsFor(sessionId, turnId, control) }),
         rasterInput: Array.isArray(input) && input.some(({ type }) => type === 'raster') });
-      const beforeDispatch = executionBlock();
+      const beforeDispatch = executionBlock(profile);
       if (signal.aborted || beforeDispatch === 'browse_only') return await finish(stateResult('stopped'));
       if (beforeDispatch) return await finish(stateResult('failed', beforeDispatch));
       if (options?.permittedResources && !options.permittedResources()) return await finish(stateResult('failed', 'resources_changed'));
@@ -625,7 +636,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
           prior.execution?.fingerprint !== options?.fingerprint) return failure('turn_conflict');
       return { ...view(profile, occupied), duplicate: true };
     }
-    const block = executionBlock();
+    const block = executionBlock(profile);
     if (block) return failure(block);
     const model = options?.model ?? profile.model;
     const effort = options?.effort ?? profile.effort;
@@ -721,5 +732,5 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
     await Promise.allSettled(lanes.values());
   }
 
-  return { status, registerProfile, request, revokeExecution, close };
+  return { status, registerProfile, request, credentialConfigured, revokeExecution, close };
 }

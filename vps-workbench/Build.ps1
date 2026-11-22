@@ -4,7 +4,8 @@ param(
     [string]$ElectronZip,
     [string]$CompatibilityArchive,
     [string]$SubscriptionArchive,
-    [switch]$OnDemandRuntimes
+    [switch]$OnDemandRuntimes,
+    [switch]$PersonalClaudeSubscription
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,7 +14,10 @@ $workspace = Split-Path -Parent $project
 $application = Get-Content -LiteralPath (Join-Path $project 'package.json') -Raw | ConvertFrom-Json
 $tar = Join-Path $env:SystemRoot 'System32/tar.exe'
 
-if (!$OutputDirectory) { $OutputDirectory = Join-Path $project "dist/VPS-Workbench-$($application.version)-win-x64" }
+if (!$OutputDirectory) {
+    $variant = if ($PersonalClaudeSubscription) { '-personal' } else { '' }
+    $OutputDirectory = Join-Path $project "dist/VPS-Workbench-$($application.version)-win-x64$variant"
+}
 if (!$CompatibilityArchive) {
     $CompatibilityArchive = Join-Path $workspace 'test-artifacts/dsh-account-runtime-20261120/dsh-vps-chat-workbench-0.25.2-compat.1.tgz'
 }
@@ -87,7 +91,7 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $app 'agent-presets') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $project 'agent-presets/state.mjs') -Destination (Join-Path $app 'agent-presets')
     $componentMode = if ($OnDemandRuntimes) { 'on-demand' } else { 'bundled' }
-    [ordered]@{name = $application.name; version = $application.version; private = $true; type = 'module'; main = 'desktop/main.mjs'; componentMode = $componentMode} |
+    [ordered]@{name = $application.name; version = $application.version; private = $true; type = 'module'; main = 'desktop/main.mjs'; componentMode = $componentMode; personalClaudeSubscription = [bool]$PersonalClaudeSubscription} |
         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $app 'package.json') -Encoding utf8NoBOM
     foreach ($file in @('main.mjs', 'preload.cjs', 'data.mjs', 'migrate.mjs', 'access.mjs', 'workflow-attachments.mjs')) {
         Copy-Item -LiteralPath (Join-Path $project "desktop/$file") -Destination $desktop
