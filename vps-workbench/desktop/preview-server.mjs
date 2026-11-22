@@ -94,6 +94,7 @@ async function buildPreview(instance) {
 }
 
 export async function startPreview({ localAgents = false, localComponents = false, componentFailure = null, componentDelay = 550,
+  backendPlatform, backendFailure,
   port = localComponents ? localComponentsPort : localAgents ? localAgentsPort : previewPort, watch = true, log = () => {} } = {}) {
   const instance = randomBytes(8).toString('hex');
   let current = await buildPreview(instance);
@@ -101,7 +102,7 @@ export async function startPreview({ localAgents = false, localComponents = fals
   let previewLocal;
   let componentInstall;
   const installedComponents = new Set();
-  const fixtures = createPreviewFixtures();
+  const fixtures = createPreviewFixtures({ backendPlatform, backendFailure });
   let projects = fixtures.projects;
   const token = randomBytes(24).toString('base64url');
   const clients = new Set();

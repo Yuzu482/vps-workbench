@@ -42,6 +42,98 @@ async function openPreview(t, { viewport = { width: 1280, height: 720 }, seed, p
   return page;
 }
 
+async function openVpsSetup(page) {
+  const settings = page.getByRole('button', { name: '设置', exact: true });
+  if (!(await settings.isVisible())) {
+    const sidebar = page.getByRole('button', { name: '展开会话侧栏', exact: true });
+    if (await sidebar.isVisible()) await sidebar.click();
+  }
+  await settings.click();
+  await page.getByRole('button', { name: '接入向导', exact: true }).click();
+  return page.getByRole('dialog', { name: 'VPS 接入向导', exact: true });
+}
+
+test('VPS backend probe is automatic and a lost install reply resumes the original receipt after reload', { timeout: 35_000 }, async (t) => {
+  const page = await openPreview(t, { viewport: { width: 420, height: 640 },
+    previewOptions: { backendPlatform: { architecture: 'arm64' }, backendFailure: 'claude-sdk' } });
+  const packets = [];
+  let loseReply = true;
+  let unavailableProbe = false;
+  let sdkRemoved = false;
+  await page.route('**/dsh-vps-chat/api/rpc', async (route) => {
+    const packet = route.request().postDataJSON();
+    packets.push(packet);
+    if (loseReply && packet.op === 'setup-backend' && packet.kind === 'start') {
+      loseReply = false;
+      await route.fetch(); // The fixture accepted the original start.
+      await route.fulfill({ status: 503, json: { ok: false, code: 'unknown' } });
+    } else if (packet.op === 'setup-backend' && packet.kind === 'probe' && (unavailableProbe || sdkRemoved)) {
+      const response = await route.fetch();
+      const reply = await response.json();
+      if (unavailableProbe) {
+        reply.platform = null;
+        reply.probeError = '暂时无法识别 VPS 系统。';
+      } else reply.platform.providers['claude-sdk'] = { runtime: 'missing', onSshPath: false };
+      await route.fulfill({ response, json: reply });
+    } else await route.continue();
+  });
+  let guide = await openVpsSetup(page);
+  let panel = guide.getByRole('listitem', { name: 'VPS 后端安装', exact: true });
+  await panel.getByText('连接 VPS 后会自动识别系统和架构。', { exact: true }).waitFor();
+  assert.equal(packets.some(({ op }) => op === 'setup-backend'), false);
+  await guide.getByRole('button', { name: '开始检查', exact: true }).click();
+  await panel.getByText('Ubuntu · 24.04 · ARM64', { exact: true }).waitFor();
+  const start = panel.getByRole('button', { name: '安装所选执行端', exact: true });
+  assert.equal(await start.isDisabled(), true);
+  await panel.getByRole('checkbox', { name: 'Codex', exact: true }).check();
+  await panel.getByRole('checkbox', { name: 'Claude Agent SDK', exact: true }).check();
+  await start.press('Enter');
+  await panel.getByRole('alert').getByText('尚未确认安装请求。请查询原安装。', { exact: true }).waitFor();
+  const original = packets.find(({ op, kind }) => op === 'setup-backend' && kind === 'start');
+  assert.deepEqual(original.providers, ['codex', 'claude-sdk']);
+  assert.equal(original.settings.provider, 'codex');
+  unavailableProbe = true;
+  await page.reload();
+  guide = await openVpsSetup(page);
+  panel = guide.getByRole('listitem', { name: 'VPS 后端安装', exact: true });
+  await guide.getByRole('button', { name: '开始检查', exact: true }).click();
+  await panel.getByText('暂时无法识别 VPS 系统。', { exact: true }).waitFor();
+  await panel.getByRole('button', { name: '查询原安装', exact: true }).click();
+  await panel.getByText('安装未全部完成', { exact: true }).waitFor();
+  await panel.getByText('保留已有运行时', { exact: true }).waitFor();
+  await panel.getByText('下载失败，请检查 VPS 网络后重试。', { exact: true }).waitFor();
+  const queries = packets.filter(({ op, kind }) => op === 'setup-backend' && kind === 'status');
+  assert.ok(queries.length && queries.every((query) => query.installId === original.installId && query.targetId === original.targetId));
+  assert.equal(packets.filter(({ op, kind }) => op === 'setup-backend' && kind === 'start').length, 1);
+  unavailableProbe = false;
+  const recheck = guide.getByRole('button', { name: '重新检查', exact: true });
+  await recheck.click();
+  await panel.getByRole('checkbox', { name: 'Claude Agent SDK', exact: true }).check();
+  await panel.getByRole('button', { name: '安装所选执行端', exact: true }).click();
+  await panel.getByText('安装完成。可以继续检查账号和模型目录。', { exact: true }).waitFor();
+  const starts = packets.filter(({ op, kind }) => op === 'setup-backend' && kind === 'start');
+  assert.deepEqual(starts.map(({ providers }) => providers), [['codex', 'claude-sdk'], ['claude-sdk']]);
+  assert.notEqual(starts[1].installId, original.installId);
+  sdkRemoved = true;
+  await recheck.click();
+  const sdk = panel.getByRole('checkbox', { name: 'Claude Agent SDK', exact: true }).locator('..');
+  await sdk.getByText('待安装', { exact: true }).waitFor();
+  await sdk.getByText('上次安装 · 已安装', { exact: true }).waitFor();
+  assert.equal(packets.some(({ op }) => ['send', 'setup-trial'].includes(op)), false);
+});
+
+test('VPS backend missing prerequisites show the distro-specific remedy and prevent installation', { timeout: 20_000 }, async (t) => {
+  const page = await openPreview(t, { previewOptions: { backendPlatform: { distribution: 'rocky', distributionVersion: '9',
+    packageManager: 'dnf', blocker: 'dependency_missing', sandbox: 'not_checked', missing: ['bubblewrap'] } } });
+  const guide = await openVpsSetup(page);
+  const panel = guide.getByRole('listitem', { name: 'VPS 后端安装', exact: true });
+  await guide.getByRole('button', { name: '开始检查', exact: true }).click();
+  await panel.getByText('Rocky Linux · 9 · x86‑64', { exact: true }).waitFor();
+  await panel.getByText('缺少 bubblewrap', { exact: true }).waitFor();
+  assert.match(await panel.locator('code').innerText(), /^sudo dnf install/);
+  assert.equal(await panel.getByRole('button', { name: '安装所选执行端' }).count(), 0);
+});
+
 test('optional components install a chosen subset, show per-component failure and retry in a narrow window', { timeout: 30_000 }, async (t) => {
   const page = await openPreview(t, { viewport: { width: 365, height: 480 },
     previewOptions: { localComponents: true, componentFailure: 'claude-sdk' } });

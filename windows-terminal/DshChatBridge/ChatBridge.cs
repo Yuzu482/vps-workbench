@@ -43,7 +43,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
 
     public async Task<object> Execute()
     {
-        bool needsPinStorage = request.Op is "send" or "setup-check" ||
+        bool needsPinStorage = request.Op is "send" or "setup-check" or "setup-backend" ||
             (request.Op == "models" && settings.Provider is ("codex" or "antigravity"));
         EnsureDirectory(stateRoot, needsPinStorage);
         if (request.Op == "configuration") return new { ok = true, targetId = request.TargetId,
@@ -52,6 +52,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
         if (request.Op == "list") return new { ok = true, targetId = request.TargetId,
             memoryTargetId = settings.MemoryFingerprint(), sessions = ListSessions() };
         if (request.Op == "models") return await Models();
+        if (request.BackendSetup is { } backendSetup) return await ExecuteBackendSetup(backendSetup);
         if (request.Setup is { } check) return await CheckSetup(check);
         if (request.Op == "design-history") return DesignHistory(ReadConversation());
         if (request.Op == "workflow-artifacts") return await WorkflowArtifacts();

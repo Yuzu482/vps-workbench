@@ -18,7 +18,8 @@ internal sealed record BridgeRequest(string Op, TargetSettings Settings, string 
     string? Model = null, string? Effort = null, string? WorkspaceAccess = null, TurnExtensions? Extensions = null,
     bool MemoryIsolation = false, bool MemoryExtraction = false, string? MemoryScope = null, AdvancedOptions? Advanced = null,
     DesignBase? DesignBase = null, SetupCheck? Setup = null, WorkflowFiles? WorkflowFiles = null, string? ArtifactPath = null,
-    string? ArtifactAfter = null, int? ArtifactOffset = null, Guid ApprovalId = default, string? Decision = null)
+    string? ArtifactAfter = null, int? ArtifactOffset = null, Guid ApprovalId = default, string? Decision = null,
+    BackendSetupRequest? BackendSetup = null)
 {
     internal byte[]? ModelDigest()
     {
@@ -345,6 +346,7 @@ internal static class BridgeProtocol
             "list" or "configuration" => HasFields(value, "op", "settings"),
             "models" => HasFields(value, "op", "settings", "targetId"),
             "setup-check" => HasFields(value, "op", "settings", "targetId", "kind", "mcpServers"),
+            "setup-backend" => BackendSetupRequest.HasFields(value),
             "get" or "design-history" => HasFields(value, "op", "settings", "targetId", "sessionId") ||
                 HasFields(value, "op", "settings", "targetId", "sessionId", "turnId"),
             "refresh" => HasFields(value, "op", "settings", "targetId", "sessionId"),
@@ -373,7 +375,7 @@ internal static class BridgeProtocol
         };
         if (!valid) throw new BridgeError("invalid_request", "工作台请求格式无效。");
 
-        Guid session = op is "list" or "configuration" or "models" or "setup-check" ? Guid.Empty : Id(value, "sessionId");
+        Guid session = op is "list" or "configuration" or "models" or "setup-check" or "setup-backend" ? Guid.Empty : Id(value, "sessionId");
         Guid turn = op is "send" or "stop" or "steer" or "approval" or "workflow-artifacts" ||
             (op is "get" or "design-history" && value.TryGetProperty("turnId", out _))
             ? Id(value, "turnId") : Guid.Empty;
@@ -466,7 +468,8 @@ internal static class BridgeProtocol
             effort, workspaceAccess, extensions, hasMemoryIsolation, hasMemoryExtraction, memoryScope,
             hasAdvanced ? AdvancedOptions.Parse(value.GetProperty("advanced"), settings.Provider) : null, designBase,
             op == "setup-check" ? SetupCheck.Parse(value, settings.Provider) : null, workflow, artifactPath,
-            artifactAfter, artifactOffset, approval, decision);
+            artifactAfter, artifactOffset, approval, decision,
+            op == "setup-backend" ? BackendSetupRequest.Parse(value, settings.Provider) : null);
     }
 
     internal static TargetSettings ParseSettings(JsonElement value)

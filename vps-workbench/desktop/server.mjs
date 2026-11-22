@@ -163,6 +163,10 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
       if (body.op === 'setup-trial') {
         return runSetupTrial(body, backend, () => permitsChat(access(), body.op) && (!options?.isLive || options.isLive()));
       }
+      if (body.op === 'setup-backend') {
+        if (!permitsChat(access(), body.op) || options?.isLive && !options.isLive()) return accessDenied;
+        return backend.request(body, { current: true });
+      }
       if (data && body.op === 'workflow-artifacts') {
         return readWorkflowArtifacts(body, {
           readRun: () => readWorkflowRun(data.preference(workflowRunKey) ?? null), backend,
@@ -239,7 +243,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     origin = 'http://127.0.0.1:' + port;
     host = createHost({ port, root: workbenchRoot, bridge, accountEnabled: true, allowExtensions: true,
       allowProjectMemory: Boolean(data), allowModelParameters: true, allowDesignBranches: true,
-      allowWorkflowStage: Boolean(data), allowSetupCheck: true, allowWorkflowArtifacts: Boolean(data), readRoute,
+      allowWorkflowStage: Boolean(data), allowSetupCheck: true, allowWorkflowArtifacts: Boolean(data), allowBackendSetup: true, readRoute,
       authorize: (op) => permitsChat(access(), op) ? null : accessDenied });
     terminal = makeSubscriptionHost({ port, stateRoot: terminalRoot, workbenchRoot,
       executable: join(runtimeRoot, 'terminal', 'DshSshBridge.exe'),

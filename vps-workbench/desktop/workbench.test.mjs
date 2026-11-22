@@ -669,8 +669,9 @@ test('setup checks are scoped to the verified route and saved connections are re
   const app = await startWorkbenchServer({
     webRoot: root, workbenchRoot: root, terminalRoot: root, runtimeRoot: root, access: () => access, data,
     makeBridge: () => ({
-      request(packet) {
+      request(packet, options) {
         calls.push(packet.op);
+        if (packet.op === 'setup-backend') assert.deepEqual(options, { current: true });
         return preview.chat(packet);
       },
     }),
@@ -685,6 +686,8 @@ test('setup checks are scoped to the verified route and saved connections are re
   const rpc = (packet) => fetch(app.origin + '/dsh-vps-chat/api/rpc', { method: 'POST', headers, body: JSON.stringify(packet) });
   const ssh = { op: 'setup-check', kind: 'ssh', settings, targetId, mcpServers: [] };
   const trial = { op: 'setup-trial', kind: 'start', settings, targetId, sessionId: randomUUID(), turnId: randomUUID() };
+  const backend = { op: 'setup-backend', kind: 'probe', settings, targetId };
+  const install = { ...backend, kind: 'start', installId: randomUUID(), providers: ['claude-sdk'] };
 
   for (const invalid of [
     { ...ssh, kind: 'run' }, { ...ssh, prompt: 'unexpected' }, { ...ssh, mcpServers: ['extra'] },
@@ -693,12 +696,16 @@ test('setup checks are scoped to the verified route and saved connections are re
     { ...ssh, settings: { ...settings, hostKeyConfirmed: false } },
     { ...trial, prompt: 'unexpected' }, { ...trial, kind: 'inspect', model: 'preview-codex' },
     { ...trial, sessionId: trial.turnId }, { ...trial, targetId: 'local-' + trial.sessionId },
+    { ...backend, settings: { ...settings, provider: 'claude-sdk' } },
+    { ...install, providers: ['claude-sdk', 'claude-sdk'] }, { ...install, source: 'https://fixture.invalid' },
     { op: 'configuration', settings, targetId },
     { op: 'configuration', settings: { ...settings, hostKeyConfirmed: false } },
   ]) assert.equal((await rpc(invalid)).status, 400);
   access = { ...access, mode: 'browse' };
   assert.equal((await rpc(ssh)).status, 403);
   assert.equal((await rpc(trial)).status, 403);
+  assert.equal((await rpc(backend)).status, 403);
+  assert.equal((await rpc(install)).status, 403);
   assert.deepEqual(calls, []);
   await data.setPreference(setupConnectionKey, JSON.stringify({ settings, targetId }));
   const configured = await (await rpc({ op: 'configuration' })).json();
@@ -734,6 +741,9 @@ test('setup checks are scoped to the verified route and saved connections are re
   await assert.rejects(runner.start(createSetupExample('codex', ''), setupExampleTask, null, 'c'.repeat(64)),
     /连接/u);
   runner.dispose();
+  assert.equal((await (await rpc(backend)).json()).platform.architecture, 'x64');
+  assert.equal((await (await rpc({ ...install, targetId: 'c'.repeat(64) })).json()).code, 'invalid_settings');
+  assert.deepEqual((await (await rpc(install)).json()).install.providers, ['claude-sdk']);
 });
 
 test('dispatch uses saved scope and rechecks a grant revoked while opening its attachment', async (t) => {

@@ -16,7 +16,7 @@ const accountDetails = {
 };
 
 export async function checkVpsConnection({ rpc, readList, settings, signal, updateStep,
-  expectedTargetId, expectedMemoryTargetId, accountConfirmedFor, prepareAccount, selectModel = () => '' }) {
+  expectedTargetId, expectedMemoryTargetId, accountConfirmedFor, afterConfiguration, prepareAccount, selectModel = () => '' }) {
   let step = 'ssh';
   try {
     updateStep(step, 'checking', '正在使用已核对的主机指纹连接 VPS…');
@@ -26,6 +26,7 @@ export async function checkVpsConnection({ rpc, readList, settings, signal, upda
     if (expectedTargetId && targetId !== expectedTargetId || expectedMemoryTargetId && list.memoryTargetId !== expectedMemoryTargetId) {
       throw Object.assign(new Error('VPS 设置或主机指纹已变化。请重新核对并保存连接。'), { code: 'target_changed' });
     }
+    afterConfiguration?.(list);
     async function probe(kind, mcpServers = []) {
       const reply = await rpc('setup-check', { settings, targetId, kind, mcpServers }, signal);
       signal.throwIfAborted();

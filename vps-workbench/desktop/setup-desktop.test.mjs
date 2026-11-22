@@ -32,6 +32,7 @@ test('a fresh desktop connection diagnoses each setup step and runs the sample o
     ],
   } });
   const prefs = {
+    'dsh-vps-chat:component-welcome:v1': 'seen',
     [agentPresetKey]: JSON.stringify(agent),
     [extensionPreferenceKey]: JSON.stringify({ memoryEnabled: false, memories: [], plugins: [], servers: [{ ...server, enabled: true }] }),
   };
@@ -114,6 +115,14 @@ test('a fresh desktop connection diagnoses each setup step and runs the sample o
     failure = '';
     await runCheck.click();
     await step('MCP 服务器').getByText('已通过', { exact: true }).waitFor();
+    const backend = step('VPS 后端安装');
+    await backend.getByText('Ubuntu · 24.04 · x86‑64', { exact: true }).waitFor();
+    await backend.getByRole('checkbox', { name: 'Antigravity ACP', exact: true }).check();
+    await backend.getByRole('button', { name: '安装所选执行端' }).click();
+    await backend.getByText('安装完成。可以继续检查账号和模型目录。', { exact: true }).waitFor();
+    const installs = packets.filter(({ op, kind }) => op === 'setup-backend' && kind === 'start');
+    assert.equal(installs.length, 1);
+    assert.deepEqual(installs[0].providers, ['antigravity']);
     assert.equal(packets.filter(({ op }) => op === 'send').length, 0);
     if (process.env.VPS_WORKBENCH_SETUP_IMAGE) await guide.screenshot({ path: process.env.VPS_WORKBENCH_SETUP_IMAGE, animations: 'disabled' });
     await sample.click();

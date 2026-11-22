@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace RemoteSsh;
 
-public enum ManagedTaskAction { Start, Status, Output, ErrorOutput, Catalog, SetupCheck, WorkflowArtifacts }
+public enum ManagedTaskAction { Start, Status, Output, ErrorOutput, Catalog, SetupCheck, WorkflowArtifacts, BackendSetup }
 public sealed record ManagedTaskRequest(string[] Command, string? WorkingDirectory, bool CaptureOutput);
 public sealed record ManagedToolResult(int? ExitCode, string Output, bool Uncertain);
 public sealed record ManagedReceipt(Guid TaskId, string? StateDirectory);
@@ -106,13 +106,18 @@ public static class ManagedTask
         connection.Validate();
         if (connection.Authentication != Authentication.Key) throw new ArgumentException("托管任务需要 SSH 私钥认证。");
         ValidateRemoteDirectory(stateDirectory);
-        bool probe = action is ManagedTaskAction.Catalog or ManagedTaskAction.SetupCheck;
+        bool probe = action is ManagedTaskAction.Catalog or ManagedTaskAction.SetupCheck or ManagedTaskAction.BackendSetup;
         if (!probe && (string.IsNullOrWhiteSpace(receiptPath) || !Path.IsPathFullyQualified(receiptPath) || receiptPath.Length > 2048))
             throw new ArgumentException("回执必须是完整的本机文件路径。");
         if (probe && (id is null || id == Guid.Empty || stateDirectory is not null || receiptPath is not null))
             throw new ArgumentException("查询标识无效。");
         if (action == ManagedTaskAction.Start && id is null) throw new ArgumentException("启动任务必须指定回执中的任务 ID。");
-        string script = Path.Combine(appDirectory, action == ManagedTaskAction.Start ? "RemoteTaskStart.py" : "RemoteTaskStatus.py");
+        string script = Path.Combine(appDirectory, action switch
+        {
+            ManagedTaskAction.Start => "RemoteTaskStart.py",
+            ManagedTaskAction.BackendSetup => "VpsBackendClient.py",
+            _ => "RemoteTaskStatus.py"
+        });
         if (!File.Exists(script)) throw new FileNotFoundException("任务脚本缺失，请重新构建完整发布目录。", script);
         var start = new ProcessStartInfo(pythonExecutable)
         {
@@ -123,7 +128,12 @@ public static class ManagedTask
         void Add(params string[] values) { foreach (var value in values) start.ArgumentList.Add(value); }
         Add("-E", "-s", "-B", script, "--host", connection.Host, "--port", connection.Port.ToString(CultureInfo.InvariantCulture),
             "--user", connection.User, "--identity", connection.IdentityPath, "--known-hosts", connection.KnownHostsPath);
-        if (probe) Add("--id", id!.Value.ToString("D"), action == ManagedTaskAction.Catalog ? "--chat-models" : "--setup-check");
+        if (probe)
+        {
+            Add("--id", id!.Value.ToString("D"));
+            if (action == ManagedTaskAction.Catalog) Add("--chat-models");
+            if (action == ManagedTaskAction.SetupCheck) Add("--setup-check");
+        }
         else Add("--receipt", receiptPath!);
         if (stateDirectory is not null) Add("--state-dir", stateDirectory);
         if (action == ManagedTaskAction.Start) Add("--id", id!.Value.ToString("D"), "--request-stdin");

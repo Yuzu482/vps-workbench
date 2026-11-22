@@ -118,6 +118,16 @@ try {
     & dotnet publish (Join-Path $windows 'Proxy/Proxy.csproj') -c Release -o (Join-Path $helper 'relay') --self-contained false --artifacts-path (Join-Path $scratch 'dotnet-relay') --nologo -v minimal -m:1
     if ($LASTEXITCODE -ne 0) { throw 'The Windows relay component could not be built' }
     Copy-Item -LiteralPath (Join-Path $windows 'RemoteTaskStatus.py') -Destination $helper -Force
+    $backendSource = Join-Path $project 'vps-package'
+    $backendOutput = Join-Path $scratch 'vps-backend'
+    $python = (Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    & $python -I -B (Join-Path $backendSource 'build.py') --output $backendOutput | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'The VPS backend package could not be built' }
+    $backendArchive = Join-Path $backendOutput "VPS-Workbench-Backend-$($application.version)-linux.tar.gz"
+    Copy-Item -LiteralPath $backendArchive -Destination (Join-Path $helper 'vps-backend.tar.gz')
+    $backendSha = (Get-FileHash -LiteralPath $backendArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath (Join-Path $helper 'vps-backend.sha256') -Value $backendSha -Encoding ascii
+    Copy-Item -LiteralPath (Join-Path $backendSource 'remote_setup.py') -Destination (Join-Path $helper 'RemoteVpsBackend.py')
     $bundleArguments = @((Join-Path $project 'desktop/bundle.mjs'), $app)
     if ($OnDemandRuntimes) { $bundleArguments += '--on-demand-runtimes' }
     & node @bundleArguments
@@ -138,7 +148,8 @@ try {
     $requiredFiles = @('desktop/server.mjs', 'desktop/web/renderer.js', 'desktop/web/markdown-worker.js', 'desktop/RemoteClaudeAccount.py', 'client/account-player.mjs',
         'desktop/icon.png', 'desktop/web/app-icon.png', 'desktop/web/workbench.css', 'desktop/web/index.html', 'desktop/web/revision.json',
         'workflow-engine/state.mjs', 'agent-presets/state.mjs', 'desktop/workflow-attachments.mjs', 'helper/RemoteWorkflowFiles.py',
-        'helper/RemoteWorkflowArtifacts.py',
+        'helper/RemoteWorkflowArtifacts.py', 'helper/VpsBackendClient.py', 'helper/RemoteVpsBackend.py',
+        'helper/vps-backend.tar.gz', 'helper/vps-backend.sha256',
         'helper/DshVpsChatBridge.exe', 'helper/relay/RemoteSsh.Proxy.exe', 'helper/compat/DshVpsChatBridge.exe',
         'helper/compat/sdk/dsh-claude-sdk-worker.mjs', 'helper/compat/antigravity/RemoteDshAntigravity.py',
         'helper/terminal/DshSshBridge.exe', 'helper/terminal/helpers/remote_interactive.py')

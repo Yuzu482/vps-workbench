@@ -155,7 +155,13 @@ function designHistory(session) {
   }));
 }
 
-export function createPreviewFixtures() {
+export function createPreviewFixtures({ backendPlatform, backendFailure } = {}) {
+  const backendJobs = new Map();
+  let latestBackendInstall = null;
+  const backendRuntimes = { codex: 'found', claude: 'missing', 'claude-sdk': 'missing', antigravity: 'missing' };
+  const platform = { system: 'Linux', distribution: 'ubuntu', distributionVersion: '24.04', architecture: 'x64',
+    packageManager: 'apt', blocker: null, sandbox: 'passed', workspace: 'passed', missing: [],
+    ...backendPlatform };
   const projects = [
     { workspaceId: 'local-preview-bookshop', title: '纸间书店' },
     { workspaceId: 'local-preview-reading-group', title: '周末读书会' },
@@ -311,6 +317,44 @@ export function createPreviewFixtures() {
       const status = { ssh: 'connected', account: provider === 'claude' ? 'key_configured' : 'signed_in',
         model: 'model_route_ready', resources: 'resources_ready' }[packet.kind];
       return status ? ok({ targetId: packet.targetId, status }) : invalidRequest();
+    }
+    if (packet.op === 'setup-backend') {
+      if (provider !== 'codex') return invalidRequest();
+      if (packet.kind === 'probe') return ok({ targetId: packet.targetId, platform: { ...platform,
+        providers: Object.fromEntries(Object.entries(backendRuntimes).map(([id, runtime]) => [id, { runtime, onSshPath: runtime === 'found' }])) },
+        install: backendJobs.get(latestBackendInstall) ?? null });
+      if (!validId(packet.installId)) return invalidRequest();
+      let job = backendJobs.get(packet.installId);
+      if (packet.kind === 'start') {
+        if (!Array.isArray(packet.providers) || !packet.providers.length ||
+            !packet.providers.every((id) => Object.hasOwn(backendRuntimes, id)) || new Set(packet.providers).size !== packet.providers.length)
+          return invalidRequest();
+        if (job && job.providers.join() !== packet.providers.join()) return fail('backend_conflict', '此安装标识已绑定。');
+        if (!job) {
+          if (platform.blocker || backendJobs.get(latestBackendInstall)?.state === 'running')
+            return fail('backend_pending', '请查询原安装。');
+          job = { id: packet.installId, providers: [...packet.providers], state: 'running', results: {} };
+          latestBackendInstall = packet.installId;
+          backendJobs.set(packet.installId, job);
+        }
+      } else if (packet.kind === 'status') {
+        if (!job) return fail('backend_receipt_missing', '没有原安装回执。');
+        if (job.state === 'running') {
+          let failed = false;
+          for (const id of job.providers) {
+            if (id === backendFailure) {
+              job.results[id] = { runtime: 'failed', code: 'artifact_download_failed' };
+              backendFailure = null;
+              failed = true;
+            } else {
+              job.results[id] = { runtime: backendRuntimes[id] === 'found' ? 'existing' : 'installed', onSshPath: true };
+              backendRuntimes[id] = 'found';
+            }
+          }
+          job.state = failed ? 'failed' : 'succeeded';
+        }
+      } else return invalidRequest();
+      return ok({ targetId: packet.targetId, install: structuredClone(job) });
     }
     if (packet.op === 'model-options') return ok({ fields: modelParameterFields(provider) });
     if (!validId(packet.sessionId)) return invalidRequest();

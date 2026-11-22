@@ -24,6 +24,7 @@ const operations = Object.freeze({
   list: ['op', 'settings'],
   models: ['op', 'settings', 'targetId'],
   'setup-check': ['op', 'settings', 'targetId', 'kind', 'mcpServers'],
+  'setup-backend': ['op', 'settings', 'targetId', 'kind'],
   'setup-trial': ['op', 'settings', 'targetId', 'kind', 'sessionId', 'turnId'],
   'workflow-artifacts': ['op', 'settings', 'targetId', 'sessionId', 'turnId', 'workflowRunId'],
   'model-options': ['op', 'settings', 'targetId'],
@@ -129,7 +130,8 @@ export function validWorkflowArtifactQuery(value) {
       value.offset >= 0 && value.offset < maxWorkflowArtifactBytes));
 }
 
-function validRequest(value, { allowExtensions, allowProjectMemory, allowModelParameters, allowDesignBranches, allowWorkflowStage, allowSetupCheck, allowWorkflowArtifacts }) {
+function validRequest(value, { allowExtensions, allowProjectMemory, allowModelParameters, allowDesignBranches, allowWorkflowStage,
+  allowSetupCheck, allowWorkflowArtifacts, allowBackendSetup }) {
   if (typeof value?.op !== 'string' || !Object.hasOwn(operations, value.op)) return false;
   if (value.op === 'account-view') {
     return validAccountRequest(value);
@@ -156,6 +158,21 @@ function validRequest(value, { allowExtensions, allowProjectMemory, allowModelPa
   const hasProjectMemory = Object.hasOwn(value, 'projectMemory');
   const hasWorkflowStage = Object.hasOwn(value, 'workflowStage');
   const fields = operations[value.op];
+  const backendFields = [];
+  if (value.op === 'setup-backend') {
+    if (!allowBackendSetup || value.settings?.provider !== 'codex' || !['probe', 'start', 'status'].includes(value.kind)) return false;
+    if (value.kind !== 'probe') {
+      backendFields.push('installId');
+      if (typeof value.installId !== 'string' || !guid.test(value.installId) || value.installId !== value.installId.toLowerCase() ||
+          value.installId === '00000000-0000-0000-0000-000000000000') return false;
+    }
+    if (value.kind === 'start') {
+      backendFields.push('providers');
+      if (!Array.isArray(value.providers) || value.providers.length < 1 || value.providers.length > 4 ||
+          new Set(value.providers).size !== value.providers.length ||
+          !value.providers.every((id) => ['codex', 'claude', 'claude-sdk', 'antigravity'].includes(id))) return false;
+    }
+  }
   if (value.op === 'setup-check') {
     const { kind, mcpServers, settings } = value;
     if (!allowSetupCheck || !Object.hasOwn(settings ?? {}, 'provider') || !['ssh', 'account', 'model', 'resources'].includes(kind) ||
@@ -194,7 +211,7 @@ function validRequest(value, { allowExtensions, allowProjectMemory, allowModelPa
     ...(hasDesignBase ? ['designBase'] : []), ...(historyTurn ? ['turnId'] : []),
     ...(hasModel ? ['model'] : []), ...(hasEffort ? ['effort'] : []), ...(hasExtensions ? ['extensions'] : []),
     ...(hasProjectMemory ? ['projectMemory'] : []), ...(hasAdvanced ? ['advanced'] : []),
-    ...(hasWorkflowStage ? ['workflowStage'] : []), ...artifactFields,
+    ...(hasWorkflowStage ? ['workflowStage'] : []), ...artifactFields, ...backendFields,
   ])) return false;
   if (value.op === 'preset') return true;
   const settings = value.settings;
@@ -213,7 +230,7 @@ function validRequest(value, { allowExtensions, allowProjectMemory, allowModelPa
       !settingsFields.slice(0, -1).filter(field => field !== 'port').every(field =>
         typeof settings[field] === 'string' && settings[field].length <= 2048 && !settings[field].includes('\0'))) return false;
   if (!['list', 'configuration'].includes(value.op) && (typeof value.targetId !== 'string' || !/^[0-9a-f]{64}$/.test(value.targetId))) return false;
-  if (!['list', 'configuration', 'models', 'model-options', 'setup-check'].includes(value.op) &&
+  if (!['list', 'configuration', 'models', 'model-options', 'setup-check', 'setup-backend'].includes(value.op) &&
       (typeof value.sessionId !== 'string' || !guid.test(value.sessionId))) return false;
   if ((artifacts || historyTurn || ['send', 'stop', 'steer', 'approval', 'setup-trial'].includes(value.op)) &&
       (typeof value.turnId !== 'string' || !guid.test(value.turnId))) return false;
@@ -280,7 +297,7 @@ export function createBridge({
       if (disposed || typeof root !== 'string' || !isAbsolute(root) ||
           (body.op !== 'configuration' && (!isAbsolute(pythonPath) || !existsSync(pythonPath)))) return notReady;
       const provider = body.settings?.provider;
-      if (['configuration', 'setup-check', 'workflow-artifacts', 'approval'].includes(body.op) ||
+      if (['configuration', 'setup-check', 'setup-backend', 'workflow-artifacts', 'approval'].includes(body.op) ||
           (provider === 'antigravity' && useCurrentAntigravity)) current = true;
       const advanced = body.op === 'send' && Object.hasOwn(body, 'advanced');
       const inspectingOptions = body.op === 'model-options';
@@ -374,7 +391,7 @@ export function createBridge({
 
 export function createHost({ port, root, bridge, accountEnabled = false, allowExtensions = false, allowProjectMemory = false,
   allowModelParameters = false, allowDesignBranches = false, allowWorkflowStage = false, allowSetupCheck = false,
-  allowWorkflowArtifacts = false,
+  allowWorkflowArtifacts = false, allowBackendSetup = false,
   readRoute = () => readAccountRoute(root),
   launchAccountBrowser, player = accountPlayer, authorize = () => null }) {
   const secret = randomBytes(32).toString('base64url');
@@ -418,7 +435,8 @@ export function createHost({ port, root, bridge, accountEnabled = false, allowEx
       let request;
       try { request = await readRequest(req); } catch { return respond(res, 400, invalidRequest); }
       const { body, size } = request;
-      if (!validRequest(body, { allowExtensions, allowProjectMemory, allowModelParameters, allowDesignBranches, allowWorkflowStage, allowSetupCheck, allowWorkflowArtifacts }) ||
+      if (!validRequest(body, { allowExtensions, allowProjectMemory, allowModelParameters, allowDesignBranches, allowWorkflowStage,
+        allowSetupCheck, allowWorkflowArtifacts, allowBackendSetup }) ||
           (size > maxRequestBytes && !body.designContext))
         return respond(res, 400, invalidRequest);
       const denied = authorize(body.op);
@@ -426,7 +444,7 @@ export function createHost({ port, root, bridge, accountEnabled = false, allowEx
       try {
         const packet = body.op === 'account-view'
           ? (account ? await account.prepare(body.targetId, body.action) : notReady)
-          : await bridge.request(body, body.workflowStage || ['workflow-artifacts', 'setup-trial'].includes(body.op) ? {
+          : await bridge.request(body, body.workflowStage || ['workflow-artifacts', 'setup-trial', 'setup-backend'].includes(body.op) ? {
             isLive: () => !disposed && !req.aborted && !res.destroyed,
           } : undefined);
         return respond(res, 200, packet);

@@ -9,6 +9,7 @@ import { checkStageResources } from './workflow-stage.mjs';
 import { checkVpsConnection, selectSetupModel, setupChecks } from './setup-state.mjs';
 import { ConnectionResult, setupAccountActions, vpsTrialTarget } from './connection-panel.mjs';
 import { TrialActions, trialResult } from './connection-trial.mjs';
+import { useVpsBackendSetup, VpsBackendSetup } from './vps-backend-setup.mjs';
 
 const h = React.createElement;
 const ConnectionFields = createConnectionFields(React);
@@ -48,6 +49,7 @@ export function SetupGuide({ connection, connectionName, scope, memoryTargetId, 
   const [manualTarget, setManualTarget] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [enabling, setEnabling] = React.useState(false);
+  const backend = useVpsBackendSetup({ rpc, remoteEnabled });
   const enableRequest = React.useRef(false);
   const presets = (agentPresets?.items ?? []).map((record) => ({ ...resolveAgentPreset(record), id: record.id }))
     .filter((item) => item.provider === provider);
@@ -79,6 +81,7 @@ export function SetupGuide({ connection, connectionName, scope, memoryTargetId, 
   }
 
   function reset() {
+    backend.reset();
     trial?.invalidate();
     setResults({});
     setVerified(null);
@@ -143,6 +146,7 @@ export function SetupGuide({ connection, connectionName, scope, memoryTargetId, 
         expectedTargetId: !editing && provider === connection?.provider ? scope : undefined,
         expectedMemoryTargetId: !editing ? memoryTargetId : undefined,
         accountConfirmedFor: confirmedTarget,
+        afterConfiguration(list) { void backend.detect(settings, list.memoryTargetId ?? (provider === 'codex' ? list.targetId : null)); },
         async prepareAccount(list) {
           if (!editing) return toolIds.includes(provider);
           await applyConnection(settings, list, signal);
@@ -228,7 +232,7 @@ export function SetupGuide({ connection, connectionName, scope, memoryTargetId, 
         h('section', { className: 'vc-setup-group', 'aria-label': '基础接入检查' },
           h('div', { className: 'vc-setup-overview' }, h('h3', null, '基础接入检查'),
             h('span', { role: 'status' }, ready && passedCount < steps.length ? '基础预检完成' : `${passedCount} / ${steps.length} 项通过`)),
-          h('ol', { className: 'vc-setup-steps' }, setupChecks.map(([id, label]) => stepCard(id, label,
+          h('ol', { className: 'vc-setup-steps' }, setupChecks.flatMap(([id, label]) => [stepCard(id, label,
             id === 'ssh' && editing ? h('div', { className: 'vc-setup-fields' }, h(ConnectionFields, {
               form, desktop: true, busy: disabled, edit(key, value) { setForm((previous) => editConnectionForm(previous, key, value)); reset(); },
             }), connectionName && button('取消修改', () => { setEditing(false); reset(); }, { disabled })) : null,
@@ -243,7 +247,8 @@ export function SetupGuide({ connection, connectionName, scope, memoryTargetId, 
               setUseDefaultModel(true); reset();
             }, { disabled }) : null,
             id === 'response' && trial ? h(TrialActions, { trial, target: ready && verified.trialTarget,
-              allowed: !disabled && remoteEnabled }) : null)))),
+              allowed: !disabled && remoteEnabled }) : null), ...(id === 'ssh' ? [h(VpsBackendSetup, { key: 'backend',
+                installer: backend, disabled: disabled || !remoteEnabled || editing && !form.hostKeyConfirmed })] : [])]))),
         h('section', { className: 'vc-setup-group', 'aria-label': '额外 Agent 检查' },
           h('div', { className: 'vc-setup-overview' }, h('h3', null, '额外 Agent 检查'),
             h('small', { className: 'vc-settings-current' }, '可选')),
