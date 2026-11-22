@@ -29,7 +29,7 @@ export async function canonicalLocalDirectory(directory) {
   }
 }
 
-async function ensurePrivateDirectory(directory) {
+export async function ensurePrivateDirectory(directory) {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   return canonicalLocalDirectory(directory);
 }

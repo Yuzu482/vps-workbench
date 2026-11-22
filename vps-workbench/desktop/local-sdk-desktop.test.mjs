@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import { setTimeout as wait } from 'node:timers/promises';
 import { openLocalSdk } from '../local-sdk/service.mjs';
 import { localCredentialVariable, localModels } from './codex-runtime.mjs';
+import { agyHashVariable, agyPathVariable, claudeKeyVariable } from './local-agent-runtime.mjs';
 import { openAppData } from './data.mjs';
 import { startPreview } from './preview-server.mjs';
 
@@ -123,7 +124,7 @@ test('staged Windows app loads the pinned native files and restores local record
   await data.setPreference(defaultKey, 'local-sdk');
   await data.flush();
   const env = { ...process.env, APPDATA: appData, LOCALAPPDATA: appData, VPS_WORKBENCH_DATA_DIR: dataRoot,
-    [localCredentialVariable]: '' };
+    [localCredentialVariable]: '', [claudeKeyVariable]: '', [agyPathVariable]: '', [agyHashVariable]: '' };
   const errors = [], vpsRequests = [];
   let desktop;
   t.after(async () => { await desktop?.close(); });
@@ -148,6 +149,14 @@ test('staged Windows app loads the pinned native files and restores local record
     }, directory);
     await registerProfile(page, '包内本机配置');
     const status = await page.evaluate(() => window.vpsWorkbench.localSdkStatus());
+    const claude = status.providers.find(({ backend }) => backend === 'claude-sdk');
+    assert.equal(claude.runtimeAvailable, true);
+    assert.equal(claude.credentialConfigured, false);
+    assert.equal(status.providers.find(({ backend }) => backend === 'antigravity').runtimeAvailable, false);
+    const claudeBinary = join(appRoot, 'helper', 'local-claude', 'claude.exe');
+    const claudeVersion = execFileSync(claudeBinary, ['--version'], { timeout: 7000, windowsHide: true, encoding: 'utf8',
+      env: { SystemRoot: process.env.SystemRoot, HOME: dataRoot, USERPROFILE: dataRoot, APPDATA: appData, LOCALAPPDATA: appData } });
+    assert.match(claudeVersion.trim(), /^2[.]1[.]296\b/u);
     const profile = status.profiles[0];
     assert.equal(profile.directory, directory);
     const binding = { location: 'local-sdk', backend: 'codex', profileId: profile.id,

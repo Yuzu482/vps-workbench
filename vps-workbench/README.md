@@ -34,7 +34,17 @@ Antigravity 的周期表随可用宽高等比缩放。转场中调整窗口大�
 
 本机支持流式 Markdown、停止、重新打开历史、项目分类、资源导出、画板版本与分支、提示词模板和 Agent 预设。对话可选择 Codex 模型、推理档位和输出详略。个人和项目自动记忆按本机配置启用，提炼模型可单独选择。停止会取消本机 SDK 流，缺少终态回执时可查询原轮。
 
-本机工作流可在阶段中选择不同 Codex 模型。已授权的工作目录文件和附件以资料提供，阶段回复可以从产物列表下载。MCP 使用已有的本机 HTTP 服务，注册时填写回环地址和允许调用的工具。启用前核对服务的实际权限。Claude、Antigravity、订阅终端和运行中工具审批使用对应的 VPS 执行端。
+本机 Codex 工作流可在阶段中选择不同模型。已授权的工作目录文件和附件以资料提供，阶段回复可以从产物列表下载。MCP 使用已有的本机 HTTP 服务，注册时填写回环地址和允许调用的工具。启用前核对服务的实际权限。
+
+### 本机 Claude Agent SDK 和 Antigravity ACP
+
+在「设置 → 连接 → 本机 SDK → 注册本机配置」选择执行端和只读工作目录。登记后可从侧栏执行端菜单切换。Claude 和 Antigravity 使用账号默认模型，聊天、补充指令和工具审批复用工作台界面。设计画布、工作流和自动记忆继续使用本机 Codex 配置。
+
+Claude 使用包内的官方 TypeScript Agent SDK 0.3.296 和对应 Windows x64 CLI。由可信启动器提供 `VPS_WORKBENCH_LOCAL_CLAUDE_API_KEY`，密钥只传给本机 Claude 进程。补充使用 SDK 流式输入。SDK 若把补充交给后续响应，回执会显示「已在后续响应生效」。 [Claude SDK 流式输入](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode)
+
+Antigravity 使用单独安装的官方 Windows CLI。可信启动器提供 `VPS_WORKBENCH_LOCAL_AGY_EXE` 与该文件的 `VPS_WORKBENCH_LOCAL_AGY_SHA256`。在本机终端将 `HOME` 和 `USERPROFILE` 都指向「账号」页显示的本机登录目录，使用同一 CLI 执行 `agy acp --login`。连接检查显示运行文件状态，真实登录和模型接入以用户触发的试跑为准。 [Antigravity CLI 接入](https://antigravity.google/docs/ide/extensions/acp/)
+
+原生账号数据和会话回执按执行位置、后端与配置绑定。工具审批只允许本轮读取所选目录中的合规普通文件。拒绝、取消或失去原回执时保留对应状态。真实 Windows 安全边界与账号出口需在接入时单独验证。
 
 ## VPS 连接
 

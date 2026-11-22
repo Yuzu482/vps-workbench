@@ -68,11 +68,11 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
   ]);
   const statusLabels = {
     pending: localSdk ? '等待本机 SDK 确认' : '等待 VPS 确认',
-    running: localSdk ? '本机 Codex 正在处理' : 'VPS 正在处理', stopping: '正在停止', stopped: '已停止',
+    running: localSdk ? '本机执行端正在处理' : 'VPS 正在处理', stopping: '正在停止', stopped: '已停止',
     complete: '已完成', failed: '执行失败', unknown: '结果待确认',
   };
   const steerLabels = {
-    queued: '已排队', submitted: '执行端已接收', delivered: '已送达', rejected: '未送达', unknown: '补充结果待确认',
+    queued: '已排队', submitted: '执行端已接收', delivered: '已送达', next: '已在后续响应生效', rejected: '未送达', unknown: '补充结果待确认',
   };
   const rejectedBeforeSteer = new Set([
     'steer_unavailable', 'steer_limit', 'steer_conflict', 'session_blocked', 'invalid_request', 'target_changed',
@@ -118,7 +118,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     setup: '在 VPS 上安装官方 Claude Code 并登录 Claude 订阅。',
     capabilities: '在 VPS 原生终端中选择模型和继续历史会话。',
   };
-  const toolIds = localSdk ? ['codex'] : [...chatTools.map(({ id }) => id), subscriptionProvider];
+  const localProviderLabels = { codex: 'Codex', 'claude-sdk': 'Claude Agent SDK', antigravity: 'Antigravity ACP' };
+  const toolIds = localSdk ? Object.keys(localProviderLabels) : [...chatTools.map(({ id }) => id), subscriptionProvider];
   const toolsWithModels = chatTools.filter(({ id, modelCatalog }) => toolIds.includes(id) && modelCatalog).map(({ id }) => id);
 
   const css = chatSurfaceCss(separatorWidth) + projectFoldersCss + accountDialogCss + providerPickerCss + themeRippleCss + settingsCss + contextMenuCss +
@@ -267,7 +268,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const { settings, name } = preset ?? {};
     if (localSdk) {
       if (typeof name !== 'string' || !name.trim() || name.length > 80 ||
-          settings?.location !== 'local-sdk' || settings.provider !== 'codex' || !identifier.test(settings.profileId)) {
+          settings?.location !== 'local-sdk' || !Object.hasOwn(localProviderLabels, settings.provider) || !identifier.test(settings.profileId)) {
         throw new Error('本机配置暂不可用。');
       }
       return { name, settings, ...readList(preset) };
@@ -493,9 +494,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const scroll = React.useRef(null);
     const followReply = React.useRef(true);
     const ready = Boolean(connection && scope);
-    const tools = localSdk ? [{ ...chatTools[0], available: true }] :
+    const tools = localSdk ? chatTools.filter(({ id }) => toolIds.includes(id)).map((tool) => ({ ...tool,
+      label: localProviderLabels[tool.id], available: Boolean(local.profileForBackend?.(tool.id)) })) :
       [...chatTools.map((tool) => ({ ...tool, available: true })), { ...subscriptionTool, available: Boolean(SubscriptionTerminal) }];
-    const configuredTools = tools.filter(({ id, available }) => available && toolPreferences.ids.includes(id));
+    const configuredTools = tools.filter(({ id, available }) => available && (localSdk || toolPreferences.ids.includes(id)));
     const chatEnabled = ready && toolPreferences.ids.includes(connection.provider);
     const remoteEnabled = access?.mode !== 'browse' && !accessPending;
     const settingsTab = settingsSurface ? settingsSurface.tab : settingsView.tab;
@@ -503,10 +505,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const configPreferences = React.useMemo(() => {
       if (!configProfile) return null;
       const key = 'dsh-vps-chat:local-tools:v1:' + configProfile.id;
-      return { tools: { key, ids: ['codex'] }, profiles: localToolProfiles[key] ?? readToolProfiles(key, toolIds) };
+      return { tools: { key, ids: [configProfile.backend ?? 'codex'] }, profiles: localToolProfiles[key] ?? readToolProfiles(key, toolIds) };
     }, [configProfile?.id, localToolProfiles]);
     const localConfiguration = configProfile && configProfile.id !== connection?.profileId && {
-      ...local.routeForTarget(configProfile.targetId), memoryTargetId: configProfile.targetId,
+      ...local.routeForTarget(configProfile.targetId), memoryTargetId: (configProfile.backend ?? 'codex') === 'codex' ? configProfile.targetId : null,
       name: configProfile.name, ...configPreferences,
     };
     const configuration = localConfiguration || savedConfiguration || { settings: connection, targetId: scope, memoryTargetId,
@@ -515,7 +517,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const modelAllowed = remoteEnabled && chatEnabled && providers[connection.provider]?.modelCatalog === true;
     const activeTool = showingSubscription ? subscriptionProvider : chatEnabled ? connection.provider : undefined;
     const activePreferences = { ...preferences, ...toolProfiles[activeTool] };
-    const providerName = providers[connection?.provider ?? defaultSettings.provider].label;
+    const providerId = connection?.provider ?? defaultSettings.provider;
+    const providerName = localSdk ? localProviderLabels[providerId] : providers[providerId].label;
     const connectionDiagnostics = useVpsConnectionChecks({ rpc, readList, connection: configuration.settings,
       scope: configuration.targetId, memoryTargetId: configuration.memoryTargetId,
       toolIds: configuration.tools.ids, profiles: configuration.profiles, remoteEnabled,
@@ -535,8 +538,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const snapshot = view?.session.id === selected ? view : null;
     const mode = snapshot?.session.mode ?? selectedRow?.mode ?? 'chat';
     const design = mode === 'design';
-    const antigravityChat = !design && connection?.provider === 'antigravity';
-    const memoryAvailable = Boolean(extensions && conversationIsolated && selected && chatEnabled);
+    const interactiveChat = !design && (connection?.provider === 'antigravity' || localSdk && connection?.provider === 'claude-sdk');
+    const memoryAvailable = Boolean(extensions && conversationIsolated && selected && chatEnabled && (!localSdk || providerId === 'codex'));
     const memoryIsolated = memoryAvailable && (snapshot?.session.memoryIsolation === true ||
       conversationIsolated(extensions.state, { targetId: scope, sessionId: selected }));
     const projectMemorySuppressed = selectedRow?.local ? selectedRow.projectMemoryIsolated === true
@@ -662,15 +665,15 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const stopUncertain = !isSettled(lastState) && lastState !== 'stopping' && stopRequest?.state === 'unknown';
     const showStop = remoteEnabled && ready && (stopPending || isStopEligible(lastTurn));
     const canStop = showStop && !stopPending && !stopUncertain && !working && !attempt && !pollPaused;
-    const waitingForApproval = antigravityChat && isActive(lastState) && (lastTurn?.approvals ?? emptyList)
+    const waitingForApproval = interactiveChat && isActive(lastState) && (lastTurn?.approvals ?? emptyList)
       .some(({ state }) => state === 'pending' || state === 'queued');
-    const steerOffered = Boolean(remoteEnabled && ((antigravityChat && !lastTurn?.workflowStage) || (design && designAvailable)) &&
+    const steerOffered = Boolean(remoteEnabled && ((interactiveChat && !lastTurn?.workflowStage) || (design && designAvailable)) &&
       lastTurn?.streaming === true && lastTurn.canSteer === true &&
       (lastState === 'pending' || lastState === 'running') && !stopPending && !stopUncertain && !waitingForApproval);
     const canSteer = Boolean(chatEnabled && steerOffered && !activeSteer && !earlierSupplement && !unconfirmedPrompt && !attempt && !working && !pollPaused &&
       prompt && draft.length <= maxSteerLength && !draft.includes('\0'));
     const currentApprovalAttempts = approvalAttempts[steerKey];
-    const approvalOffered = antigravityChat && chatEnabled && remoteEnabled &&
+    const approvalOffered = interactiveChat && chatEnabled && remoteEnabled &&
       (lastState === 'pending' || lastState === 'running') && !stopPending && !stopUncertain && !lastTurn.workflowStage;
     const approvalDisabled = Boolean(working || attempt || pollPaused);
     const approvalUnconfirmed = approvalOffered && (lastTurn.approvals ?? emptyList).some((request) =>
@@ -764,7 +767,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         try {
           const preset = readPreset(await rpc('preset', {}, controller.signal));
           if (!preset || controller.signal.aborted) return;
-          const preferences = localSdk ? { key: 'dsh-vps-chat:local-tools:v1:' + preset.settings.profileId, ids: ['codex'] }
+          const preferences = localSdk ? { key: 'dsh-vps-chat:local-tools:v1:' + preset.settings.profileId, ids: [preset.settings.provider] }
             : await readToolPreferences(preset.settings, toolIds);
           if (controller.signal.aborted) return;
           setToolPreferences({ ...preferences, ids: preferences.ids ?? [preset.settings.provider] });
@@ -929,7 +932,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         const receipt = matchingSteer(messages, candidate);
         if (!receipt || receipt.state === 'unknown') continue;
         resolved.push(candidate.id);
-        if (['queued', 'submitted', 'delivered'].includes(receipt.state)) clearMatchingDraft(route, id, candidate.draft);
+        if (['queued', 'submitted', 'delivered', 'next'].includes(receipt.state)) clearMatchingDraft(route, id, candidate.draft);
       }
       if (resolved.length) clearSteerAttempts(key, resolved);
     }
@@ -1542,6 +1545,12 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
     async function readProviderModels(provider, signal, route = { settings: connection, targetId: scope, memoryTargetId }) {
       if (!route.settings || !route.targetId || !toolsWithModels.includes(provider)) throw new Error('当前执行端不提供模型目录。');
+      if (localSdk && provider !== route.settings.provider) {
+        const profile = local.profileForBackend(provider);
+        const target = profile && local.routeForTarget(profile.targetId);
+        if (!target) throw new Error('请先登记对应的本机执行端配置。');
+        return { targetId: target.targetId, models: readModelCatalog(await rpc('models', target, signal)) };
+      }
       const settings = { ...route.settings, provider };
       let targetId = route.targetId;
       if (provider !== route.settings.provider) {
@@ -1570,6 +1579,12 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }
 
     async function providerUpdate(provider, signal) {
+      if (localSdk) {
+        const profile = local.profileForBackend(provider);
+        if (!profile) throw new Error('请先登记这个执行端的本机配置。');
+        if (profile.id !== local.profile?.id) await rpc('list', local.routeForTarget(profile.targetId), signal);
+        return () => local.openProfile(profile);
+      }
       if (provider === subscriptionProvider) {
         const preset = {
           settings: connection, targetId: scope, name: connectionName, requireRelay: subscriptionRequiresRelay,
@@ -2082,7 +2097,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const sendKey = activePreferences.sendKey === 'ctrl-enter' ? 'Ctrl+Enter' : 'Enter';
     const newlineKey = activePreferences.sendKey === 'ctrl-enter' ? 'Enter' : 'Shift+Enter';
     const composerHint = !remoteEnabled ? '仅浏览 · 可以编辑并保留草稿'
-      : working === 'send' ? (localSdk ? '正在发送至本机 Codex' : '正在发送至 VPS')
+      : working === 'send' ? (localSdk ? `正在发送至本机 ${providerName}` : '正在发送至 VPS')
         : stopBusy ? (localSdk ? '等待本机 SDK 确认停止' : '等待 VPS 确认停止')
       : steerBusy ? '正在提交给当前轮次'
         : waitingForApproval ? '等待工具审批 · 可以保留补充草稿或停止生成'
@@ -2101,11 +2116,12 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const currentProjectTitle = selectedProject
       ? projects.get(selectedProject) ?? (workspaceSnapshot.phase === 'pending' ? '正在读取项目' : '项目不可用')
       : '未归类';
-    const toolPicker = localSdk ? h('div', { className: 'vc-tool-picker' },
+    const toolPicker = localSdk && configuredTools.length <= 1 ? h('div', { className: 'vc-tool-picker' },
       h('div', { className: 'vc-tool-summary', title: local.profile?.name },
-        h('span', { className: 'vc-tool-badge' }, menuIcon(h, 'codex')), h('span', { className: 'vc-tool-label' }, 'Codex')))
+        h('span', { className: 'vc-tool-badge' }, menuIcon(h, providers[providerId].icon)), h('span', { className: 'vc-tool-label' }, providerName)))
       : ready && configuredTools.length ? h(ProviderPicker, {
       value: activeTool, tools: configuredTools, disabled: providerSwitchLocked, active,
+      ariaLabel: localSdk ? '切换本机执行端' : undefined,
       select: changeProvider, closeOnSelect: crossesSubscriptionView, docked: sidebarActions,
     }) : null;
     const accessProvider = showingSubscription ? subscriptionProvider : connection?.provider;
@@ -2197,7 +2213,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       shownTurns.length ? shownTurns.map((turn) => h(Turn, {
         key: turn.id, turn, providerName, design, designStorageKey, pendingSteers,
         workflowEdit: !design ? workflows?.describeEdit(turn) : null,
-        approvals: antigravityChat ? turn.approvals : undefined,
+        approvals: interactiveChat ? turn.approvals : undefined,
         approvalAttempts: turn.id === lastTurn?.id ? currentApprovalAttempts : undefined,
         decideApproval: turn.id === lastTurn?.id && approvalOffered ? decideApproval : undefined,
         approvalDisabled,
@@ -2220,7 +2236,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
                 onClick: openSetup }, '打开接入向导') : null)
             : working !== 'history' && snapshot ? h(React.Fragment, null,
               h('p', null, design ? '描述用途、目标用户和视觉方向。原型会出现在设计画布。'
-                : localSdk ? '向本机 Codex 提问，或让它带你熟悉当前项目。' : '向 VPS 上的助手提问，或让它带你熟悉当前项目。'),
+                : localSdk ? `向本机 ${providerName} 提问，或让它带你熟悉当前项目。` : '向 VPS 上的助手提问，或让它带你熟悉当前项目。'),
               !draft ? h('button', { type: 'button', className: 'vc-button vc-example', onClick: fillExample,
                 'aria-label': design ? '填入设计示例' : '填入对话示例',
               }, design ? '独立书店网站示例' : '项目导读示例') : null) : null)));
@@ -2355,6 +2371,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           }, menuIcon(h, 'library'), '项目资源库') : null,
           workflows ? h('button', { type: 'button', className: 'vc-button vc-resource-entry',
             'aria-label': '工作流', 'aria-haspopup': 'dialog', onClick: workflows.openPanel,
+            disabled: localSdk && providerId !== 'codex', title: localSdk && providerId !== 'codex' ? '切换到本机 Codex 后可运行工作流' : undefined,
           }, menuIcon(h, 'fork'), '工作流', workflows.panel.running
             ? h('span', { className: 'vc-project-count', role: 'status' }, '运行中') : null) : null,
           h('button', { type: 'button', className: 'vc-button vc-resource-entry vc-playground-entry',
@@ -2561,7 +2578,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           memoryTargetId: configuration.memoryTargetId, connectionName: configuration.name, projects,
           selectedProject: configuration.targetId === scope ? selectedProject : null,
           readMemoryModels: remoteEnabled && configurationReady && configuration.memoryTargetId ? readMemoryModels : undefined,
-          mcpTargetId: ['codex', 'antigravity'].includes(configuredProvider) ? configuration.targetId : '',
+          mcpTargetId: (localSdk ? ['codex'] : ['codex', 'antigravity']).includes(configuredProvider) ? configuration.targetId : '',
           mcpProvider: configuredProvider,
         } } : null,
       })),

@@ -993,6 +993,59 @@ test('local tools and memory settings stay on the selected configuration and kee
   assert.deepEqual(requests, []);
 });
 
+test('local Claude and Antigravity share streaming, supplement and approval UI with isolated histories', { timeout: 60_000 }, async (t) => {
+  const page = await openPreview(t, { viewport: { width: 420, height: 640 }, seed({ preferences }) {
+    preferences['dsh-vps-chat:desktop-view-location:v1'] = 'local-sdk';
+    preferences['dsh-vps-chat:desktop-new-location:v1'] = 'local-sdk';
+  } });
+  const sshPackets = [];
+  await page.route('**/dsh-vps-chat/api/rpc', (route) => { sshPackets.push(route.request().postDataJSON()); return route.continue(); });
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await openSettingsSection(settings, '连接');
+  const profiles = [
+    { backend: 'claude-sdk', label: 'Claude Agent SDK', name: '本机 Claude 夹具', action: '允许一次' },
+    { backend: 'antigravity', label: 'Antigravity ACP', name: '本机 ACP 夹具', action: '拒绝' },
+  ];
+  for (const { backend, name } of profiles) {
+    await settings.getByLabel('本机执行端', { exact: true }).selectOption(backend);
+    await settings.getByLabel('配置名称', { exact: true }).fill(name);
+    await settings.getByRole('button', { name: '选择工作目录并保存', exact: true }).click();
+    await settings.getByText(name, { exact: true }).last().waitFor();
+  }
+  await settings.getByRole('button', { name: '关闭设置', exact: true }).click();
+  const picker = page.getByRole('button', { name: '切换本机执行端', exact: true });
+  const draft = page.getByRole('textbox', { name: '本地对话草稿', exact: true });
+  async function select(label) {
+    await picker.click();
+    await page.getByRole('option', { name: label, exact: true }).click();
+    await page.getByText(`向本机 ${label} 提问，或让它带你熟悉当前项目。`, { exact: true }).waitFor();
+  }
+  for (const { label, action } of profiles) {
+    await select(label);
+    await draft.fill(label + ' 补充与审批');
+    await page.getByRole('button', { name: '发送', exact: true }).click();
+    await page.getByRole('button', { name: '发送补充', exact: true }).waitFor();
+    await draft.fill('请保留原始证据');
+    await page.getByRole('button', { name: '发送补充', exact: true }).click();
+    const card = page.getByRole('list', { name: '工具授权' });
+    await card.getByRole('button', { name: action, exact: true }).click();
+    await card.getByText(action + ' · 决定已提交', { exact: true }).waitFor();
+    const complete = page.locator('[data-turn-state=complete]');
+    await complete.getByText('已收到补充 请保留原始证据', { exact: true }).waitFor();
+    await complete.getByText(action === '允许一次' ? '工具决定 已允许一次' : '工具决定 已拒绝', { exact: true }).waitFor();
+    assert.equal(await complete.count(), 1);
+  }
+  await select(profiles[0].label);
+  const history = page.getByRole('complementary', { name: '本地对话历史' });
+  const expand = page.getByRole('button', { name: '展开会话侧栏', exact: true });
+  if (await expand.isVisible()) await expand.click();
+  await history.getByRole('button', { name: 'Claude Agent SDK 补充与审批', exact: true }).click();
+  await page.locator('[data-turn-state=complete]').getByText('工具决定 已允许一次', { exact: true }).waitFor();
+  assert.equal(await history.getByRole('button', { name: 'Antigravity ACP 补充与审批', exact: true }).count(), 0);
+  assert.deepEqual(sshPackets, []);
+});
+
 test('local SDK opens the design canvas, project resources and a graph run through the shared workbench', { timeout: 55_000 }, async (t) => {
   const page = await openPreview(t, { seed({ preferences }) {
     preferences['dsh-vps-chat:desktop-view-location:v1'] = 'local-sdk';

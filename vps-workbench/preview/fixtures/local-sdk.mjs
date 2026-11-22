@@ -6,19 +6,22 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { localModels } from '../../desktop/codex-runtime.mjs';
 import { openLocalSdk } from '../../local-sdk/service.mjs';
 import { createLocalWorkbench } from '../../local-sdk/workbench.mjs';
+import { localBackends, providerDefaultModels, usesLocalControls } from '../../local-sdk/providers.mjs';
 
 export async function createPreviewLocalSdk(access, options) {
   const root = await mkdtemp(join(tmpdir(), 'vps-workbench-preview-sdk-'));
   const directory = join(root, '示例工作目录');
   await mkdir(directory);
-  const service = await openLocalSdk({
-    root, models: localModels,
+  const backends = new Map();
+  for (const backend of Object.keys(localBackends)) {
+    const service = await openLocalSdk({
+    root: join(root, backend), backend, models: backend === 'codex' ? localModels : providerDefaultModels,
     credentialConfigured: () => true, canExecute: () => access().mode === 'execute',
-    createThread(_profile, priorThreadId) {
+    createThread(_profile, priorThreadId, { interaction } = {}) {
       const id = priorThreadId ?? randomUUID();
       return { async runStreamed(input, { signal }) {
         const prompt = typeof input === 'string' ? input : input.filter(({ type }) => type === 'text').map(({ text }) => text).join('\n');
-        const heading = priorThreadId ? '续聊演示' : '本机 SDK 演示';
+        const heading = priorThreadId ? '续聊演示' : backend === 'codex' ? '本机 SDK 演示' : localBackends[backend].label + ' 演示';
         const message = { type: 'agent_message', id: 'preview-reply', text: '### ' + heading };
         let reply = message.text + '\n\n收到 ' + prompt + '\n\n此回复由工作台的本地测试夹具生成。';
         if (prompt.startsWith('以设计资料中明确')) {
@@ -35,29 +38,56 @@ export async function createPreviewLocalSdk(access, options) {
           yield { type: 'turn.started' };
           await wait(100, undefined, { signal });
           yield { type: 'item.updated', item: message };
-          await wait(prompt === '本机停止轮' ? 4000 : 700, undefined, { signal });
+          if (usesLocalControls(backend) && interaction && /补充|审批/.test(prompt)) {
+            const arrival = Promise.withResolvers();
+            interaction.steerWith(({ prompt: note }) => { arrival.resolve(note); return 'delivered'; });
+            try {
+              const supplement = await Promise.race([arrival.promise, wait(15000, '', { signal, ref: false })]);
+              if (supplement) reply += '\n\n已收到补充 ' + supplement;
+              if (prompt.includes('审批')) {
+                const approval = await interaction.ask({ title: '读取工作目录中的文件', detail: '项目简报.md', kind: 'read', canAllow: true });
+                await approval?.settle('submitted');
+                reply += '\n\n工具决定 ' + (approval?.decision === 'allow' ? '已允许一次' : '已拒绝');
+              }
+            } finally { interaction.steerWith(null); }
+          } else await wait(prompt === '本机停止轮' ? 4000 : 700, undefined, { signal });
           yield { type: 'item.completed', item: { ...message,
             text: reply } };
           yield { type: 'turn.completed', usage: { input_tokens: 248 } };
         })() };
       } };
     },
-  });
-  const workbench = createLocalWorkbench({ service, runtimeAvailable: true, access, pollInterval: 100, ...options });
+    });
+    const workbench = createLocalWorkbench({ service, runtimeAvailable: true, backend, access, pollInterval: 100, ...options });
+    backends.set(backend, { service, workbench });
+  }
+  function status() {
+    const providers = [...backends.values()].map(({ service }) => {
+      const current = service.status();
+      return { ...current, runtimeAvailable: true, credentialSource: current.backend === 'antigravity' ? 'agy-local-login' :
+        current.backend === 'claude-sdk' ? 'claude-api-key' : 'codex-api-key',
+      profiles: current.profiles.map((profile) => ({ ...profile, backend: current.backend })) };
+    });
+    return { ...providers[0], providers, profiles: providers.flatMap(({ profiles }) => profiles) };
+  }
   return {
-    status: () => ({ ...service.status(), runtimeAvailable: true }),
-    request(body) {
-      if (body.op === 'workbench' && body.location === 'local-sdk' && body.backend === 'codex')
+    status,
+    async request(body) {
+      const selected = backends.get(body?.backend ?? 'codex');
+      if (!selected) return { ok: false, code: 'invalid_request' };
+      const { service, workbench } = selected;
+      if (body.op === 'workbench' && body.location === 'local-sdk')
         return workbench.request(body.payload);
       if (body.op !== 'register') return service.request(body);
       const { name, model, effort } = body;
-      return service.registerProfile({ name, model, effort, directory });
+      const result = await service.registerProfile({ name, model, effort, directory });
+      return result.ok ? { ...result, profile: status().profiles.find(({ id }) => id === result.profile.id) } : result;
     },
-    revokeExecution: service.revokeExecution,
-    changeExtractionModel: workbench.changeExtractionModel,
+    revokeExecution() { for (const { service } of backends.values()) service.revokeExecution(); },
+    changeExtractionModel: backends.get('codex').workbench.changeExtractionModel,
     async close() {
-      workbench.dispose();
-      await service.close();
+      for (const { workbench } of backends.values()) workbench.dispose();
+      await Promise.all([...backends.values()].map(({ service }) => service.close()));
       await rm(root, { recursive: true, force: true });
     },
   };

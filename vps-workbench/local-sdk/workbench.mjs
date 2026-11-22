@@ -11,10 +11,10 @@ import { changedWorkflowFileAccess, changedWorkflowStage, prepareWorkflowStage }
 import { conversationIsolated, extensionPreferenceKey, extensionsForTurn, readExtensions } from '../extensions/state.mjs';
 import { readWorkflowRun } from '../workflow-engine/runner.mjs';
 import { exactFields, localWorkflowRunKey, maxWorkflowAttachmentBytes, readWorkflows, workflowKey, workflowUuid } from '../workflow-engine/state.mjs';
+import { localBackends, usesLocalControls } from './providers.mjs';
 
 export const localMemoryJournalKey = 'dsh-vps-chat:local-memory-journal:v1';
 const location = 'local-sdk';
-const backend = 'codex';
 const digest = /^[a-f0-9]{64}$/;
 const utf8 = new TextDecoder('utf-8', { fatal: true });
 const bad = { ok: false, code: 'invalid_request', message: '本机 SDK 请求无效。' };
@@ -28,6 +28,8 @@ const actions = {
   get: ['targetId', 'sessionId'], refresh: ['targetId', 'sessionId'], stop: ['targetId', 'sessionId', 'turnId'],
   'design-history': ['targetId', 'sessionId'],
   send: ['targetId', 'sessionId', 'turnId', 'prompt'],
+  steer: ['targetId', 'sessionId', 'turnId', 'steerId', 'prompt'],
+  approval: ['targetId', 'sessionId', 'turnId', 'approvalId', 'decision'],
   'workflow-artifacts': ['targetId', 'sessionId', 'turnId', 'workflowRunId'],
 };
 const optional = {
@@ -41,14 +43,17 @@ function fingerprint(value) {
       ? Object.fromEntries(Object.entries(entry).sort(([left], [right]) => left.localeCompare(right))) : entry)).digest('hex');
 }
 
-function validRequest(body) {
+function validRequest(body, backend) {
   if (typeof body?.op !== 'string' || !Object.hasOwn(actions, body.op)) return false;
   const required = ['op', 'settings', ...actions[body.op]];
   if (!exactFields(body, ...required, ...(optional[body.op] ?? []).filter((key) => Object.hasOwn(body, key))) ||
       !exactFields(body.settings, 'location', 'provider', 'profileId') ||
       body.settings.location !== location || body.settings.provider !== backend || !workflowUuid(body.settings.profileId) ||
       ('targetId' in body && (typeof body.targetId !== 'string' || !digest.test(body.targetId))) ||
-      ['sessionId', 'turnId', 'workflowRunId'].some((key) => key in body && !workflowUuid(body[key]))) return false;
+      ['sessionId', 'turnId', 'workflowRunId', 'steerId', 'approvalId'].some((key) => key in body && !workflowUuid(body[key]))) return false;
+  if (body.op === 'steer') return usesLocalControls(backend) && typeof body.prompt === 'string' && body.prompt.trim() &&
+    !body.prompt.includes('\0') && body.prompt.length <= 1200;
+  if (body.op === 'approval') return usesLocalControls(backend) && ['allow', 'deny'].includes(body.decision);
   if (body.op === 'workflow-artifacts') return validWorkflowArtifactQuery(body);
   if (body.op !== 'send') return true;
   return typeof body.prompt === 'string' && body.prompt.trim() && !body.prompt.includes('\0') && body.prompt.length <= 8192 &&
@@ -58,7 +63,7 @@ function validRequest(body) {
       workflowUuid(body.designBase.parentTurnId) && typeof body.designBase.fork === 'boolean')) &&
     (body.model === undefined || (typeof body.model === 'string' && body.model.length <= 100)) &&
     (body.effort === undefined || (typeof body.effort === 'string' && body.effort.length <= 24 && body.model !== undefined)) &&
-    (body.advanced === undefined || validModelParameters(backend, body.advanced)) &&
+    (body.advanced === undefined || backend === 'codex' && validModelParameters(backend, body.advanced)) &&
     (body.projectMemory === undefined || (exactFields(body.projectMemory, 'projectId') &&
       (body.projectMemory.projectId === null || (typeof body.projectMemory.projectId === 'string' &&
         body.projectMemory.projectId.trim() && body.projectMemory.projectId.length <= 256 &&
@@ -139,16 +144,19 @@ const designInstructions = [
   '资料仅用于设计。用回复交付设计，避免写入工作目录。',
 ].join('\n');
 
-export function createLocalWorkbench({ service, runtimeAvailable, access, data,
+export function createLocalWorkbench({ service, runtimeAvailable, access, data, backend = 'codex',
   readRun = () => readWorkflowRun(data.preference(localWorkflowRunKey) ?? null),
   readSavedWorkflow = (id) => readWorkflows(data.preference(workflowKey) ?? null).find((workflow) => workflow.id === id),
   onChange, onError, pollInterval }) {
   const allowed = () => access().mode === 'execute';
+  const label = localBackends[backend].label;
   const requests = new Map();
   const extensionState = () => readExtensions(data?.preference(extensionPreferenceKey) ?? null);
   const profileFor = ({ profileId }) => service.status().profiles.find(({ id }) => id === profileId);
-  const unavailable = () => ({ ok: false, code: 'runtime_unavailable', message: '本机 Codex SDK 运行文件不可用。' });
-  const authRequired = () => ({ ok: false, code: 'auth_required', message: '请先配置本机 Codex API 密钥。' });
+  const unavailable = () => ({ ok: false, code: 'runtime_unavailable', message: `本机 ${label} 运行文件不可用。` });
+  const authRequired = () => ({ ok: false, code: 'auth_required', message: `请先核对本机 ${label} 的账号配置。` });
+  const providerFeedback = (value) => backend !== 'codex' && value?.message ? { ...value,
+    message: value.code === 'auth_required' ? authRequired().message : value.message.replaceAll('Codex', label) } : value;
   const workflowSession = (body) => {
     try {
       return readRun()?.rows.some(({ targetId, sessionId, turnId }) => targetId === body.targetId &&
@@ -160,15 +168,15 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data,
     const { sessionId, turnId } = body;
     return service.request({ location, backend, profileId: profile.id, op, targetId: profile.targetId,
       ...(op !== 'list' && { sessionId: 'local-' + sessionId.toLowerCase() }),
-      ...(['send', 'stop', 'refresh'].includes(op) && { turnId }), ...details }, options);
+      ...(['send', 'stop', 'refresh', 'steer', 'approval'].includes(op) && { turnId }), ...details }, options);
   }
 
   function normalized(result, profile, sessionId) {
-    if (result.ok !== true) return result;
+    if (result.ok !== true) return providerFeedback(result);
     if (result.location !== location || result.targetId !== profile.targetId ||
         result.session?.profileId !== profile.id || result.session.id !== 'local-' + sessionId.toLowerCase()) return missing;
-    const turns = result.session.turns.map((turn) => ({ ...turn, state: states[turn.state] ?? turn.state,
-      activity: [], streaming: true, canSteer: false }));
+    const turns = result.session.turns.map((turn) => ({ ...providerFeedback(turn), state: states[turn.state] ?? turn.state,
+      activity: [], streaming: true, canSteer: turn.canSteer === true }));
     return { ...result, session: { ...result.session, id: sessionId, turns } };
   }
 
@@ -180,10 +188,10 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data,
       ...entry, displayName: label, isDefault: entry.id === profile.model,
       defaultEffort: entry.id === profile.model && entry.efforts.includes(profile.effort) ? profile.effort : entry.defaultEffort,
     })) };
-    if (body.op === 'model-options') return { ok: true, fields: modelParameterFields(backend) };
+    if (body.op === 'model-options') return { ok: true, fields: backend === 'codex' ? modelParameterFields(backend) : [] };
     if (body.op === 'list') {
       const result = await raw(body, profile, 'list');
-      return result.ok ? { ...result, memoryTargetId: targetId, sessions: result.sessions.map(({ id, ...row }) => ({
+      return result.ok ? { ...result, memoryTargetId: backend === 'codex' ? targetId : null, sessions: result.sessions.map(({ id, ...row }) => ({
         ...row, id: id.slice(6),
       })) } : result;
     }
@@ -265,6 +273,9 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data,
         workspace: background || body.workflowFiles ? 'private' : 'profile' }, { prompt: body.prompt });
       return normalized(result, profile, body.sessionId);
     }
+    if (body.op === 'approval') return raw(body, profile, 'approval', undefined, { approvalId: body.approvalId, decision: body.decision });
+    if (body.op === 'steer') return normalized(await raw(body, profile, 'steer', undefined,
+      { steerId: body.steerId, prompt: body.prompt }), profile, body.sessionId);
     const op = ['stop', 'refresh'].includes(body.op) && body.turnId ? body.op : 'get';
     const result = normalized(await raw(body, profile, op, { background: background || workflowSession(body) }), profile, body.sessionId);
     if (body.op === 'get' && body.turnId) {
@@ -305,7 +316,7 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data,
       ...(request.offset !== undefined && { offset: request.offset, revision: createHash('sha256').update(bytes).digest('hex') }) } };
   }
 
-  const memory = data && createProjectMemoryBridge({ data, access: () => ({ ...access(), workspace: 'default' }),
+  const memory = backend === 'codex' && data && createProjectMemoryBridge({ data, access: () => ({ ...access(), workspace: 'default' }),
     readRun, readSavedWorkflow, onChange, onError, pollInterval,
     locationName: '本机', journalKey: localMemoryJournalKey, scopedPersonal: true,
     backend: { request: (body) => dispatch(body) }, extractor: { request: (body) => dispatch(body, true) },
@@ -316,11 +327,11 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data,
 
   return {
     async request(body) {
-      if (!validRequest(body)) return bad;
+      if (!validRequest(body, backend)) return bad;
       if (body.op === 'workflow-artifacts') return readWorkflowArtifacts(body,
         { readRun, backend: { request: artifact } });
-      if (['send', 'stop'].includes(body.op) && !allowed()) return denied;
-      if (body.op !== 'send') return memory ? memory.request(body) : dispatch(body);
+      if (['send', 'stop', 'steer', 'approval'].includes(body.op) && !allowed()) return denied;
+      if (body.op !== 'send') return memory && !['steer', 'approval'].includes(body.op) ? memory.request(body) : dispatch(body);
       if (!runtimeAvailable) return unavailable();
       if (!service.status().credentialConfigured) return authRequired();
       const profile = profileFor(body.settings);
@@ -348,6 +359,6 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data,
       await memory.request({ op: 'list', settings: { location, provider: backend, profileId: profile.id }, targetId: profile.targetId });
       return memory.changeExtractionModel(change);
     },
-    dispose: () => memory?.dispose(),
+    dispose: () => memory && memory.dispose(),
   };
 }

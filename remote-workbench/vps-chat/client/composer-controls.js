@@ -368,7 +368,7 @@ export function createComposerControls(React) {
   function ContextDetails({ report, attached, design, localSdk }) {
     const { usage, usageModel, earlierUsage } = report;
     const percent = occupancy(usage);
-    const source = localSdk ? '本机 Codex' : 'VPS';
+    const source = localSdk ? '本机执行端' : 'VPS';
     return h(React.Fragment, null,
       usage ? h(React.Fragment, null,
         h('dl', null,
@@ -408,10 +408,10 @@ export function createComposerControls(React) {
     }
     return h(React.Fragment, null,
       h('h3', { className: 'vc-access-heading' }, '工作台'),
-      choices('mode', [localSdk ? ['execute', '本机执行', '可向本机 Codex 发起操作'] : ['execute', 'VPS 执行', '可向当前执行端发起远端操作'],
+      choices('mode', [localSdk ? ['execute', '本机执行', '可向所选本机执行端发起操作'] : ['execute', 'VPS 执行', '可向当前执行端发起远端操作'],
         ['browse', '仅浏览', '查看已保存的会话与项目资源']]),
       h('h3', { className: 'vc-access-heading' }, localSdk ? '本机工作区' : 'VPS 工作区'),
-      localSdk ? h('p', null, '本机 Codex 在所选配置的只读工作目录中运行。') :
+        localSdk ? h('p', null, '本机执行端使用所选配置的只读工作目录。') :
         scopedWorkspaceProviders.has(provider) ? choices('workspace', workspaceChoices)
         : h('p', null, '此工具采用执行端原生的工作区权限。'));
   }

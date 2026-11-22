@@ -1,6 +1,6 @@
 const modelId = /^[A-Za-z0-9_.:-]{1,100}$/;
 const effortId = /^[A-Za-z0-9_-]{1,24}$/;
-const effortNames = { none: '无', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高' };
+const effortNames = { default: '账号默认', none: '无', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高' };
 
 export function effortName(value) {
   return Object.hasOwn(effortNames, value) ? effortNames[value] : value;

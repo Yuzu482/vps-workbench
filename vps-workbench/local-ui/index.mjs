@@ -3,13 +3,16 @@ import { TrialActions, trialResult, useConnectionTrial } from '../desktop/connec
 import { trialPrompt, trialState } from '../desktop/setup-trial.mjs';
 import { effortName } from '../../remote-workbench/vps-chat/client/model-catalog.js';
 import { workbenchStorage } from '../../remote-workbench/vps-chat/client/workbench-storage.js';
+import { localBackends } from '../local-sdk/providers.mjs';
 
 const location = 'local-sdk';
-const backend = 'codex';
+const defaultBackend = 'codex';
+const backendOf = (profile) => profile?.backend ?? defaultBackend;
+const labelFor = (profile) => localBackends[backendOf(profile)].label;
 const newProfileKey = 'dsh-vps-chat:local-new-profile:v1';
 const viewProfileKey = 'dsh-vps-chat:local-view-profile:v1';
 const routeFor = (profile) => profile && ({
-  settings: { location, provider: backend, profileId: profile.id }, targetId: profile.targetId,
+  settings: { location, provider: backendOf(profile), profileId: profile.id }, targetId: profile.targetId,
 });
 
 export function createLocalWorkspace(React, Workbench) {
@@ -28,30 +31,40 @@ export function createLocalWorkspace(React, Workbench) {
     const [registerBusy, setRegisterBusy] = React.useState(false);
     const [registerError, setRegisterError] = React.useState('');
     const [name, setName] = React.useState('');
+    const [registerBackend, setRegisterBackend] = React.useState(defaultBackend);
     const [modelId, setModelId] = React.useState('');
     const [effortId, setEffortId] = React.useState('');
     const loading = React.useRef(null);
     const registering = React.useRef(false);
     const newRequest = React.useRef(0);
     const profiles = status?.profiles ?? [];
-    const models = status?.models ?? [];
+    const providers = status?.providers ?? (status ? [status] : []);
+    const runtimeFor = (id) => providers.find(({ backend }) => backend === id);
+    const formProvider = runtimeFor(registerBackend) ?? providers[0];
+    const models = formProvider?.models ?? [];
     const defaultProfile = profiles.find(({ id }) => id === defaultId) ?? profiles[0];
     const profile = profiles.find(({ id }) => id === viewId) ?? defaultProfile;
     const inspector = profiles.find(({ id }) => id === inspectId) ?? profile;
+    const viewedRuntime = runtimeFor(backendOf(profile));
+    const inspectedRuntime = runtimeFor(backendOf(inspector));
     const selectedModel = models.find(({ id }) => id === modelId) ?? models[0];
     const effort = selectedModel?.efforts.includes(effortId) ? effortId : selectedModel?.defaultEffort;
     const browsing = access?.mode !== 'execute';
-    const runtimeReady = Boolean(!statusError && status?.runtimeAvailable && status.credentialConfigured);
-    const binding = JSON.stringify([inspector?.id, status?.runtimeAvailable, status?.credentialConfigured, models]);
+    const mayTry = (item) => item?.runtimeAvailable && (item.credentialConfigured || item.credentialPending);
+    const runtimeReady = Boolean(!statusError && mayTry(viewedRuntime));
+    const binding = JSON.stringify([inspector?.id, inspectedRuntime?.runtimeAvailable, mayTry(inspectedRuntime), inspectedRuntime?.models]);
     const verified = checked === binding && !statusError;
-    const trialTarget = runtimeReady && inspector && { profileId: inspector.id, targetId: inspector.targetId,
-      model: inspector.model, effort: inspector.effort };
+    const trialTarget = mayTry(inspectedRuntime) && inspector && {
+      profileId: inspector.id, targetId: inspector.targetId, model: inspector.model, effort: inspector.effort,
+      ...(backendOf(inspector) !== defaultBackend && { backend: backendOf(inspector) }),
+    };
     const connection = React.useRef({ profile });
     connection.current = { profile };
     const request = React.useCallback(async (op, payload, signal) => {
       signal.throwIfAborted();
       const presetProfile = op === 'preset' ? connection.current.profile : null;
       if (op === 'preset' && !presetProfile) return { ok: true, preset: null };
+      const backend = presetProfile ? backendOf(presetProfile) : payload.settings?.provider;
       const result = await native.localSdkRequest({ location, backend, op: 'workbench',
         payload: presetProfile ? { op: 'list', ...routeFor(presetProfile) } : { op, ...payload } });
       signal.throwIfAborted();
@@ -62,7 +75,7 @@ export function createLocalWorkspace(React, Workbench) {
 
     const trial = useConnectionTrial({ storageKey: 'dsh-vps-chat:setup-trial:local-sdk:v1', savePreference,
       async request(kind, { target: at, sessionId, turnId }) {
-        const packet = await native.localSdkRequest({ location, backend, profileId: at.profileId, op: kind === 'start' ? 'send' : 'refresh',
+        const packet = await native.localSdkRequest({ location, backend: at.backend ?? defaultBackend, profileId: at.profileId, op: kind === 'start' ? 'send' : 'refresh',
           sessionId, targetId: at.targetId, turnId, ...(kind === 'start' && { prompt: trialPrompt }) });
         if (packet?.ok !== true && ['auth_required', 'runtime_unavailable', 'invalid_directory', 'invalid_profile', 'browse_only']
           .includes(packet?.code)) return 'failed';
@@ -72,7 +85,7 @@ export function createLocalWorkspace(React, Workbench) {
     });
     const invalidateTrial = trial.invalidate;
     React.useLayoutEffect(() => invalidateTrial(),
-      [invalidateTrial, inspector?.id, status?.runtimeAvailable, status?.credentialConfigured]);
+      [invalidateTrial, inspector?.id, inspectedRuntime?.runtimeAvailable, inspectedRuntime?.credentialConfigured, inspectedRuntime?.credentialPending]);
 
     async function loadStatus(explicit = false) {
       const token = {};
@@ -81,12 +94,13 @@ export function createLocalWorkspace(React, Workbench) {
       try {
         const result = await native.localSdkStatus();
         if (loading.current !== token) return null;
-        if (result?.ok !== true || result.location !== location || result.backend !== backend) throw new Error('status_unavailable');
+        if (result?.ok !== true || result.location !== location) throw new Error('status_unavailable');
         setStatus(result);
         setStatusError(false);
         if (explicit) {
           const selected = result.profiles.find(({ id }) => id === inspector?.id) ?? result.profiles[0];
-          setChecked(JSON.stringify([selected?.id, result.runtimeAvailable, result.credentialConfigured, result.models]));
+          const inspected = (result.providers ?? [result]).find(({ backend }) => backend === backendOf(selected));
+          setChecked(JSON.stringify([selected?.id, inspected?.runtimeAvailable, mayTry(inspected), inspected?.models]));
         }
         return result;
       } catch {
@@ -125,7 +139,7 @@ export function createLocalWorkspace(React, Workbench) {
       setRegisterBusy(true);
       setRegisterError('');
       try {
-        const result = await native.registerLocalSdkProfile({ name: name.trim(), model: selectedModel.id, effort });
+        const result = await native.registerLocalSdkProfile({ backend: formProvider.backend, name: name.trim(), model: selectedModel.id, effort });
         if (!result?.ok) {
           if (result?.code !== 'directory_cancelled') setRegisterError(result?.message || '本机配置未能保存。');
           return;
@@ -150,11 +164,21 @@ export function createLocalWorkspace(React, Workbench) {
       } catch { setRegisterError('未能保存本机配置选择。'); }
     }
 
+    function openProfile(next) {
+      if (!next || next.id === profile?.id) return;
+      setViewId(next.id);
+      void savePreference(viewProfileKey, next.id).catch(() => {});
+    }
+
     const runtimeStatus = statusError ? '状态读取失败' : !status ? '正在读取本机状态…' :
-      (status.runtimeAvailable ? 'SDK 可用' : 'SDK 不可用') + ' · ' + (status.credentialConfigured ? '凭据已配置' : '凭据未配置');
+      (viewedRuntime?.runtimeAvailable ? 'SDK 可用' : 'SDK 不可用') + ' · ' +
+      (viewedRuntime?.credentialSource === 'agy-local-login' ? '本机登录待验证' : viewedRuntime?.credentialConfigured ? '凭据已配置' : '凭据未配置');
+    const login = inspectedRuntime?.credentialSource === 'agy-local-login';
+    const credentialVariable = backendOf(inspector) === 'claude-sdk' ? 'VPS_WORKBENCH_LOCAL_CLAUDE_API_KEY' : 'VPS_WORKBENCH_LOCAL_CODEX_API_KEY';
     const credentialResult = verified ? {
-      state: status.credentialConfigured ? 'confirm' : 'failed',
-      detail: status.credentialConfigured ? '已配置本机 API 密钥，服务权限待试跑确认。' : '在启动工作台的本机环境中配置密钥。',
+      state: mayTry(inspectedRuntime) ? 'confirm' : 'failed',
+      detail: login ? '使用此配置的本机 Google 登录目录，登录状态以试跑结果为准。' : inspectedRuntime?.credentialConfigured
+        ? '已配置本机 API 密钥，服务权限待试跑确认。' : '在启动工作台的本机环境中配置密钥。',
     } : null;
     function credentials() {
       return h(ConnectionResult, { id: 'account', label: '本机账号凭据', detail: '检查本机进程的凭据配置。', result: credentialResult });
@@ -164,9 +188,10 @@ export function createLocalWorkspace(React, Workbench) {
       if (!inspector) return h('p', null, '尚未登记本机配置。');
       return h('dl', { className: 'local-config-details' },
         h('dt', null, '名称'), h('dd', null, inspector.name),
+        h('dt', null, '执行端'), h('dd', null, labelFor(inspector)),
         includeDirectory && h(React.Fragment, null, h('dt', null, '只读工作目录'), h('dd', null, inspector.directory)),
-        h('dt', null, '默认模型'), h('dd', null, models.find(({ id }) => id === inspector.model)?.label ?? inspector.model),
-        h('dt', null, '推理强度'), h('dd', null, effortName(inspector.effort)));
+        h('dt', null, '默认模型'), h('dd', null, inspectedRuntime?.models.find(({ id }) => id === inspector.model)?.label ?? inspector.model),
+        h('dt', null, '推理强度'), h('dd', null, inspector.effort === 'default' ? '账号默认' : effortName(inspector.effort)));
     }
 
     const localPanels = {
@@ -187,6 +212,10 @@ export function createLocalWorkspace(React, Workbench) {
             }))),
         h('form', { className: 'vc-settings-group', onSubmit: register },
           h('h4', null, '注册本机配置'),
+          h('label', { className: 'vc-field' }, '本机执行端', h('select', { 'aria-label': '本机执行端', value: formProvider?.backend ?? '',
+            disabled: browsing || registerBusy || !formProvider, onChange: (event) => {
+              setRegisterBackend(event.target.value); setModelId(''); setEffortId('');
+            } }, providers.map(({ backend }) => h('option', { key: backend, value: backend }, localBackends[backend].label)))),
           h('label', { className: 'vc-field' }, '配置名称', h('input', { value: name, maxLength: 80, required: true,
             disabled: browsing || registerBusy, onChange: (event) => setName(event.target.value) })),
           h('div', { className: 'vc-settings-address' },
@@ -195,7 +224,7 @@ export function createLocalWorkspace(React, Workbench) {
               models.map(({ id, label }) => h('option', { key: id, value: id }, label)))),
             h('label', { className: 'vc-field' }, '推理强度', h('select', { value: effort ?? '',
               disabled: browsing || registerBusy || !selectedModel, onChange: (event) => setEffortId(event.target.value) },
-              selectedModel?.efforts.map((item) => h('option', { key: item, value: item }, effortName(item)))))),
+              selectedModel?.efforts.map((item) => h('option', { key: item, value: item }, item === 'default' ? '账号默认' : effortName(item)))))),
           registerError && h('p', { role: 'alert', className: 'vc-feedback' }, registerError),
           h('div', { className: 'vc-dialog-actions' },
             button(registerBusy ? '正在选择工作目录…' : '选择工作目录并保存', {
@@ -209,13 +238,13 @@ export function createLocalWorkspace(React, Workbench) {
           h('ol', { className: 'vc-setup-steps' },
             h(ConnectionResult, { id: 'runtime', label: '本机 SDK', detail: '检查 Windows 上的 SDK 运行文件。',
               result: statusError ? { state: 'failed', detail: '本机 SDK 状态读取失败。请重试。' } : verified ? {
-                state: status.runtimeAvailable ? 'passed' : 'failed',
-                detail: status.runtimeAvailable ? '已找到本机 Codex 运行文件。' : '当前安装缺少本机 Codex 运行文件。',
+                state: inspectedRuntime?.runtimeAvailable ? 'passed' : 'failed',
+                detail: inspectedRuntime?.runtimeAvailable ? `已找到本机 ${labelFor(inspector)} 运行文件。` : `当前安装缺少本机 ${labelFor(inspector)} 运行文件。`,
               } : null }),
             credentials(),
             h(ConnectionResult, { id: 'model', label: '本机模型目录', detail: '检查本机 SDK 支持的模型选项。',
-              result: verified ? { state: models.length ? 'passed' : 'failed',
-                detail: '内置目录 · ' + models.length + ' 个模型选项' } : null }),
+              result: verified ? { state: inspectedRuntime?.models.length ? 'passed' : 'failed',
+                detail: backendOf(inspector) === defaultBackend ? '内置目录 · ' + inspectedRuntime?.models.length + ' 个模型选项' : '使用账号默认模型。' } : null }),
             h(ConnectionResult, { id: 'response', label: '实际模型响应', detail: '试跑使用所选配置的模型和本机网络。',
               result: trialResult(trial, trialTarget) },
             h(TrialActions, { trial, target: trialTarget, allowed: inspecting && !browsing && !accessPending && !checking }))))),
@@ -225,8 +254,11 @@ export function createLocalWorkspace(React, Workbench) {
       accounts: h(React.Fragment, null,
         h('section', { className: 'vc-settings-group', 'aria-label': '凭据来源' },
           h('h4', null, '凭据来源'),
-          h('p', null, '本机启动环境的 ', h('code', null, 'VPS_WORKBENCH_LOCAL_CODEX_API_KEY')),
-          h('p', { role: 'status' }, status?.credentialConfigured ? '本机 API 密钥已配置。' : '在启动工作台的本机环境中设置此变量。'),
+          login ? h(React.Fragment, null, h('p', null, '在此配置的本机登录目录运行官方 agy acp --login。'),
+            h('code', null, inspector?.accountDirectory ?? '请先登记配置。'),
+            h('p', { role: 'status' }, '本机 Google 登录待试跑确认。')) : h(React.Fragment, null,
+            h('p', null, '本机启动环境的 ', h('code', null, credentialVariable)),
+            h('p', { role: 'status' }, inspectedRuntime?.credentialConfigured ? '本机 API 密钥已配置。' : '在启动工作台的本机环境中设置此变量。')),
           button('打开本机连接检查', { onClick: () => settingsSurface.setTab('connection') })),
         h('ol', { className: 'vc-setup-steps' }, credentials(),
           h(ConnectionResult, { id: 'response', label: '实际模型响应', detail: '试跑使用所选本机配置。',
@@ -234,9 +266,10 @@ export function createLocalWorkspace(React, Workbench) {
     };
 
     return h(Workbench, { ...props, active, visible: active, settingsSurface, access, accessPending, newChatRequest,
-      local: { request, profile, settingsProfile: inspector,
+      local: { request, profile, profiles, openProfile, settingsProfile: inspector,
         routeForTarget: (targetId) => routeFor(profiles.find((profile) => profile.targetId === targetId)),
+        profileForBackend: (backend) => backendOf(profile) === backend ? profile : profiles.find((item) => backendOf(item) === backend),
         runtimeStatus, runtimeReady, registerBusy, panels: localPanels,
-        exampleReady: runtimeReady && inspector?.id === profile?.id && trialResult(trial, trialTarget)?.state === 'passed' } });
+        exampleReady: runtimeReady && backendOf(profile) === 'codex' && inspector?.id === profile?.id && trialResult(trial, trialTarget)?.state === 'passed' } });
   };
 }

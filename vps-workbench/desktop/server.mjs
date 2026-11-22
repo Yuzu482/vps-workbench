@@ -15,9 +15,12 @@ import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
 import { localModels, openCodexRuntime } from './codex-runtime.mjs';
 import { openLocalSdk } from '../local-sdk/service.mjs';
 import { createLocalWorkbench } from '../local-sdk/workbench.mjs';
+import { isLocalBackend, localBackends } from '../local-sdk/providers.mjs';
+import { openLocalAgentRuntime } from './local-agent-runtime.mjs';
 
 export { canonicalLocalDirectory, localCredentialVariable } from './codex-runtime.mjs';
 export { localMemoryJournalKey } from '../local-sdk/workbench.mjs';
+export { agyHashVariable, agyPathVariable, claudeKeyVariable } from './local-agent-runtime.mjs';
 
 const staticRoutes = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -40,24 +43,45 @@ function hasSession(header, ticket) {
 
 export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoot, runtimeRoot, pythonPath,
   makeBridge = createBridge, makeSubscriptionHost = createStandaloneSubscriptionHost, access = () => defaultAccess,
-  data, onMemoryChanged, onMemoryError, localStateRoot, localApiKey, makeLocalRuntime = openCodexRuntime }) {
+  data, onMemoryChanged, onMemoryError, localStateRoot, localApiKey, localAgentOptions,
+  makeLocalRuntime = openCodexRuntime, makeLocalAgentRuntime = openLocalAgentRuntime }) {
   const ticket = randomBytes(32).toString('base64url');
   const readRoute = createWorkbenchRouteReader(workbenchRoot);
-  let local;
-  let runtimeAvailable = false;
+  const local = new Map();
   if (localStateRoot) {
-    try {
-      const sdk = await makeLocalRuntime({ runtimeRoot, stateRoot: localStateRoot, apiKey: localApiKey });
-      runtimeAvailable = sdk.runtimeAvailable;
-      local = await openLocalSdk({ root: localStateRoot, models: localModels, createThread: sdk.createThread,
-        canExecute: () => access().mode === 'execute', credentialConfigured: sdk.credentialConfigured });
-    } catch {
-      // Failure to open local state leaves the original SSH workbench available.
+    for (const backend of Object.keys(localBackends)) {
+      const stateRoot = backend === 'codex' ? localStateRoot : join(localStateRoot, backend);
+      try {
+        const sdk = backend === 'codex'
+          ? await makeLocalRuntime({ runtimeRoot, stateRoot, apiKey: localApiKey })
+          : await makeLocalAgentRuntime({ ...localAgentOptions, backend, runtimeRoot, stateRoot });
+        const service = await openLocalSdk({ root: stateRoot, backend, models: sdk.models ?? localModels,
+          createThread: sdk.createThread, canExecute: () => access().mode === 'execute', credentialConfigured: sdk.credentialConfigured });
+        const workbench = createLocalWorkbench({ service, runtimeAvailable: sdk.runtimeAvailable, backend, access, data,
+          onChange: onMemoryChanged, onError: onMemoryError });
+        local.set(backend, { service, workbench, sdk });
+      } catch {
+        // Each backend can be opened independently, including the existing SSH route.
+      }
     }
   }
-  const localWorkbench = local && createLocalWorkbench({ service: local, runtimeAvailable, access, data,
-    onChange: onMemoryChanged, onError: onMemoryError });
   const localUnavailable = { ok: false, code: 'local_sdk_unavailable', message: '本机 SDK 记录无法读取。' };
+  function localStatus() {
+    if (!local.size) return localUnavailable;
+    const providers = [...local.values()].map(({ service, sdk }) => {
+      const { profiles, ...status } = service.status();
+      const loginPending = sdk.credentialSource === 'agy-local-login' && sdk.runtimeAvailable;
+      return { ...status, ...(loginPending && { credentialConfigured: false, credentialPending: true }),
+        runtimeAvailable: sdk.runtimeAvailable, credentialSource: sdk.credentialSource ?? 'codex-api-key',
+        profiles: profiles.map((profile) => ({ ...profile, backend: status.backend,
+          ...(sdk.accountDirectory && { accountDirectory: sdk.accountDirectory(profile.id) }) })) };
+    });
+    return { ...providers[0], providers, profiles: providers.flatMap(({ profiles }) => profiles) };
+  }
+  async function closeLocal() {
+    for (const { workbench } of local.values()) workbench.dispose();
+    await Promise.allSettled([...local.values()].map(({ service }) => service.close()));
+  }
   const bridgeOptions = { pythonPath, executable: join(runtimeRoot, 'DshVpsChatBridge.exe'),
     compatibilityDirectory: join(runtimeRoot, 'compat'), useCurrentAntigravity: true, readRoute };
   const backend = makeBridge({ ...bridgeOptions, root: workbenchRoot });
@@ -169,42 +193,48 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     host?.dispose();
     bridge.dispose?.();
     server.close();
-    localWorkbench?.dispose();
-    await local?.close();
+    await closeLocal();
     throw error;
   }
   return {
     origin,
     cookie: { url: origin, name: cookieName, value: ticket, path: '/', httpOnly: true, sameSite: 'strict' },
-    localStatus() { return local ? { ...local.status(), runtimeAvailable } : localUnavailable; },
+    localStatus,
     async requestLocal(body) {
-      if (body?.location !== 'local-sdk' || body.backend !== 'codex')
-        return { ok: false, code: 'execution_location_mismatch', message: '请选择本机 SDK 的 Codex 配置。' };
+      if (body?.location !== 'local-sdk' || !isLocalBackend(body.backend))
+        return { ok: false, code: 'execution_location_mismatch', message: '请选择对应的本机配置。' };
+      const selected = local.get(body.backend);
+      if (!selected) return localUnavailable;
       if (body.op === 'workbench') {
         if (Object.keys(body).length !== 4 || !Object.hasOwn(body, 'payload')) return {
           ok: false, code: 'invalid_request', message: '本机工作台请求格式不正确。',
         };
-        return localWorkbench ? localWorkbench.request(body.payload) : localUnavailable;
+        return selected.workbench.request(body.payload);
       }
-      if (local && !runtimeAvailable && body.op === 'send')
-        return { ok: false, code: 'runtime_unavailable', message: '找不到打包的本机 Codex 运行时。' };
-      return local ? local.request(body) : localUnavailable;
+      if (!selected.sdk.runtimeAvailable && body.op === 'send')
+        return { ok: false, code: 'runtime_unavailable', message: '找不到所选执行端的本机运行时。' };
+      return selected.service.request(body);
     },
-    async registerLocalProfile(profile) { return local ? local.registerProfile(profile) : localUnavailable; },
+    async registerLocalProfile({ backend = 'codex', ...profile }) {
+      const selected = local.get(backend);
+      if (!selected) return localUnavailable;
+      const result = await selected.service.registerProfile(profile);
+      return result.ok ? { ...result, profile: localStatus().profiles.find(({ id }) => id === result.profile.id) } : result;
+    },
     changeMemoryExtractionModel(change) {
-      return local?.status().profiles.some(({ targetId }) => targetId === change?.targetId)
-        ? localWorkbench.changeExtractionModel(change) : chat.changeExtractionModel(change);
+      const codex = local.get('codex');
+      return codex?.service.status().profiles.some(({ targetId }) => targetId === change?.targetId)
+        ? codex.workbench.changeExtractionModel(change) : chat.changeExtractionModel(change);
     },
     accessChanged() {
       if (access().mode !== 'browse') return;
       host.revokeAccount();
-      local?.revokeExecution();
+      for (const { service } of local.values()) service.revokeExecution();
     },
     async close() {
       terminal.dispose();
       host.dispose();
-      localWorkbench?.dispose();
-      await local?.close();
+      await closeLocal();
       await new Promise((resolve) => {
         server.close(resolve);
         server.closeAllConnections();

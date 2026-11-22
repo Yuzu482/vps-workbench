@@ -2,22 +2,29 @@ import { createHash, randomUUID } from 'node:crypto';
 import { parameterLevels } from '../../remote-workbench/vps-chat/client/model-parameters.js';
 import { lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
+import { isLocalBackend, usesLocalControls } from './providers.mjs';
 
 const location = 'local-sdk';
-const backend = 'codex';
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
-const nativeId = /^[a-z0-9_-]{1,128}$/i;
+const nativeId = /^[a-z0-9_:.\-]{1,128}$/i;
 const digest = /^[a-f0-9]{64}$/;
 const maxPromptLength = 8192;
 const maxReplyLength = 256 * 1024;
 const pending = new Set(['queued', 'running', 'stopping']);
 const states = new Set([...pending, 'completed', 'failed', 'stopped', 'unknown']);
+const steerStates = new Set(['submitted', 'delivered', 'next', 'rejected', 'unknown']);
+const approvalStates = new Set(['pending', 'queued', 'submitted', 'unknown', 'closed']);
+const decisions = new Set(['allow', 'deny']);
+const steerLimit = 6;
+const approvalLimit = 16;
 const operations = Object.freeze({
   list: [],
   get: ['targetId', 'sessionId'],
   refresh: ['targetId', 'sessionId', 'turnId'],
   stop: ['targetId', 'sessionId', 'turnId'],
   send: ['targetId', 'sessionId', 'turnId', 'prompt'],
+  steer: ['targetId', 'sessionId', 'turnId', 'steerId', 'prompt'],
+  approval: ['targetId', 'sessionId', 'turnId', 'approvalId', 'decision'],
 });
 const messages = Object.freeze({
   invalid_request: '本机 SDK 请求无效。',
@@ -40,6 +47,11 @@ const messages = Object.freeze({
   unknown_outcome: '本轮结果未知。可查询原回执。',
   storage_unavailable: '本机 Codex 回执暂时无法读写。',
   resources_changed: '本轮的文件或工具授权已变化，请核对后重新发送。',
+  steer_unavailable: '这轮当前无法接收补充指令。',
+  steer_limit: '本轮已达到补充指令上限。',
+  steer_conflict: '这条补充指令已绑定其他回执。',
+  approval_unavailable: '这个工具审批已经关闭，或不属于当前轮。',
+  approval_rejected: '这项操作的授权范围不允许批准，或已收到其他决定。',
 });
 
 function failure(code) {
@@ -50,7 +62,7 @@ function stateResult(state, code) {
   return code ? { state, code, message: messages[code] } : { state };
 }
 
-function targetFor(id) {
+function targetFor(backend, id) {
   return createHash('sha256').update(`${location}:${backend}:${id}`).digest('hex');
 }
 
@@ -88,7 +100,7 @@ function validDate(value) {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
 
-function parseRequest(body) {
+function parseRequest(body, backend) {
   if (!plain(body)) return null;
   const op = Object.getOwnPropertyDescriptor(body, 'op')?.value;
   if (typeof op !== 'string' || !Object.hasOwn(operations, op)) return null;
@@ -98,14 +110,17 @@ function parseRequest(body) {
   if (fields.includes('targetId') && (typeof body.targetId !== 'string' || !/^[a-f0-9]{64}$/.test(body.targetId))) return null;
   if (fields.includes('sessionId') && !localSessionId(body.sessionId)) return null;
   if (fields.includes('turnId') && !identifier(body.turnId)) return null;
-  if (op === 'send' && (!validText(body.prompt) || body.prompt.length > maxPromptLength)) return null;
+  if ((op === 'send' || op === 'steer') && (!validText(body.prompt) || body.prompt.length > (op === 'steer' ? 1200 : maxPromptLength))) return null;
+  if (op === 'steer' && !identifier(body.steerId) ||
+      op === 'approval' && (!identifier(body.approvalId) || !decisions.has(body.decision))) return null;
   return {
     op,
     profileId: body.profileId.toLowerCase(),
     targetId: fields.includes('targetId') ? body.targetId : undefined,
     sessionId: fields.includes('sessionId') ? body.sessionId.toLowerCase() : undefined,
     turnId: fields.includes('turnId') ? body.turnId.toLowerCase() : undefined,
-    prompt: op === 'send' ? body.prompt : undefined,
+    prompt: op === 'send' || op === 'steer' ? body.prompt : undefined,
+    steerId: body.steerId?.toLowerCase(), approvalId: body.approvalId?.toLowerCase(), decision: body.decision,
   };
 }
 
@@ -113,11 +128,36 @@ function indexById(records) {
   return new Map(records.map((record) => [record.id, record]));
 }
 
-function validateStore(store) {
+function validRows(rows, max, valid) {
+  return Array.isArray(rows) && rows.length <= max && rows.every(valid) && new Set(rows.map(({ id }) => id)).size === rows.length;
+}
+
+function validSteering(rows) {
+  return validRows(rows, steerLimit, (entry) => exact(entry, ['id', 'prompt', 'state']) && identifier(entry.id) &&
+    validText(entry.prompt) && entry.prompt.length <= 1200 && steerStates.has(entry.state));
+}
+
+function validApprovals(rows) {
+  return validRows(rows, approvalLimit, (entry) => exact(entry, ['id', 'title', 'detail', 'kind', 'canAllow', 'state', 'decision']) &&
+    identifier(entry.id) && typeof entry.title === 'string' && entry.title.length <= 240 &&
+    typeof entry.detail === 'string' && entry.detail.length <= 512 && typeof entry.kind === 'string' && entry.kind.length <= 32 &&
+    typeof entry.canAllow === 'boolean' && approvalStates.has(entry.state) && (entry.decision === null || decisions.has(entry.decision)));
+}
+
+function settleInteractions(turn, uncertain) {
+  for (const row of turn.approvals ?? []) {
+    if (row.state === 'pending') row.state = 'closed';
+    else if (row.state === 'queued') row.state = uncertain ? 'unknown' : 'closed';
+    else if (row.state === 'submitted' && uncertain) row.state = 'unknown';
+  }
+  for (const row of turn.steering ?? []) if (row.state === 'submitted') row.state = 'unknown';
+}
+
+function validateStore(store, backend) {
   if (!exact(store, ['version', 'profiles', 'sessions']) || store.version !== 1 ||
       !Array.isArray(store.profiles) || !Array.isArray(store.sessions)) return false;
   if (!store.profiles.every((profile) => exact(profile, ['id', 'targetId', 'name', 'directory', 'model', 'effort']) &&
-    identifier(profile.id) && profile.id === profile.id.toLowerCase() && profile.targetId === targetFor(profile.id) &&
+    identifier(profile.id) && profile.id === profile.id.toLowerCase() && profile.targetId === targetFor(backend, profile.id) &&
     validText(profile.name) && validText(profile.directory) && isAbsolute(profile.directory) &&
     validText(profile.model) && validText(profile.effort))) return false;
   const profiles = indexById(store.profiles);
@@ -143,6 +183,14 @@ function validateStore(store) {
       const fields = ['id', 'prompt', 'reply', 'state'];
       if (Object.hasOwn(turn ?? {}, 'code')) fields.push('code', 'message');
       if (Object.hasOwn(turn ?? {}, 'execution')) fields.push('execution');
+      if (Object.hasOwn(turn ?? {}, 'steering')) {
+        if (!usesLocalControls(backend) || !validSteering(turn.steering)) return false;
+        fields.push('steering');
+      }
+      if (Object.hasOwn(turn ?? {}, 'approvals')) {
+        if (!usesLocalControls(backend) || !validApprovals(turn.approvals)) return false;
+        fields.push('approvals');
+      }
       if (!exact(turn, fields) || !identifier(turn.id) || turn.id !== turn.id.toLowerCase() || turns.has(turn.id) ||
           !validText(turn.prompt) || typeof turn.reply !== 'string' || !states.has(turn.state) ||
           (fields.includes('code') && (!Object.hasOwn(messages, turn.code) || turn.message !== messages[turn.code]))) return false;
@@ -198,7 +246,7 @@ async function checkStoreDirectory(directory) {
   if (!matches || !(await lstat(directory)).isDirectory()) throw new Error('redirected store');
 }
 
-async function loadStore(path) {
+async function loadStore(path, backend) {
   try {
     let raw;
     try {
@@ -210,11 +258,12 @@ async function loadStore(path) {
       throw error;
     }
     const state = JSON.parse(raw);
-    if (!validateStore(state)) throw new Error('invalid store');
+    if (!validateStore(state, backend)) throw new Error('invalid store');
     for (const session of state.sessions) {
       for (const turn of session.turns) {
         if (!pending.has(turn.state)) continue;
         Object.assign(turn, stateResult('unknown', 'unknown_outcome'));
+        settleInteractions(turn, true);
       }
     }
     return state;
@@ -241,9 +290,10 @@ function sdkFailure(message) {
     ? 'network_error' : null;
 }
 
-export async function openLocalSdk({ root, models, createThread, canExecute, credentialConfigured }) {
+export async function openLocalSdk({ root, models, createThread, canExecute, credentialConfigured, backend = 'codex' }) {
+  if (!isLocalBackend(backend)) throw new Error('unsupported local backend');
   const path = join(root, 'receipts.json');
-  let store = await loadStore(path);
+  let store = await loadStore(path, backend);
   const availableModels = structuredClone(models);
   const active = new Map();
   const lanes = new Map();
@@ -307,6 +357,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
         reply,
         canStop: pending.has(turn.state) && turn.state !== 'stopping' && !control?.controller.signal.aborted &&
           !closing && canExecute(),
+        ...(usesLocalControls(backend) && { canSteer: canSteer(turn, control) }),
       };
     });
     return {
@@ -341,7 +392,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
         profile.name === name && profile.directory === directory && profile.model === model && profile.effort === effort);
       if (existing) return { ok: true, profile: { ...existing } };
       const id = randomUUID();
-      const profile = { id, targetId: targetFor(id), name, directory, model, effort };
+      const profile = { id, targetId: targetFor(backend, id), name, directory, model, effort };
       await commit((next) => next.profiles.push(profile));
       return { ok: true, profile: { ...profile } };
     }).catch(() => failure('storage_unavailable'));
@@ -352,9 +403,106 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       const session = sessionById(sessionId, next);
       const turn = session.turns.find(({ id }) => id === turnId);
       Object.assign(turn, update);
+      if (update.state && !pending.has(update.state)) settleInteractions(turn, update.state === 'unknown');
       if (reply !== undefined) turn.reply = reply;
       session.updatedAt = new Date().toISOString();
     });
+  }
+
+  const eligibleControl = (turn, control) => turn?.state === 'running' && control &&
+    !control.controller.signal.aborted && !closing && canExecute();
+  const canSteer = (turn, control) => Boolean(eligibleControl(turn, control) && control.steer &&
+    !turn.approvals?.some(({ state }) => state === 'pending' || state === 'queued') && !turn.steering?.some(({ state }) => state === 'submitted') &&
+    (turn.steering?.length ?? 0) < steerLimit);
+
+  function controlsFor(sessionId, turnId, control) {
+    const { signal } = control.controller;
+    const settle = (id, outcome) => transact(async () => {
+      const turn = sessionById(sessionId)?.turns.find((turn) => turn.id === turnId);
+      const row = turn?.approvals?.find((request) => request.id === id);
+      if (!row || !['submitted', 'unknown', 'closed'].includes(outcome) ||
+          (row.state !== 'queued' && !(row.state === 'pending' && outcome === 'closed'))) return;
+      await updateTurn(sessionId, turnId, { approvals: turn.approvals.map((request) =>
+        request.id === id ? { ...request, state: outcome } : request) });
+    }).catch(() => {});
+    return {
+      steerWith(deliver) { control.steer = typeof deliver === 'function' && !signal.aborted ? deliver : null; },
+      async ask({ title, detail, kind, canAllow }, toolSignal = signal) {
+        if (signal.aborted || toolSignal.aborted) return null;
+        const id = randomUUID();
+        const row = { id, title, detail, kind, canAllow, state: 'pending', decision: null };
+        if (!validApprovals([row])) return null;
+        const cancel = AbortSignal.any([signal, toolSignal, AbortSignal.timeout(120_000)]);
+        const pendingRequest = await transact(async () => {
+          const turn = sessionById(sessionId)?.turns.find(({ id }) => id === turnId);
+          if (!eligibleControl(turn, control) || cancel.aborted || (turn.approvals?.length ?? 0) >= approvalLimit) return null;
+          const { promise, resolve } = Promise.withResolvers();
+          await updateTurn(sessionId, turnId, { approvals: [...(turn.approvals ?? []), row] });
+          control.approvals.set(id, { resolve, signal: cancel });
+          return { promise, resolve };
+        }).catch(() => null);
+        if (!pendingRequest) return null;
+        const revoke = () => pendingRequest.resolve(null);
+        cancel.addEventListener('abort', revoke, { once: true });
+        if (cancel.aborted) revoke();
+        let passedToProvider = false;
+        try {
+          const decision = await pendingRequest.promise;
+          if (!decision || cancel.aborted) return null;
+          passedToProvider = true;
+          return { decision, signal: cancel, settle: (outcome) => settle(id, outcome) };
+        } finally {
+          cancel.removeEventListener('abort', revoke);
+          control.approvals.delete(id);
+          if (!passedToProvider) await settle(id, 'closed');
+        }
+      },
+    };
+  }
+
+  async function steer(profile, session, turn, { steerId, prompt }) {
+    const rows = turn.steering ?? [];
+    const original = rows.find(({ id }) => id === steerId);
+    if (original) return original.prompt === prompt ? view(profile, session) : failure('steer_conflict');
+    const control = active.get(turn.id);
+    if (rows.length >= steerLimit) return failure('steer_limit');
+    if (!canSteer(turn, control)) return failure('steer_unavailable');
+    const deliver = control.steer;
+    await updateTurn(session.id, turn.id, { steering: [...rows, { id: steerId, prompt, state: 'submitted' }] });
+    const resolve = async () => {
+      let state = 'rejected';
+      try {
+        if (eligibleControl(turn, control) && control.steer === deliver) state = await deliver({ id: steerId, prompt });
+      } catch { state = 'unknown'; }
+      await transact(async () => {
+        const latest = sessionById(session.id)?.turns.find(({ id }) => id === turn.id);
+        if (!latest?.steering?.some((row) => row.id === steerId && row.state === 'submitted')) return;
+        const outcome = steerStates.has(state) && state !== 'submitted' ? state : 'unknown';
+        await updateTurn(session.id, turn.id, { steering: latest.steering.map((row) =>
+          row.id === steerId ? { ...row, state: outcome } : row) });
+      });
+    };
+    control.delivery = resolve().catch(() => {});
+    return view(profile, sessionById(session.id));
+  }
+
+  async function approval(session, turn, { approvalId, decision }) {
+    const row = turn.approvals?.find(({ id }) => id === approvalId);
+    if (row?.decision) return row.decision === decision ? { ok: true, outcome: row.state } : failure('approval_rejected');
+    const control = active.get(turn.id);
+    const waiter = control?.approvals.get(approvalId);
+    if (row?.state !== 'pending' || !eligibleControl(turn, control) || !waiter || waiter.signal.aborted) return failure('approval_unavailable');
+    if (decision === 'allow' && !row.canAllow) return failure('approval_rejected');
+    await updateTurn(session.id, turn.id, { approvals: turn.approvals.map((row) =>
+      row.id === approvalId ? { ...row, state: 'queued', decision } : row) });
+    const live = eligibleControl(turn, control) && !waiter.signal.aborted;
+    waiter.resolve(live ? decision : null);
+    if (!live) {
+      const latest = sessionById(session.id).turns.find(({ id }) => id === turn.id);
+      await updateTurn(session.id, turn.id, { approvals: latest.approvals.map((row) =>
+        row.id === approvalId ? { ...row, state: 'closed' } : row) });
+    }
+    return { ok: true, outcome: live ? 'queued' : 'closed' };
   }
 
   async function bindNative(sessionId, turnId, id) {
@@ -378,6 +526,8 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
     let dispatched = false;
     let terminal = false;
     const finish = async (result) => {
+      control.steer = null;
+      for (const { resolve } of control.approvals.values()) resolve(null);
       await transact(() => updateTurn(sessionId, turnId, result, replyFor(control)));
       terminal = true;
     };
@@ -403,7 +553,8 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       const thread = await createThread({ ...profile, ...(start.execution && {
         model: start.execution.model, effort: start.execution.effort,
       }) }, start.nativeThreadId, { workspace: start.execution?.workspace, sessionId, signal, mcpServers: options?.mcpServers,
-        verbosity: start.execution?.verbosity,
+        verbosity: start.execution?.verbosity, turnId, bindSession: (id) => bindNative(sessionId, turnId, id),
+        ...(usesLocalControls(backend) && options?.fingerprint && !options.background && { interaction: controlsFor(sessionId, turnId, control) }),
         rasterInput: Array.isArray(input) && input.some(({ type }) => type === 'raster') });
       const beforeDispatch = executionBlock();
       if (signal.aborted || beforeDispatch === 'browse_only') return await finish(stateResult('stopped'));
@@ -421,6 +572,8 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
           }
         }
         if (event.type === 'turn.completed') {
+          control.steer = null;
+          if (control.delivery) await control.delivery;
           const session = sessionById(sessionId);
           const observed = session.mode === 'design'
             ? session.turns.find(({ id }) => id === turnId)?.execution.branch.nativeThreadId : session.nativeThreadId;
@@ -430,6 +583,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
           await finish({ ...stateResult('completed'), ...(execution && Number.isSafeInteger(usedTokens) && usedTokens >= 0 &&
             { execution: { ...execution, usedTokens } }) });
         }
+        if (event.type === 'turn.stopped' && signal.aborted) await finish(stateResult('stopped'));
         if (event.type === 'turn.failed') await finish(stateResult('failed', sdkFailure(event.error?.message) ?? 'turn_failed'));
         if (event.type === 'error') throw new Error(event.message);
       }
@@ -448,7 +602,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
   }
 
   function schedule(profile, sessionId, turnId, revoked, input, options) {
-    const control = { controller: new AbortController(), text: new Map() };
+    const control = { controller: new AbortController(), text: new Map(), approvals: new Map() };
     if (revoked) control.controller.abort();
     active.set(turnId, control);
     const previous = lanes.get(sessionId) ?? Promise.resolve();
@@ -511,14 +665,14 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
   }
 
   async function request(body, options) {
-    const query = parseRequest(body);
+    const query = parseRequest(body, backend);
     if (!query) return failure('invalid_request');
     return transact(async () => {
       const profile = store.profiles.find(({ id }) => id === query.profileId);
       if (!profile) return failure('profile_not_found');
       if (query.targetId !== undefined && query.targetId !== profile.targetId) return failure('invalid_request');
       const { op, sessionId, turnId } = query;
-      if ((op === 'send' || op === 'stop') && (closing || !canExecute())) return failure('browse_only');
+      if (['send', 'stop', 'steer', 'approval'].includes(op) && (closing || !canExecute())) return failure('browse_only');
       if (op === 'list') {
         const sessions = store.sessions.filter(({ profileId, background }) => profileId === profile.id && !background)
           .map(({ id, title, updatedAt, mode }) => ({ id, title, updatedAt, ...(mode && { mode }) }))
@@ -535,6 +689,10 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       if (op === 'get') return view(profile, session);
       const turn = session.turns.find(({ id }) => id === turnId);
       if (!turn) return failure('turn_not_found');
+      if (op === 'steer' || op === 'approval') {
+        if (!usesLocalControls(backend) || session.background) return failure('invalid_request');
+        return op === 'steer' ? steer(profile, session, turn, query) : approval(session, turn, query);
+      }
       if (op === 'stop' && pending.has(turn.state) && turn.state !== 'stopping') {
         const control = active.get(turnId);
         if (control && !control.controller.signal.aborted) {

@@ -52,7 +52,7 @@ function positionPalette(palette, button, count, openingIndex, docked) {
 
 export function createProviderPicker(React) {
   const h = React.createElement;
-  return function ProviderPicker({ value, tools, disabled, active, select, closeOnSelect, docked = false }) {
+  return function ProviderPicker({ value, tools, disabled, active, select, closeOnSelect, docked = false, ariaLabel = '切换 VPS 执行端' }) {
     const id = React.useId();
     const button = React.useRef(null);
     const palette = React.useRef(null);
@@ -138,7 +138,7 @@ export function createProviderPicker(React) {
     return h('span', { className: 'vc-tool-picker' },
       h('button', {
         ref: button, type: 'button', className: 'vc-tool-trigger',
-        'aria-label': '切换 VPS 执行端', 'aria-description': current?.label ?? '请选择执行端',
+        'aria-label': ariaLabel, 'aria-description': current?.label ?? '请选择执行端',
         'aria-controls': id, 'aria-haspopup': 'listbox', 'aria-expanded': open, 'aria-disabled': disabled,
         'data-provider': current?.id ?? '', title: current?.label ?? '选择执行端',
         onClick: () => openPalette(),

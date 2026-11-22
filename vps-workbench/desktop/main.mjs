@@ -9,10 +9,12 @@ import { workflowKey } from '../workflow-engine/state.mjs';
 import { agentPresetKey, legacyAgentPresetKey } from '../agent-presets/state.mjs';
 import { accessPreference, readAccess, validAccess } from './access.mjs';
 import { importWorkbenchSnapshot } from './migrate.mjs';
-import { canonicalLocalDirectory, localCredentialVariable, localMemoryJournalKey, startWorkbenchServer } from './server.mjs';
+import { agyHashVariable, agyPathVariable, canonicalLocalDirectory, claudeKeyVariable, localCredentialVariable,
+  localMemoryJournalKey, startWorkbenchServer } from './server.mjs';
 
 const localApiKey = process.env[localCredentialVariable];
-delete process.env[localCredentialVariable];
+const localAgentOptions = { claudeKey: process.env[claudeKeyVariable], agyPath: process.env[agyPathVariable], agyHash: process.env[agyHashVariable] };
+for (const name of [localCredentialVariable, claudeKeyVariable, agyPathVariable, agyHashVariable]) delete process.env[name];
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const title = 'VPS 工作台';
@@ -120,7 +122,7 @@ async function start() {
   runtime = await startWorkbenchServer({
     webRoot: join(directory, 'web'), workbenchRoot, terminalRoot,
     runtimeRoot: join(directory, '../helper'), pythonPath, access: () => readAccess(data.preference(accessPreference)),
-    localStateRoot: join(root, 'local-sdk'), localApiKey,
+    localStateRoot: join(root, 'local-sdk'), localApiKey, localAgentOptions,
     data, onMemoryChanged: (state) => {
       if (window && !window.isDestroyed()) window.webContents.send('workbench:extensions-changed', state);
     },
@@ -204,10 +206,11 @@ async function start() {
     if (change?.op === 'set-memory-extraction-model') return runtime.changeMemoryExtractionModel(change);
     if (change?.op === 'save-server') {
       const target = change.server?.targetId;
-      if (Boolean(change.server?.local) !== Boolean(runtime.localStatus().profiles?.some(({ targetId }) => targetId === target)) ||
-          (change.server?.local && readAccess(data.preference(accessPreference)).mode !== 'execute')) throw new Error('invalid_mcp_scope');
+      const profile = runtime.localStatus().profiles?.find(({ targetId }) => targetId === target);
+      if (Boolean(change.server?.local) !== Boolean(profile) || (profile &&
+          (profile.backend !== 'codex' || readAccess(data.preference(accessPreference)).mode !== 'execute'))) throw new Error('invalid_mcp_scope');
     }
-    if (change?.op === 'set-scoped-personal-memory' && !runtime.localStatus().profiles?.some(({ targetId }) => targetId === change.targetId))
+    if (change?.op === 'set-scoped-personal-memory' && !runtime.localStatus().profiles?.some(({ targetId, backend }) => targetId === change.targetId && backend === 'codex'))
       throw new Error('invalid_local_profile');
     if (change?.op === 'set-automatic-memory' && !data.projects().some(({ workspaceId }) => workspaceId === change.projectId))
       throw new Error('invalid_project');
@@ -228,14 +231,16 @@ async function start() {
     if (readAccess(data.preference(accessPreference)).mode !== 'execute') {
       return { ok: false, code: 'workbench_browse_only', message: '当前为仅浏览模式。' };
     }
-    if (!config || Object.keys(config).length !== 3 ||
+    const backend = config?.backend ?? 'codex';
+    const provider = status.providers?.find((item) => item.backend === backend);
+    if (!provider || !config || Object.keys(config).some((key) => !['name', 'model', 'effort', 'backend'].includes(key)) ||
         typeof config.name !== 'string' || !config.name.trim() || config.name.length > 80 ||
-        !status.models.some(({ id, efforts }) => id === config.model && efforts.includes(config.effort))) {
+        !provider.models.some(({ id, efforts }) => id === config.model && efforts.includes(config.effort))) {
       return { ok: false, code: 'invalid_profile', message: '请选择受支持的模型和推理档位，并填写配置名。' };
     }
-    const selected = await withDirectory({ title: '选择本机 Codex 的只读工作目录' }, async (path) => {
+    const selected = await withDirectory({ title: '选择本机执行端的只读工作目录' }, async (path) => {
       const directory = await canonicalLocalDirectory(path);
-      return runtime.registerLocalProfile({ name: config.name, model: config.model, effort: config.effort, directory });
+      return runtime.registerLocalProfile({ backend, name: config.name, model: config.model, effort: config.effort, directory });
     }, () => ({ ok: false, code: 'invalid_directory', message: '请选择可用的本机目录。' }));
     return selected ?? { ok: false, code: 'directory_cancelled', message: '未选择工作目录。' };
   });
