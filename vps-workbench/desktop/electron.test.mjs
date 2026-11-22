@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
+import { openSettingsSection } from './test-settings.mjs';
 import { openAppData } from './data.mjs';
 
 const require = createRequire(import.meta.url);
@@ -377,9 +378,9 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await accessTrigger.filter({ hasText: '仅浏览' }).waitFor();
       await editor.fill('权限草稿');
       assert.equal(await page.getByRole('button', { name: '发送', exact: true }).isDisabled(), true);
-      await page.getByRole('button', { name: 'VPS 设置', exact: true }).click();
-      const toolDialog = page.getByRole('dialog', { name: 'VPS 设置', exact: true });
-      await toolDialog.getByRole('navigation').getByRole('button', { name: '执行端', exact: true }).click();
+      await page.getByRole('button', { name: legacyBaseline ? 'VPS 设置' : '设置', exact: true }).click();
+      const toolDialog = page.getByRole('dialog', { name: legacyBaseline ? 'VPS 设置' : '设置', exact: true });
+      await openSettingsSection(toolDialog, '执行端');
       const codexProfile = toolDialog.locator('details.vc-tool-disclosure')
         .filter({ has: page.getByText('Codex 独立设置', { exact: true }) });
       await codexProfile.locator('summary').click();
@@ -398,17 +399,16 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await modeTrigger.click();
       await page.getByRole('dialog', { name: '模式', exact: true }).waitFor({ state: 'hidden' });
       await accessPanel.waitFor({ state: 'hidden' });
-      await page.getByRole('button', { name: 'VPS 设置', exact: true }).click();
-      const settingsPanel = page.getByRole('dialog', { name: 'VPS 设置', exact: true });
-      const pageButton = (name) => settingsPanel.getByRole('navigation').getByRole('button', { name, exact: true });
-      await pageButton('MCP 服务器').click();
+      await page.getByRole('button', { name: legacyBaseline ? 'VPS 设置' : '设置', exact: true }).click();
+      const settingsPanel = page.getByRole('dialog', { name: legacyBaseline ? 'VPS 设置' : '设置', exact: true });
+      await openSettingsSection(settingsPanel, 'MCP 服务器');
       await settingsPanel.getByLabel('服务 ID', { exact: true }).fill('fixture-status');
       await settingsPanel.getByRole('button', { name: '添加', exact: true }).click();
       const mcp = settingsPanel.getByRole('switch', { name: '启用服务', exact: true });
       assert.equal(await mcp.isChecked(), false);
       await mcp.click();
       await mcp.and(settingsPanel.locator('input:checked')).waitFor();
-      await pageButton('插件').click();
+      await openSettingsSection(settingsPanel, '提示词模板');
       await settingsPanel.getByLabel('粘贴 JSON 清单', { exact: true }).fill(JSON.stringify({
         schema: 1, id: 'fixture-tools', name: '示例插件', version: '1.0.0', description: '',
         prompts: [{ title: '检查资源', text: template }],
@@ -418,7 +418,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       assert.equal(await plugin.isChecked(), false);
       await plugin.click();
       await plugin.and(settingsPanel.locator('input:checked')).waitFor();
-      await pageButton('长期记忆').click();
+      await openSettingsSection(settingsPanel, '长期记忆');
       const personalMemory = settingsPanel.getByRole('switch', { name: '开启个人自动记忆', exact: true });
       assert.equal(await personalMemory.isChecked(), false);
       assert.deepEqual(await personalMemory.evaluate((input) => {
@@ -1203,12 +1203,11 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await page.locator('.vc-heading-title').getByText('右键重命名后的会话', { exact: true }).waitFor();
       await page.getByRole('heading', { name: '独立对话测试已返回', exact: true }).waitFor();
     }
-    await page.getByRole('button', { name: 'VPS 设置', exact: true }).click();
-    let dialog = page.getByRole('dialog', { name: 'VPS 设置', exact: true });
-    const tab = (name) => dialog.getByRole('navigation').getByRole('button', { name, exact: true });
-    await tab('账号').click();
+    await page.getByRole('button', { name: legacyBaseline ? 'VPS 设置' : '设置', exact: true }).click();
+    let dialog = page.getByRole('dialog', { name: legacyBaseline ? 'VPS 设置' : '设置', exact: true });
+    await openSettingsSection(dialog, '账号', legacyBaseline);
     await dialog.getByRole('button', { name: 'Claude 账号', exact: true }).waitFor();
-    await tab('外观').click();
+    await openSettingsSection(dialog, '外观', legacyBaseline);
     if (!legacyBaseline) {
       const accent = dialog.locator('.vc-settings-disclosure > summary').filter({ hasText: '强调色' });
       assert.ok(await accent.evaluate((summary) => {
@@ -1233,14 +1232,14 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
         assert.ok(fades.some((record) => record.name === name && record.opening && record.duration === '0.18s'), name);
         assert.ok(fades.some((record) => record.name === name && !record.opening && record.duration === '0.18s'), name);
       }
-      await tab('交互').click();
+      await openSettingsSection(dialog, '交互', legacyBaseline);
       await dialog.getByRole('button', { name: '减少动画', exact: true }).click();
       await page.waitForFunction(() => document.getElementById('root').dataset.chromeMotion === 'reduce');
       assert.deepEqual(await page.evaluate(() => ['.desktop-title-menu', '.vc-tool-palette', '.vc-workbench-settings']
         .map((selector) => getComputedStyle(document.querySelector(selector)).transitionDuration.split(',')[0])),
       ['0s', '0s', '0s']);
       await dialog.getByRole('group', { name: '动画' }).getByRole('button', { name: '跟随系统', exact: true }).click();
-      await tab('外观').click();
+      await openSettingsSection(dialog, '外观', legacyBaseline);
     }
     await desktop.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0];
@@ -1358,7 +1357,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await page.emulateMedia({ reducedMotion: 'no-preference' });
       await desktop.evaluate(() => { globalThis.fixtureBorders.length = 0; });
     }
-    await tab('执行端').click();
+    await openSettingsSection(dialog, '执行端', legacyBaseline);
     await dialog.getByRole('checkbox', { name: 'Claude Code（订阅终端）', exact: true }).check();
     await dialog.getByRole('button', { name: legacyBaseline ? '保存执行端' : '保存启用变更', exact: true }).click();
     await dialog.waitFor({ state: 'hidden' });
@@ -1431,9 +1430,9 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await page.getByRole('region', { name: '置顶项目', exact: true })
         .getByRole('button', { name: '测试目录选择', exact: true }).waitFor();
     }
-    await page.getByRole('button', { name: 'VPS 设置', exact: true }).click();
-    dialog = page.getByRole('dialog', { name: 'VPS 设置', exact: true });
-    await tab('外观').click();
+    await page.getByRole('button', { name: legacyBaseline ? 'VPS 设置' : '设置', exact: true }).click();
+    dialog = page.getByRole('dialog', { name: legacyBaseline ? 'VPS 设置' : '设置', exact: true });
+    await openSettingsSection(dialog, '外观', legacyBaseline);
     assert.equal(await dialog.getByRole('group', { name: '主题', exact: true })
       .getByRole('button', { name: '深色', exact: true }).getAttribute('aria-pressed'), 'true');
     if (!legacyBaseline) {
@@ -1467,7 +1466,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
         }
         return route.fulfill({ json: result });
       });
-      await tab('执行端').click();
+      await openSettingsSection(dialog, '执行端', legacyBaseline);
       await dialog.getByRole('checkbox', { name: 'Antigravity', exact: true }).check();
       await dialog.getByRole('button', { name: '保存启用变更', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });

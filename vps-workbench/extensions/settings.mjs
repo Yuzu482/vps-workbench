@@ -123,9 +123,9 @@ export function createExtensionSettings(React) {
     }
 
     return h(React.Fragment, null,
-      h('p', null, '启用插件后，可从输入栏插入其中的纯文本提示词模板。'),
+      h('p', null, '启用后，可从输入栏插入清单中的纯文本提示词模板。'),
       h('section', { className: 'vc-settings-group' },
-        h('h4', null, '导入插件'),
+        h('h4', null, '导入模板清单'),
         field('粘贴 JSON 清单', { value: source, maxLength: maxImportBytes, disabled, spellCheck: false,
           onChange: event => setSource(event.target.value) }, 'textarea'),
         h('input', { hidden: true, ref: fileInput, type: 'file', accept: '.json,application/json', disabled, onChange: fileImport }),

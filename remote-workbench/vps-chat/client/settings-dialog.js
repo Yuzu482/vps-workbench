@@ -45,6 +45,16 @@ const extensionPages = [
   ['plugins', '插件', 'library'],
   ['memory', '长期记忆', 'context'],
 ];
+const desktopGroups = [
+  ['connection', '连接', 'server', ['connection']],
+  ['models', '模型与账号', 'model', ['tools', 'accounts']],
+  ['agent', 'Agent 与工具', 'fork', ['agents', 'mcp', 'plugins']],
+  ['data', '数据与记忆', 'library', ['memory']],
+  ['preferences', '应用偏好', 'canvas', ['appearance', 'interaction']],
+];
+const desktopLabels = { tools: '执行端与模型', accounts: '账号', plugins: '提示词模板' };
+const locations = [['local-sdk', '本机 SDK'], ['ssh-vps', 'VPS SSH']];
+const noTools = [];
 const appearanceRows = [
   ['color', '主题', '切换 VPS 对话的浅色或深色外观。'],
   ['textSize', '消息文字', '调整消息正文与输入框的字号。'],
@@ -121,17 +131,18 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
     }, h('div', { className: 'vc-accent-choices', role: 'group', 'aria-label': '强调色' },
       accentOptions.map(({ id, label, light }) => h('button', {
         key: id, type: 'button', disabled, 'aria-pressed': value === id,
-        onClick: (event) => {
-          if (!change({ accent: id })) return;
+        onClick: async (event) => {
           const details = event.currentTarget.closest('details');
+          if (!await change({ accent: id }) || !details.isConnected) return;
           details.open = false;
           details.querySelector('summary').focus({ preventScroll: true });
         },
       }, h('i', { className: 'vc-accent-swatch', style: light && { background: light }, 'aria-hidden': true }), label))));
   }
 
-  function ToolModelSettings({ id, model, readModels, change, busy }) {
-    const [catalog, setCatalog] = React.useState(null);
+  function ToolModelSettings({ id, model, readModels, change, busy, checked }) {
+    const [loaded, setCatalog] = React.useState(null);
+    const catalog = loaded ?? (checked?.model && { models: checked.models, targetId: checked.list.targetId });
     const [loading, setLoading] = React.useState(false);
     const [error, setError] = React.useState('');
     const request = React.useRef(null);
@@ -158,7 +169,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
       h('div', { className: 'vc-preference-row' },
         h('span', { className: 'vc-settings-description' },
           h('strong', null, '默认模型', liveSave()),
-          h('small', null, model ? `已保存 ${model.id}` : '由 VPS 或当前会话决定。')),
+          h('small', null, model ? `当前配置 · 已保存 ${model.id}` : '当前配置 · 沿用执行端默认。当前会话可另选模型。')),
         h('button', { type: 'button', className: 'vc-button vc-settings-outline', disabled: busy || loading, onClick: load },
           loading ? '正在读取' : catalog ? '刷新目录' : '读取模型目录')),
       error ? h('p', { className: 'vc-settings-inline-error', role: 'alert' }, error) : null,
@@ -172,7 +183,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
               const selected = catalog.models.find(item => item.id === event.target.value);
               change({ model: selected ? { id: selected.id, targetId: catalog.targetId, effort: selected.defaultEffort } : undefined });
             },
-          }, h('option', { value: '' }, '沿用会话设置'),
+          }, h('option', { value: '' }, '使用执行端默认'),
           catalog.models.map(({ id, displayName }) => h('option', { key: id, value: id }, displayName)))),
         entry?.efforts.length ? h('label', null, '推理强度',
           h('select', {
@@ -183,7 +194,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
           entry.efforts.map(effort => h('option', { key: effort, value: effort }, effortName(effort))))) : null) : null);
   }
 
-  function ToolProfile({ tool, profile, preferences, change, readModels, canReadModels, busy }) {
+  function ToolProfile({ tool, profile, preferences, change, readModels, canReadModels, busy, catalogCheck, scope }) {
     const rows = [
       ['color', '主题'], ['accent', '强调色'],
       ...(tool.id === 'claude-subscription' ? [] : [['textSize', '消息文字'], ['width', '对话宽度'], ['sendKey', '发送快捷键']]),
@@ -204,27 +215,31 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
             onChange: (event) => change({ [key]: event.target.value || undefined }),
           }, h('option', { value: '' }, `跟随通用 · ${options[key].find(([id]) => id === preferences[key])?.[1]}`),
           options[key].map(([value, label]) => h('option', { key: value, value }, label)))))),
-      canReadModels ? h(ToolModelSettings, { id: tool.id, model: profile.model, readModels, change, busy })
+      canReadModels ? h(ToolModelSettings, { key: scope, id: tool.id, model: profile.model, readModels, change, busy, checked: catalogCheck })
         : tool.modelCatalog ? h('p', { className: 'vc-tool-profile-note' }, '切换到「VPS 执行」后可读取此工具的模型。') : null,
       Object.keys(profile).length ? h('button', {
         type: 'button', className: 'vc-button vc-settings-outline', disabled: busy, onClick: reset,
       }, '重置此工具设置') : null);
   }
 
-  function ToolSettings({ tools, configured, setConfigured, profiles, preferences, updateTool, readModels, modelTools, activeTool, busy }) {
+  function ToolSettings({ tools, configured, setConfigured, profiles, preferences, updateTool, readModels, modelTools, activeTool, busy,
+    diagnostics, scope }) {
     const group = React.useId();
     return h('fieldset', { className: 'vc-tool-settings', 'aria-label': '配置执行端' },
       tools.map(tool => {
         const { id, label, icon, setup, available } = tool;
         const checked = configured.includes(id);
         const profile = profiles[id] ?? {};
+        const verification = diagnostics?.resultFor(id);
         return h('div', { key: id, className: 'vc-tool-config' },
           h('label', {
             className: 'vc-tool-setting', 'data-tool-theme': id, 'data-configured': checked, 'data-available': available,
           }, menuIcon(h, icon), h('span', { className: 'vc-settings-description' },
             h('span', { className: 'vc-tool-setting-name' },
               label, id === activeTool ? h('span', { className: 'vc-tool-in-use' }, '使用中') : null),
-            h('small', null, available ? setup : '原生终端插件未加载。')),
+            h('small', null, available ? setup : '原生终端插件未加载。'),
+            diagnostics && tool.modelCatalog && h('small', null, verification?.results.model?.detail ??
+              (profile.model ? '默认模型 · ' + profile.model.id : '模型目录未检查'))),
           h('input', {
             type: 'checkbox', className: 'vc-tool-toggle', 'aria-label': label, checked, disabled: busy || !available,
             onChange: (event) => {
@@ -237,34 +252,52 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
             value: Object.keys(profile).length ? '已自定义' : '跟随通用',
           }, h(ToolProfile, {
             tool, profile, preferences, change: patch => updateTool(id, patch),
-            readModels, canReadModels: modelTools.includes(id), busy,
+            readModels, canReadModels: modelTools.includes(id), busy, catalogCheck: verification?.checked, scope,
           })) : null);
       }));
   }
 
-  function AccountSettings({ available, openAccount, remoteEnabled }) {
+  function AccountSettings({ available, openAccount, remoteEnabled, diagnostics }) {
     return h('div', { className: 'vc-account-groups' },
       !available ? h('p', { className: 'vc-account-availability', role: 'status' }, remoteEnabled
         ? '请先连接已核对指纹的默认 VPS。' : '请在输入栏的访问权限中切换为 VPS 执行。') : null,
-      accountGroups.map(({ id, label, icon, detail, actions }) =>
-        h('section', { key: id, className: 'vc-account-group', 'aria-label': label },
+      accountGroups.map(({ id, label, icon, detail, actions }) => {
+        const provider = id === 'claude-subscription' ? 'claude-sdk' : id;
+        const result = diagnostics?.resultFor(provider);
+        const account = result?.results.account;
+        const manual = result?.checked?.manualTarget;
+        const checked = account?.detail ?? result?.results.egress?.detail ?? result?.results.ssh?.detail;
+        return h('section', { key: id, className: 'vc-account-group', 'aria-label': label },
           h('div', { className: 'vc-account-group-heading' }, menuIcon(h, icon),
-            h('span', { className: 'vc-settings-description' }, h('strong', null, label), h('small', null, detail))),
-          h('div', { className: 'vc-account-actions' }, actions.map(action => h('button', {
+            h('span', { className: 'vc-settings-description' }, h('strong', null, label), h('small', null, detail),
+              diagnostics && h('small', { role: 'status' }, checked || '账号未检查'))),
+          h('div', { className: 'vc-account-actions' }, diagnostics && h('button', {
+            type: 'button', className: 'vc-button vc-settings-outline', disabled: !available || diagnostics.checking,
+            onClick: () => void diagnostics.test(manual, provider),
+          }, manual ? '已在 VPS 登录，继续检查' : '检查账号和目录'), actions.map(action => h('button', {
             key: action.id, type: 'button', className: 'vc-button vc-settings-outline',
             disabled: !available, onClick: () => openAccount(action.id),
-          }, action.label))))));
+          }, action.label))));
+      }));
   }
 
-  return function SettingsDialog({ settings, tab: openTab, visit, scope, setTab, ready, name, tools, activeTool, savedTools,
+  return function SettingsDialog({ settings, tab: openTab, visit, scope, setTab, ready, name, tools = noTools, activeTool, savedTools = noTools,
     toolKey, error, busy, close, openSetup,
     saveConnection, saveTools, preferences, updatePreferences, profiles, updateTool, readModels, modelTools, openAccount,
-    remoteEnabled = true, extensionSettings, agentSettings, VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired }) {
+    remoteEnabled = true, extensionSettings, agentSettings, VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired,
+    navigateLocation, localPanels, settingsLabel = 'VPS 设置' }) {
     const dialog = React.useRef(null);
     const confirmDialog = React.useRef(null);
     const pointerOutside = React.useRef(false);
     const [lastTab, setLastTab] = React.useState(false);
     const tab = openTab || lastTab;
+    const grouped = Boolean(navigateLocation || localPanels || VpsConnectionChecks);
+    const location = localPanels ? 'local-sdk' : 'ssh-vps';
+    const available = ([id]) => !['mcp', 'plugins', 'memory'].includes(id) || extensionSettings || localPanels && id === 'memory';
+    const tabs = [...pages, ...extensionPages].filter(([id]) => (id !== 'agents' || agentSettings || localPanels))
+      .filter(available);
+    const group = desktopGroups.find(([, , , ids]) => ids.includes(tab));
+    const subtabs = group && tabs.filter(([id]) => group[3].includes(id));
     const scroll = React.useRef(null);
     const titleId = React.useId();
     const confirmId = React.useId();
@@ -286,7 +319,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
     const dirty = Boolean(connectionDraft || toolsDraft);
     const connectionDirty = Boolean(connectionDraft);
     const prefPage = tab === 'appearance' || tab === 'interaction';
-    const savePage = tab === 'connection' || tab === 'tools';
+    const savePage = !localPanels && (tab === 'connection' || tab === 'tools');
     const preferenceKeys = tab === 'appearance' ? ['color', 'accent', 'textSize', 'width'] : ['sendKey', 'motion'];
     const canReset = preferenceKeys.some(key => preferences[key] !== defaultPreferences[key]);
     const saveAllowed = form.hostKeyConfirmed && settingFields.every(({ key, optional }) => optional || form[key].trim()) &&
@@ -426,20 +459,24 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
     }
 
     const header = {
-      connection: ['VPS 连接', ready ? name || '当前连接' : '填写服务器与 SSH 验证信息以连接 VPS。'],
-      tools: ['执行端', '保存启用变更后，所选执行端会出现在当前 VPS 的切换菜单。独立设置实时保存。'],
+      connection: localPanels ? ['本机 SDK 连接', '本机 Codex 进程使用 Windows 网络。'] :
+        ['VPS 连接', ready ? name || '当前连接' : '填写服务器与 SSH 验证信息以连接 VPS。'],
+      tools: localPanels ? ['Codex 模型', '默认模型随本机配置保存。历史会话继续使用原配置。'] :
+        ['执行端', '保存启用变更后，所选执行端会出现在当前 VPS 的切换菜单。独立设置实时保存。'],
       agents: ['Agent 预设', '保存常用的执行端、模型和角色指令，供工作流各阶段选用。'],
-      accounts: ['账号管理', '官方页面和执行端登录都在默认 VPS 的操作窗口中打开。'],
-      appearance: ['外观', '本机通用外观。执行端的独立设置优先生效。'],
-      interaction: ['交互', '本机通用输入与动画偏好。执行端的独立设置优先生效。'],
+      accounts: localPanels ? ['本机 Codex 账号', '查看本机凭据与模型服务状态。'] :
+        ['账号管理', '官方页面和执行端登录都在当前 VPS 的操作窗口中打开。'],
+      appearance: ['外观', '应用偏好 · 执行端的独立设置优先生效。'],
+      interaction: ['交互', '应用偏好 · 输入与动画设置。执行端的独立设置优先生效。'],
       mcp: ['MCP 服务器', '为当前执行端选择 VPS 上已审核的 stdio 服务。'],
-      plugins: ['插件', '管理可插入输入栏的提示词模板。'],
-      memory: ['长期记忆', '将选定的参考内容用于当前 VPS 和项目的后续 Codex 消息。'],
+      plugins: [grouped ? '提示词模板' : '插件', '管理可插入输入栏的提示词模板。'],
+      memory: localPanels ? ['本机数据', '本机 SDK 会话使用独立的本机存储。'] :
+        ['长期记忆', '将选定的参考内容用于当前 VPS 和项目的后续对话。'],
     }[tab];
     const customPanel = extensionSettings && extensionPages.some(([id]) => id === tab);
     function guardedAccount(action) { requestTransition(() => openAccount(action)); }
-    function changePreferences(patch) {
-      const saved = updatePreferences(patch);
+    async function changePreferences(patch) {
+      const saved = await updatePreferences(patch);
       setPreferenceSaved(saved);
       return saved;
     }
@@ -450,25 +487,42 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
         if (pointerOutside.current && event.target === event.currentTarget) requestTransition(close);
       },
     }, tab ? h(React.Fragment, null,
-      h('header', { className: 'vc-settings-header' }, h('h2', { id: titleId }, 'VPS 设置'),
+      h('header', { className: 'vc-settings-header' }, h('h2', { id: titleId }, settingsLabel),
         dirty && h('span', { className: 'vc-settings-unsaved', role: 'status' }, '有未保存的设置'),
         openSetup ? h('button', { type: 'button', className: 'vc-button vc-setup-entry', disabled: locked,
           onClick: (event) => requestTransition(openSetup, event.currentTarget) }, menuIcon(h, 'server'), '接入向导') : null,
         h('button', { type: 'button', className: 'vc-button vc-settings-close', 'aria-label': '关闭设置', disabled: locked,
           onClick: (event) => requestTransition(close, event.currentTarget) }, '×')),
       h('div', { className: 'vc-settings-layout' },
-      h('nav', { className: 'vc-settings-nav', 'aria-label': 'VPS 设置分类' },
-        (extensionSettings ? [...pages, ...extensionPages] : pages).filter(([id]) => id !== 'agents' || agentSettings)
-          .map(([id, label, icon]) => h('button', {
-          key: id, type: 'button', className: 'vc-button', 'aria-current': tab === id ? 'page' : undefined,
-          disabled: locked || (id === 'tools' && !ready && !toolsDraft), onClick: () => setTab(id),
-        }, menuIcon(h, icon), label))),
-      h('form', { className: 'vc-settings-form', onSubmit: submit },
+      h('nav', { className: 'vc-settings-nav', 'aria-label': grouped ? '设置分类' : 'VPS 设置分类' },
+        (grouped ? desktopGroups : tabs).map(([id, label, icon, ids]) => {
+          const first = ids ? ids.find((item) => tabs.some(([key]) => key === item)) : id;
+          return h('button', {
+            key: id, type: 'button', className: 'vc-button', 'aria-current': (grouped ? group?.[0] === id : tab === id) ? 'page' : undefined,
+            disabled: locked || !first || (!grouped && id === 'tools' && !ready && !toolsDraft),
+            onClick: () => setTab(first),
+          }, menuIcon(h, icon), label);
+        })),
+      h(localPanels ? 'div' : 'form', { className: 'vc-settings-form', onSubmit: localPanels ? undefined : submit },
         h('div', { className: 'vc-settings-scroll', ref: scroll },
+          grouped && subtabs?.length > 1 ? h('nav', { className: 'vc-settings-subnav', 'aria-label': group[1] + '选项' },
+            subtabs.map(([id, label]) => h('button', {
+              key: id, type: 'button', className: 'vc-button', 'aria-current': tab === id ? 'page' : undefined,
+              disabled: locked, onClick: () => setTab(id),
+            }, desktopLabels[id] ?? label))) : null,
           h('section', { key: tab, className: 'vc-settings-pane', 'aria-labelledby': panelId },
             h('h3', { id: panelId, 'aria-label': header[0] }, header[0], prefPage ? liveSave() : null),
             h('p', { className: 'vc-settings-intro' }, header[1]),
-            tab === 'connection' ? h(React.Fragment, null,
+            grouped && navigateLocation && (tab === 'connection' || tab === 'tools' || tab === 'accounts') ?
+              h('div', { className: 'vc-settings-subnav vc-settings-locations', role: 'group', 'aria-label': '配置的执行位置' },
+                locations.map(([id, label]) => h('button', { key: id, type: 'button', className: 'vc-button',
+                  'aria-pressed': location === id, disabled: locked,
+                  onClick: (event) => {
+                    if (id !== location) requestTransition(() => { close(); navigateLocation(id, tab); }, event.currentTarget);
+                  },
+                }, label))) : null,
+            localPanels?.[tab] ?? null,
+            !localPanels && tab === 'connection' ? h(React.Fragment, null,
               VpsConnectionChecks && h('p', { className: 'vc-settings-current', role: 'status' },
                 connectionDirty ? '连接配置未保存' : !ready ? '连接尚未保存' :
                   name === '本机保存的 VPS' ? '连接配置已保存' : '已载入 VPS 预设'),
@@ -478,12 +532,14 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
                 busy: locked, remoteEnabled, provider: form.provider, openAccount: guardedAccount,
                 openTools: () => setTab('tools'), focusField }),
               h(ConnectionSettings, { form, edit, busy: locked })) : null,
-            tab === 'tools' ? h(ToolSettings, {
+            !localPanels && tab === 'tools' ? ready ? h(ToolSettings, {
               tools, configured, setConfigured, profiles, preferences, updateTool, readModels, modelTools, activeTool, busy: locked,
-            }) : null,
+              diagnostics: connectionDiagnostics, scope: origin,
+            }) : h('p', { role: 'status' }, '保存 VPS 连接后可配置执行端与模型。') : null,
             tab === 'agents' && agentSettings ? h(agentSettings.Component, { ...agentSettings.props, busy }) : null,
-            tab === 'accounts' ? h(AccountSettings, { available: remoteEnabled && ready && !busy && settings?.hostKeyConfirmed,
-              openAccount: guardedAccount, remoteEnabled }) : null,
+            !localPanels && tab === 'accounts' ? h(AccountSettings, { available: remoteEnabled && ready && !locked && settings?.hostKeyConfirmed,
+              openAccount: guardedAccount, remoteEnabled,
+              diagnostics: !connectionDirty ? connectionDiagnostics : null }) : null,
             tab === 'appearance' ? h(React.Fragment, null,
               h(PreferenceRows, { rows: appearanceRows.slice(0, 1), values: preferences, change: changePreferences, disabled: locked }),
               h(AccentOptions, { value: preferences.accent, change: changePreferences, disabled: locked }),

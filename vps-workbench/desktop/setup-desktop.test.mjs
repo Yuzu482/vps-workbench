@@ -128,7 +128,7 @@ test('a fresh desktop connection diagnoses each setup step and runs the sample o
     assert.deepEqual(otherOrigins, []);
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.getByText('本机保存的 VPS · VPS 已配置', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'VPS 设置', exact: true }).click();
+    await page.getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('button', { name: '接入向导', exact: true }).click();
     await guide.getByRole('button', { name: '开始检查', exact: true }).waitFor();
   } finally {

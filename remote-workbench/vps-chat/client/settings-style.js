@@ -42,6 +42,17 @@ export const settingsCss = `
     transition:color var(--vc-control-duration) ease, background-color var(--vc-control-duration) ease;
   }
   [data-vps-chat] .vc-settings-nav .vc-button[aria-current] {background:var(--vc-tint); color:var(--vc-accent)}
+  [data-vps-chat] .vc-settings-subnav {
+    display:flex; flex-wrap:wrap; gap:4px; margin-bottom:12px; padding:4px;
+    border-radius:9px; background:var(--vc-canvas);
+  }
+  [data-vps-chat] .vc-settings-subnav .vc-button {
+    min-height:30px; padding:3px 9px; border:0; border-radius:6px; font-size:12px; color:var(--vc-muted);
+  }
+  [data-vps-chat] .vc-settings-subnav .vc-button:is([aria-current],[aria-pressed=true]) {
+    color:var(--vc-accent); background:var(--vc-tint); font-weight:650;
+  }
+  [data-vps-chat] .vc-settings-locations {width:fit-content}
   [data-vps-chat] .vc-settings-nav [data-icon=server]::before {
     inset:2px 1px 8px; border:1.4px solid currentColor; border-radius:2px;
   }
@@ -216,5 +227,6 @@ export const settingsCss = `
     [data-vps-chat] .vc-settings-group {padding:10px}
     [data-vps-chat] .vc-tool-profile-fields {grid-template-columns:minmax(0,1fr)}
     [data-vps-chat] .vc-settings-nav .vc-menu-icon {display:none}
+    [data-vps-chat] .vc-settings-nav .vc-button {text-wrap:balance; overflow-wrap:anywhere; line-height:1.2}
   }
 `;

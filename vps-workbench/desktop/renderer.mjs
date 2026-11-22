@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { createWorkbench } from '../../remote-workbench/vps-chat/client/workbench.js';
 import { menuIcon } from '../../remote-workbench/vps-chat/client/menu-icons.js';
 import { createMarkdownReply } from '../../remote-workbench/vps-chat/client/markdown.js';
-import { readPreferences } from '../../remote-workbench/vps-chat/client/workbench-preferences.js';
+import { readPreferences, workbenchPreferenceKey } from '../../remote-workbench/vps-chat/client/workbench-preferences.js';
 import { setWorkbenchStorage } from '../../remote-workbench/vps-chat/client/workbench-storage.js';
 import { createResourceLibrary } from '../resource-library/index.mjs';
 import { createStandaloneSubscriptionView } from '../terminal/subscription-view.mjs';
@@ -157,6 +157,9 @@ try {
     const [visited, setVisited] = React.useState(() => new Set([location]));
     const [localNew, setLocalNew] = React.useState(0);
     const [sshNew, setSshNew] = React.useState(0);
+    const [settingsJump, setSettingsJump] = React.useState(null);
+    const [appearance, setAppearance] = React.useState(readPreferences);
+    const savingAppearance = React.useRef(false);
     const [resourcesOpen, setResourcesOpen] = React.useState(false);
     const [access, setAccess] = React.useState(initialAccess);
     const [extensions, setExtensions] = React.useState(startingExtensions);
@@ -173,6 +176,23 @@ try {
       setVisited((previous) => previous.has(next) ? previous : new Set([...previous, next]));
       setLocation(next);
       void saveLocalPreference(viewLocationKey, next).catch(reportChromeError);
+    }
+    function navigateSettings(next, tab) {
+      openLocation(next);
+      setSettingsJump({ location: next, tab });
+    }
+    async function changeAppearance(patch) {
+      if (savingAppearance.current) return false;
+      savingAppearance.current = true;
+      try {
+        const next = { ...readPreferences(), ...patch };
+        await saveLocalPreference(workbenchPreferenceKey, JSON.stringify(next));
+        setAppearance(next);
+        return true;
+      } catch {
+        showLocalStatus('应用偏好未能保存。请重试。');
+        return false;
+      } finally { savingAppearance.current = false; }
     }
     function changeNewLocation(next) {
       setNewLocation(next);
@@ -221,7 +241,6 @@ try {
       return updated;
     }
     const sshVisible = location === 'ssh-vps';
-    const appearance = readPreferences();
     return h(React.Fragment, null,
       h(DesktopChrome, { native, projectCatalog, location, newLocation, locations, openLocation, changeNewLocation,
         onError: reportChromeError,
@@ -231,10 +250,12 @@ try {
           locations.map(([id, label]) => h('button', { key: id, type: 'button',
             'aria-pressed': id === location, onClick: () => openLocation(id) }, label))),
         h('label', null, '新建位置',
-          h('select', { value: newLocation, onChange: (event) => changeNewLocation(event.target.value) },
+          h('select', { 'aria-label': '新建位置', value: newLocation, onChange: (event) => changeNewLocation(event.target.value) },
             locations.map(([id, label]) => h('option', { key: id, value: id }, label))))),
       visited.has('ssh-vps') ? h(Workbench, { projectCatalog, terminalView, resourcesOpen, setResourcesOpen,
         access, accessPending, changeAccess, visible: sshVisible, active: sshVisible, newChatRequest: sshNew,
+        settingsJump: settingsJump?.location === 'ssh-vps' ? settingsJump : null, navigateSettings,
+        applicationPreferences: { value: appearance, change: changeAppearance },
         onNewChat: newLocation === 'local-sdk' ? startChat : undefined,
         extensions: { state: extensions, change: changeExtensions, busy: extensionsBusy },
         agentPresets: { items: agentItems, change: changeAgentPresets, error: agentPresetError },
@@ -242,7 +263,8 @@ try {
           saveRun: saveWorkflowRun, saveAttachments: saveWorkflowAttachments, error: workflowError } }) : null,
       visited.has('local-sdk') ? h(LocalWorkspace, { native, active: !sshVisible, access, accessPending, changeAccess,
         newConversation: localNew, onNewChat: startChat, defaultLocation: newLocation,
-        appearance, sendKey: appearance.sendKey, savePreference: saveLocalPreference }) : null);
+        settingsJump: settingsJump?.location === 'local-sdk' ? settingsJump : null, navigateSettings,
+        appearance, changeAppearance, sendKey: appearance.sendKey, savePreference: saveLocalPreference }) : null);
   }
   root.render(h(DesktopApp));
 } catch {

@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
+import { openSettingsSection } from './test-settings.mjs';
 import { agentPresetKey, legacyAgentPresetKey, readAgentPresets, resolveAgentPreset } from '../agent-presets/state.mjs';
 import { extensionPreferenceKey } from '../extensions/state.mjs';
 import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
@@ -135,7 +136,7 @@ test('packaged Agent resources, scoped memory and legacy presets apply to a para
       const data = await readPreferences();
       return readAgentPresets(data[agentPresetKey] ?? null, data[legacyAgentPresetKey] ?? null);
     };
-    const settings = page.getByRole('dialog', { name: 'VPS 设置', exact: true });
+    const settings = page.getByRole('dialog', { name: '设置', exact: true });
     const presetCard = (id, scope = settings) => scope.locator(`button[data-preset-id="${id}"]`);
     const radio = (scope, name) => scope.getByRole('radio', { name, exact: true });
     const currentModel = settings.locator('[aria-label="当前模型"]');
@@ -160,9 +161,8 @@ test('packaged Agent resources, scoped memory and legacy presets apply to a para
         tipBounds.y + tipBounds.height <= panelBounds.y + panelBounds.height + 1);
     }
     async function openAgentSettings() {
-      await page.getByRole('button', { name: 'VPS 设置', exact: true }).click();
-      await settings.getByRole('navigation', { name: 'VPS 设置分类', exact: true })
-        .getByRole('button', { name: 'Agent 预设', exact: true }).click();
+      await page.getByRole('button', { name: '设置', exact: true }).click();
+      await openSettingsSection(settings, 'Agent 预设');
     }
     async function closeSettings() {
       await settings.getByRole('button', { name: '完成', exact: true }).click();

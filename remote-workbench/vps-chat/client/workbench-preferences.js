@@ -1,7 +1,7 @@
 import { validTurnMetadata } from './composer-controls.js';
 import { workbenchStorage } from './workbench-storage.js';
 
-const preferenceKey = 'dsh-vps-chat:workbench:v1';
+export const workbenchPreferenceKey = 'dsh-vps-chat:workbench:v1';
 
 export const accentOptions = [
   { id: 'tool', label: '跟随执行端' },
@@ -54,11 +54,11 @@ function sanitizedProfiles(profiles, tools) {
 }
 
 export function readPreferences() {
-  return { ...defaultPreferences, ...choices(storageRead(preferenceKey)) };
+  return { ...defaultPreferences, ...choices(storageRead(workbenchPreferenceKey)) };
 }
 
 export function writePreferences(preferences) {
-  workbenchStorage.setItem(preferenceKey, JSON.stringify(preferences));
+  workbenchStorage.setItem(workbenchPreferenceKey, JSON.stringify(preferences));
 }
 
 export function readToolProfiles(key, tools) {

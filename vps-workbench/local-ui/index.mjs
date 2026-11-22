@@ -2,6 +2,7 @@ import { localWorkspaceStyles } from './styles.mjs';
 import { ConnectionResult } from '../desktop/connection-panel.mjs';
 import { TrialActions, trialResult, useConnectionTrial } from '../desktop/connection-trial.mjs';
 import { trialPrompt, trialState } from '../desktop/setup-trial.mjs';
+import { createSettingsDialog } from '../../remote-workbench/vps-chat/client/settings-dialog.js';
 
 const location = 'local-sdk';
 const backend = 'codex';
@@ -83,6 +84,7 @@ function historyItems(profile, snapshot, records) {
 
 export function createLocalWorkspace(React, { MarkdownReply, icon }) {
   const h = React.createElement;
+  const SettingsDialog = createSettingsDialog(React, { hostThemeLabel: '跟随系统' });
 
   function Button({ children, className = '', ...props }) {
     return h('button', { type: 'button', className: 'vc-button ' + className, ...props }, children);
@@ -107,7 +109,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
 
   return function LocalWorkspace({
     native, active, access, accessPending, changeAccess, newConversation, sendKey, appearance,
-    onNewChat, defaultLocation, savePreference,
+    onNewChat, defaultLocation, savePreference, settingsJump, navigateSettings, changeAppearance,
   }) {
     const [status, setStatus] = React.useState(null);
     const [statusError, setStatusError] = React.useState(false);
@@ -122,6 +124,8 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     const writes = React.useRef(new Map());
     const [historyOpen, setHistoryOpen] = React.useState(false);
     const [registerBusy, setRegisterBusy] = React.useState(false);
+    const [settingsTab, setSettingsTab] = React.useState(false);
+    const observedSettingsJump = React.useRef(null);
     const [registerError, setRegisterError] = React.useState('');
     const [name, setName] = React.useState('');
     const [modelId, setModelId] = React.useState('');
@@ -131,13 +135,11 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     const registering = React.useRef(false);
     const composing = React.useRef(false);
     const compositionEndedAt = React.useRef(-Infinity);
-    const options = React.useRef(null);
     const editor = React.useRef(null);
     const historyToggle = React.useRef(null);
     const feed = React.useRef(null);
     const follow = React.useRef(true);
     const historyId = React.useId();
-    const optionsId = React.useId();
     const profiles = status?.profiles;
     const models = status?.models ?? [];
     const model = models.find(({ id }) => id === modelId) ?? models[0];
@@ -218,8 +220,13 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     }, [active, native]);
 
     React.useLayoutEffect(() => {
-      if (!active && options.current.open) options.current.close();
-    }, [active]);
+      if (!active) {
+        setSettingsTab(false);
+      } else if (settingsJump && settingsJump !== observedSettingsJump.current) {
+        observedSettingsJump.current = settingsJump;
+        setSettingsTab(settingsJump.tab);
+      }
+    }, [active, settingsJump]);
 
     React.useEffect(() => {
       if (epoch.current === newConversation) return;
@@ -441,7 +448,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
 
     function showOptions() {
       setRegisterError('');
-      if (!options.current.open) options.current.showModal();
+      setSettingsTab('connection');
     }
 
     const statusLine = statusError ? '状态读取失败' : !status ? '正在读取本机状态…' :
@@ -467,8 +474,9 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     return h('div', {
       'data-local-sdk': '', hidden: !active, inert: !active, 'data-history-open': String(historyOpen), 'data-tool-theme': 'codex',
       'data-vc-color': appearance?.color, 'data-vc-accent': appearance?.accent, 'data-vc-motion': appearance?.motion,
+      'data-vc-text-size': appearance?.textSize, 'data-vc-width': appearance?.width,
       onKeyDown(event) {
-        if (event.key === 'Escape' && historyOpen && !options.current.open && !event.nativeEvent.isComposing) {
+        if (event.key === 'Escape' && historyOpen && !settingsTab && !event.nativeEvent.isComposing) {
           event.preventDefault();
           closeHistory();
         }
@@ -505,8 +513,8 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
             title: '本机配置状态。账户和网络以实际对话结果为准。',
           }, statusLine))),
         h('div', { className: 'local-actions' },
-          h(Button, { onClick: showOptions, title: optionsLabel, 'aria-label': optionsLabel, 'aria-haspopup': 'dialog',
-            'aria-controls': optionsId }, icon?.(h, 'settings'), '配置'),
+          h(Button, { onClick: showOptions, title: optionsLabel, 'aria-label': '设置', 'aria-haspopup': 'dialog' },
+            icon?.(h, 'settings'), '设置'),
           h(Button, { disabled: accessPending, 'aria-pressed': browsing, title: browsing ? '切换为允许执行' : '切换为仅浏览',
             onClick: () => changeAccess?.({ ...access, mode: browsing ? 'execute' : 'browse' }) },
           browsing ? '仅浏览' : '允许执行'))),
@@ -545,60 +553,75 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
           h('div', { className: 'local-composer-footer' },
             h('span', { className: 'local-muted' }, composerNote),
             h(Button, { type: 'submit', className: 'local-primary', disabled: !canSend }, '发送'))))),
-    h('dialog', { ref: options, className: 'local-options', id: optionsId, 'aria-labelledby': optionsId + '-title' },
-      h('div', { className: 'local-option-heading' },
-        h('h2', { id: optionsId + '-title' }, '本机配置'),
-        h(Button, { onClick: () => options.current.close() }, '关闭')),
-      h(Button, { disabled: statusBusy, onClick: () => void loadStatus() }, statusBusy ? '检查中' : '测试本机配置'),
-      h('ol', { className: 'vc-setup-steps local-connection-checks' },
-        h(ConnectionResult, { id: 'runtime', label: '本机 SDK',
-          detail: '检查 Windows 上的 SDK 运行文件。', result: statusError
-            ? { state: 'failed', detail: '本机 SDK 状态读取失败。请重试。' } : status && {
-              state: status.runtimeAvailable ? 'passed' : 'failed',
-              detail: status.runtimeAvailable ? '已找到本机 Codex SDK 和运行文件。' : '当前安装缺少本机 Codex 运行文件。',
-            } }),
-        h(ConnectionResult, { id: 'account', label: '本机账号凭据',
-          detail: '检查本机进程的凭据配置。', result: status && !statusError ? {
-            state: status.credentialConfigured ? 'confirm' : 'failed',
-            detail: status.credentialConfigured ? '已配置本机 API 密钥，服务权限待试跑确认。' :
-              '请在启动工作台的本机环境中配置 VPS_WORKBENCH_LOCAL_CODEX_API_KEY。',
-          } : null }),
-        h(ConnectionResult, { id: 'model', label: '本机模型目录',
-          detail: '检查本机 SDK 支持的模型选项。', result: status && !statusError ? {
-            state: models.length ? 'passed' : 'failed',
-            detail: models.length ? `内置目录 · ${models.length} 个模型选项` : '当前本机 SDK 没有可选模型。',
-          } : null }),
-        h(ConnectionResult, { id: 'response', label: '实际模型响应', detail: '试跑使用所选配置的模型和本机网络。',
-          result: trialResult(trial, trialTarget) },
-        h(TrialActions, { trial, target: trialTarget, allowed: active && !browsing && !accessPending && !statusBusy }))),
-      !bound && profiles?.length > 0 && h('label', null, '对话配置',
-        h('select', { value: profile?.id ?? '',
-          onChange: (event) => {
-            const next = profiles.find(({ id }) => id === event.target.value);
-            if (next) switchProfile(target, next);
-          },
-        }, profiles.map((item) => h('option', { key: item.id, value: item.id }, item.name)))),
-      bound && note('此对话沿用原配置。新建对话后可选择其他配置。'),
-      profile && h('dl', { className: 'local-config-details' },
-        h('dt', null, '名称'), h('dd', null, profile.name),
-        h('dt', null, '工作目录'), h('dd', null, profile.directory),
-        h('dt', null, '模型'), h('dd', null, modelLabel(profile.model)),
-        h('dt', null, '推理强度'), h('dd', null, profile.effort)),
-      h('hr'),
-      h('form', { className: 'local-register', onSubmit: (event) => void register(event) },
-        h('h3', null, '注册本机配置'),
-        h('label', null, '配置名称', h('input', { value: name, maxLength: 80, required: true,
-          disabled: browsing || registerBusy, onChange: (event) => setName(event.target.value) })),
-        h('div', { className: 'local-register-row' },
-          h('label', null, '模型', h('select', { value: model?.id ?? '', disabled: browsing || registerBusy || !model,
-            onChange: (event) => { setModelId(event.target.value); setEffortId(''); } },
-          models.map((item) => h('option', { key: item.id, value: item.id }, item.label)))),
-          h('label', null, '推理强度', h('select', { value: effort ?? '', disabled: browsing || registerBusy || !model,
-            onChange: (event) => setEffortId(event.target.value) },
-          model?.efforts.map((item) => h('option', { key: item, value: item }, item))))),
-        registerError && h('div', { role: 'status', className: 'local-alert' }, registerError),
-        h(Button, { type: 'submit', className: 'local-primary',
-          disabled: browsing || accessPending || registerBusy || statusBusy || !status || !model || !name.trim() },
-        registerBusy ? '正在选择工作目录…' : '选择工作目录并保存'))));
+    h(SettingsDialog, {
+      tab: settingsTab, setTab: setSettingsTab, close: () => setSettingsTab(false), busy: registerBusy,
+      settingsLabel: '设置', navigateLocation: navigateSettings, preferences: appearance, updatePreferences: changeAppearance,
+      localPanels: {
+        connection: h(React.Fragment, null, connectionChecks(), profileFields()),
+        tools: profileFields(),
+        accounts: connectionChecks(),
+        agents: note('本机 SDK 支持只读文本会话。Agent 预设、MCP 和提示词模板可在 VPS SSH 的设置中管理。'),
+        memory: note('本机 Codex 历史保存在独立的本机配置中。项目记忆可在 VPS SSH 的设置中管理。'),
+      },
+    }));
+
+    function connectionChecks() {
+      return h(React.Fragment, null,
+        h(Button, { disabled: statusBusy, onClick: () => void loadStatus() }, statusBusy ? '检查中' : '测试本机配置'),
+        h('ol', { className: 'vc-setup-steps local-connection-checks' },
+          h(ConnectionResult, { id: 'runtime', label: '本机 SDK',
+            detail: '检查 Windows 上的 SDK 运行文件。', result: statusError
+              ? { state: 'failed', detail: '本机 SDK 状态读取失败。请重试。' } : status && {
+                state: status.runtimeAvailable ? 'passed' : 'failed',
+                detail: status.runtimeAvailable ? '已找到本机 Codex SDK 和运行文件。' : '当前安装缺少本机 Codex 运行文件。',
+              } }),
+          h(ConnectionResult, { id: 'account', label: '本机账号凭据',
+            detail: '检查本机进程的凭据配置。', result: status && !statusError ? {
+              state: status.credentialConfigured ? 'confirm' : 'failed',
+              detail: status.credentialConfigured ? '已配置本机 API 密钥，服务权限待试跑确认。' :
+                '请在启动工作台的本机环境中配置 VPS_WORKBENCH_LOCAL_CODEX_API_KEY。',
+            } : null }),
+          h(ConnectionResult, { id: 'model', label: '本机模型目录',
+            detail: '检查本机 SDK 支持的模型选项。', result: status && !statusError ? {
+              state: models.length ? 'passed' : 'failed',
+              detail: models.length ? `内置目录 · ${models.length} 个模型选项` : '当前本机 SDK 没有可选模型。',
+            } : null }),
+          h(ConnectionResult, { id: 'response', label: '实际模型响应', detail: '试跑使用所选配置的模型和本机网络。',
+            result: trialResult(trial, trialTarget) },
+          h(TrialActions, { trial, target: trialTarget, allowed: active && !browsing && !accessPending && !statusBusy }))));
+    }
+
+    function profileFields() {
+      return h('div', { className: 'local-profile' },
+        !bound && profiles?.length > 0 && h('label', null, '对话配置',
+          h('select', { value: profile?.id ?? '',
+            onChange: (event) => {
+              const next = profiles.find(({ id }) => id === event.target.value);
+              if (next) switchProfile(target, next);
+            },
+          }, profiles.map((item) => h('option', { key: item.id, value: item.id }, item.name)))),
+        bound && note('此对话沿用原配置。新建对话后可选择其他配置。'),
+        profile && h('dl', { className: 'local-config-details' },
+          h('dt', null, '名称'), h('dd', null, profile.name),
+          h('dt', null, '工作目录'), h('dd', null, profile.directory),
+          h('dt', null, '默认模型'), h('dd', null, modelLabel(profile.model)),
+          h('dt', null, '推理强度'), h('dd', null, profile.effort)),
+        h('hr'),
+        h('form', { className: 'local-register', onSubmit: (event) => void register(event) },
+          h('h3', null, '注册本机配置'),
+          h('label', null, '配置名称', h('input', { value: name, maxLength: 80, required: true,
+            disabled: browsing || registerBusy, onChange: (event) => setName(event.target.value) })),
+          h('div', { className: 'local-register-row' },
+            h('label', null, '模型', h('select', { value: model?.id ?? '', disabled: browsing || registerBusy || !model,
+              onChange: (event) => { setModelId(event.target.value); setEffortId(''); } },
+            models.map((item) => h('option', { key: item.id, value: item.id }, item.label)))),
+            h('label', null, '推理强度', h('select', { value: effort ?? '', disabled: browsing || registerBusy || !model,
+              onChange: (event) => setEffortId(event.target.value) },
+            model?.efforts.map((item) => h('option', { key: item, value: item }, item))))),
+          registerError && h('div', { role: 'status', className: 'local-alert' }, registerError),
+          h(Button, { type: 'submit', className: 'local-primary',
+            disabled: browsing || accessPending || registerBusy || statusBusy || !status || !model || !name.trim() },
+          registerBusy ? '正在选择工作目录…' : '选择工作目录并保存')));
+    }
   };
 }

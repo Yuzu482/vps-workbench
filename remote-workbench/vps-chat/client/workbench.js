@@ -366,7 +366,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
   }
 
   function Workbench({ projectCatalog, terminalView, active = true, visible = true, resourcesOpen, setResourcesOpen,
-    access, accessPending, changeAccess, extensions, agentPresets, workflowStore, onNewChat, newChatRequest = 0 }) {
+    access, accessPending, changeAccess, extensions, agentPresets, workflowStore, onNewChat, newChatRequest = 0,
+    settingsJump, navigateSettings, applicationPreferences }) {
     const workspaceSnapshot = React.useSyncExternalStore(projectCatalog.subscribe, projectCatalog.getSnapshot);
     const SubscriptionTerminal = React.useSyncExternalStore(terminalView.subscribe, terminalView.getSnapshot);
     const [subscriptionOpen, setSubscriptionOpen] = React.useState(false);
@@ -401,7 +402,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [connection, setConnection] = React.useState(null);
     const [connectionName, setConnectionName] = React.useState('');
     const [toolPreferences, setToolPreferences] = React.useState({ key: '', ids: [] });
-    const [preferences, setPreferences] = React.useState(readPreferences);
+    const [hostPreferences, setPreferences] = React.useState(readPreferences);
+    const preferences = applicationPreferences?.value ?? hostPreferences;
     const [toolProfiles, setToolProfiles] = React.useState({});
     const [loadingPreset, setLoadingPreset] = React.useState(true);
     const [scope, setScope] = React.useState('');
@@ -420,6 +422,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [feedback, setFeedback] = React.useState('');
     const [pollPaused, setPollPaused] = React.useState(false);
     const [settingsView, setSettingsView] = React.useState({ tab: false, visit: 0 });
+    const observedSettingsJump = React.useRef(null);
+    const settingsLabel = VpsConnectionChecks ? '设置' : 'VPS 设置';
     const [setupOpen, setSetupOpen] = React.useState(false);
     const [accountOpen, setAccountOpen] = React.useState(null);
     const [settingsError, setSettingsError] = React.useState('');
@@ -481,9 +485,15 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const activeTool = showingSubscription ? subscriptionProvider : chatEnabled ? connection.provider : undefined;
     const activePreferences = { ...preferences, ...toolProfiles[activeTool] };
     const providerName = providers[connection?.provider ?? defaultSettings.provider].label;
-    const connectionDiagnostics = useVpsConnectionChecks({ rpc, readList, connection, scope, enabled: chatEnabled,
-      model: toolProfiles[connection?.provider]?.model, remoteEnabled, visible, savePreference: saveConversationPreference });
+    const connectionDiagnostics = useVpsConnectionChecks({ rpc, readList, connection, scope, memoryTargetId,
+      toolIds: toolPreferences.ids, profiles: toolProfiles, remoteEnabled, visible, savePreference: saveConversationPreference });
     const rows = allRows[scope] ?? emptyList;
+    React.useEffect(() => {
+      if (!visible || !settingsJump || observedSettingsJump.current === settingsJump) return;
+      observedSettingsJump.current = settingsJump;
+      setSettingsError('');
+      setSettingsOpen(settingsJump.tab);
+    }, [visible, settingsJump]);
     const storedConversationOptions = React.useMemo(() => {
       if (!saveConversationPreference || !scope) return {};
       try { return readConversationOptions(scope); }
@@ -719,8 +729,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         } catch (error) {
           if (!controller.signal.aborted) {
             setFeedback(error.code === 'target_changed'
-              ? 'VPS 预设的主机指纹需要重新核对。请打开「VPS 设置」。'
-              : '无法读取 VPS 预设。请在「VPS 设置」中手动配置。');
+              ? `VPS 预设的主机指纹需要重新核对。请打开「${settingsLabel}」。`
+              : `无法读取 VPS 预设。请在「${settingsLabel}」中手动配置。`);
           }
         } finally {
           if (!controller.signal.aborted) setLoadingPreset(false);
@@ -1397,15 +1407,19 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       return true;
     }
 
-    function updatePreferences(patch) {
+    async function updatePreferences(patch) {
       const next = { ...preferences, ...patch };
       try {
-        writePreferences(next);
+        if (applicationPreferences) {
+          if (!await applicationPreferences.change(patch)) throw new Error('preference_write_failed');
+        } else {
+          writePreferences(next);
+          setPreferences(next);
+        }
       } catch {
         setSettingsError('本地偏好未能保存。');
         return false;
       }
-      setPreferences(next);
       setSettingsError('');
       return true;
     }
@@ -1426,7 +1440,13 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     async function readProviderModels(provider, signal) {
       if (!ready || !toolsWithModels.includes(provider)) throw new Error('当前执行端不提供模型目录。');
       const settings = { ...connection, provider };
-      const targetId = provider === connection.provider ? scope : readList(await rpc('list', { settings }, signal)).targetId;
+      let targetId = scope;
+      if (provider !== connection.provider) {
+        const route = readList(await rpc('list', { settings }, signal));
+        if (VpsConnectionChecks && (!memoryTargetId || route.memoryTargetId !== memoryTargetId))
+          throw new Error('SSH 主机指纹或 VPS 配置已变化。请重新核对连接。');
+        targetId = route.targetId;
+      }
       const models = readModelCatalog(await rpc('models', { settings, targetId }, signal));
       return { targetId, models };
     }
@@ -2232,7 +2252,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         h('button', {
           type: 'button', className: 'vc-button vc-sidebar-settings', disabled: providerSwitchLocked,
           onClick: () => openSettings(),
-        }, menuIcon(h, 'settings'), 'VPS 设置')) : null,
+        }, menuIcon(h, 'settings'), settingsLabel)) : null,
       h('main', { className: 'vc-main' },
         h('header', { className: 'vc-header', 'data-design': design, 'data-playground': floatingChat },
           h('button', {
@@ -2272,7 +2292,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
               }, name))) : null,
           sidebarActions ? null : h('button', {
             type: 'button', className: 'vc-button vc-header-settings', onClick: () => openSettings(), disabled: providerSwitchLocked,
-          }, 'VPS 设置')),
+          }, settingsLabel)),
         showingSubscription && feedback ? h('p', { className: 'vc-project-warning', role: 'status' }, feedback) : null,
         !showingSubscription && projectWarning ? h('p', { className: 'vc-project-warning', role: 'status' }, projectWarning) : null,
         SubscriptionTerminal && subscriptionPreset ? h('section', {
@@ -2360,9 +2380,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         scope, settings: connection, ...settingsView, ready, name: connectionName, tools, activeTool,
         savedTools: toolPreferences.ids, toolKey: toolPreferences.key,
         setTab: (tab) => { setSettingsError(''); setSettingsOpen(tab); },
-        error: settingsError, busy: providerSwitchLocked,
+        error: settingsError, busy: providerSwitchLocked || Boolean(settingsJump && loadingPreset),
         close: () => setSettingsOpen(false), saveConnection: saveSettings, saveTools,
         VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired,
+        navigateLocation: navigateSettings, settingsLabel,
         openSetup: SetupGuide ? openSetup : undefined,
         preferences, updatePreferences, profiles: toolProfiles, updateTool, readModels: readSettingsModels,
         modelTools: remoteEnabled ? toolsWithModels : emptyList, openAccount, remoteEnabled,

@@ -27,11 +27,12 @@ export function vpsTrialTarget(settings, { list, models, model }, defaultModel) 
   return { settings: ordered, targetId: list.targetId, ...(model.model && { model: model.model }), ...(effort && { effort }) };
 }
 
-export function useVpsConnectionChecks({ rpc, readList, connection, scope, enabled, model, remoteEnabled, visible, savePreference }) {
-  const context = JSON.stringify([connection, scope, enabled, model]);
+export function useVpsConnectionChecks({ rpc, readList, connection, scope, memoryTargetId, toolIds, profiles, remoteEnabled, visible, savePreference }) {
+  const context = JSON.stringify([connection, scope, memoryTargetId, toolIds,
+    Object.entries(profiles).map(([id, profile]) => [id, profile.model])]);
   const request = React.useRef(null);
-  const [attempt, setAttempt] = React.useState(null);
-  const current = attempt?.context === context ? attempt : null;
+  const [attempts, setAttempts] = React.useState({});
+  const resultFor = (provider) => attempts[provider]?.context === context ? attempts[provider] : null;
   const trial = useConnectionTrial({ storageKey: 'dsh-vps-chat:setup-trial:ssh-vps:v1', savePreference,
     async request(kind, { target, sessionId, turnId }) {
       const { settings, targetId, ...model } = target;
@@ -50,7 +51,7 @@ export function useVpsConnectionChecks({ rpc, readList, connection, scope, enabl
   const clear = React.useCallback(() => {
     request.current?.abort();
     request.current = null;
-    setAttempt(null);
+    setAttempts({});
     invalidateTrial();
   }, [invalidateTrial]);
   React.useLayoutEffect(() => {
@@ -58,33 +59,41 @@ export function useVpsConnectionChecks({ rpc, readList, connection, scope, enabl
   }, [clear, context, visible, remoteEnabled]);
   React.useEffect(() => () => request.current?.abort(), []);
 
-  async function test(accountConfirmedFor) {
-    if (request.current || !visible || !remoteEnabled || !scope || !connection?.hostKeyConfirmed) return;
+  async function test(accountConfirmedFor, provider = connection?.provider) {
+    if (request.current || !visible || !remoteEnabled || !scope || !connection?.hostKeyConfirmed ||
+        (provider !== connection.provider && !memoryTargetId)) return;
     const controller = new AbortController();
     request.current = controller;
     const { signal } = controller;
-    setAttempt({ context, checking: true, results: {} });
+    const settings = { ...connection, provider };
+    const model = profiles[provider]?.model;
+    setAttempts((previous) => ({ ...previous, [provider]: { context, checking: true, results: {} } }));
+    function update(change) {
+      setAttempts((previous) => signal.aborted || !previous[provider] ? previous :
+        { ...previous, [provider]: change(previous[provider]) });
+    }
     try {
-      const checked = await checkVpsConnection({ rpc, readList, settings: connection, signal,
-        expectedTargetId: scope, accountConfirmedFor, prepareAccount: () => enabled,
-        selectModel: () => model?.targetId === scope ? model.id : '',
+      const checked = await checkVpsConnection({ rpc, readList, settings, signal,
+        expectedTargetId: provider === connection.provider ? scope : undefined, expectedMemoryTargetId: memoryTargetId,
+        accountConfirmedFor, prepareAccount: () => toolIds.includes(provider),
+        selectModel: (targetId) => model?.targetId === targetId ? model.id : '',
         updateStep(id, state, detail, code) {
-          if (signal.aborted) return;
-          setAttempt((previous) => ({ ...previous,
-            results: { ...previous.results, [id]: { state, detail, code } } }));
+          update((previous) => ({ ...previous, results: { ...previous.results, [id]: { state, detail, code } } }));
         },
       });
-      if (!signal.aborted) setAttempt((previous) => ({ ...previous, checked }));
+      update((previous) => ({ ...previous, checked }));
     } catch {
       // The check helper already associates failures with the current step.
     } finally {
       if (request.current === controller) request.current = null;
-      if (!signal.aborted) setAttempt((previous) => ({ ...previous, checking: false }));
+      update((previous) => ({ ...previous, checking: false }));
     }
   }
 
-  const trialTarget = current?.checked?.model ? vpsTrialTarget(connection, current.checked, model) : null;
-  return { clear, test, current, trial, trialTarget };
+  const current = resultFor(connection?.provider);
+  const trialTarget = current?.checked?.model ? vpsTrialTarget(connection, current.checked, profiles[connection.provider]?.model) : null;
+  return { clear, test, current, trial, trialTarget, resultFor,
+    checking: Object.values(attempts).some((attempt) => attempt.context === context && attempt.checking) };
 }
 
 export function VpsConnectionChecks({ diagnostics, ready, dirty, busy, remoteEnabled, provider, openAccount, openTools, focusField }) {
@@ -93,7 +102,7 @@ export function VpsConnectionChecks({ diagnostics, ready, dirty, busy, remoteEna
     type: 'button', className: 'vc-button vc-settings-outline', onClick, disabled,
   }, label);
   const account = current?.results.account;
-  const canTest = ready && !dirty && !busy && remoteEnabled && !current?.checking;
+  const canTest = ready && !dirty && !busy && remoteEnabled && !diagnostics.checking;
   const status = current?.checking ? '检查中' : current?.checked?.model ? '预检通过' :
     Object.values(current?.results ?? {}).some(({ state }) => state === 'failed') ? '检查失败' :
       current?.checked?.manualTarget ? '待确认登录' : '未检查';

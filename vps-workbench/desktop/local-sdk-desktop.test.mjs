@@ -25,11 +25,11 @@ async function selectLocal(page) {
 }
 
 async function registerProfile(page, name) {
-  await page.getByRole('button', { name: '本机配置', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '本机配置' });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置' });
   await dialog.getByLabel('配置名称', { exact: true }).fill(name);
   await dialog.getByRole('button', { name: '选择工作目录并保存' }).click();
-  await page.getByRole('button', { name: '配置 · ' + name, exact: true }).waitFor({ state: 'attached' });
+  await page.getByTitle('配置 · ' + name, { exact: true }).waitFor({ state: 'attached' });
   if (await dialog.isVisible()) await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'hidden' });
 }
