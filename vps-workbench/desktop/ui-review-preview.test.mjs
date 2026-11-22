@@ -658,7 +658,7 @@ test('a changed SSH pin requires fresh confirmation in settings and in the wizar
   await page.route('**/dsh-vps-chat/api/rpc', (route) => {
     const { op } = route.request().postDataJSON();
     calls.push(op);
-    return op === 'list' ? route.fulfill({ json: { ok: true, targetId: 'a'.repeat(64),
+    return op === 'configuration' ? route.fulfill({ json: { ok: true, targetId: 'a'.repeat(64),
       memoryTargetId: 'b'.repeat(64), sessions: [] } }) : route.continue();
   });
   const entry = page.getByRole('button', { name: '设置', exact: true });
@@ -680,6 +680,100 @@ test('a changed SSH pin requires fresh confirmation in settings and in the wizar
   await guide.getByRole('button', { name: '编辑连接', exact: true }).click();
   assert.equal(await guide.getByRole('checkbox', { name: /已核对/u }).isChecked(), false);
   assert.equal(await guide.getByRole('button', { name: '连接并检查', exact: true }).isDisabled(), true);
+});
+
+test('saving VPS settings and closing from the other location preserves the selected VPS session and draft', { timeout: 35_000 }, async (t) => {
+  const page = await openPreview(t);
+  await page.getByText('本地演示 · VPS 已配置', { exact: true }).waitFor();
+  await (await sidebarButton(page, '周末读书会')).click();
+  const row = await sidebarButton(page, '读书会 · 开场流程');
+  await row.click();
+  const draft = page.getByRole('textbox', { name: '消息', exact: true });
+  await draft.fill('VPS 会话草稿');
+  const history = page.getByRole('group', { name: '打开会话历史', exact: true });
+  const newLocation = page.getByLabel('新建位置', { exact: true });
+  await newLocation.selectOption('local-sdk');
+  const packets = [];
+  await page.route('**/dsh-vps-chat/api/rpc', (route) => {
+    const packet = route.request().postDataJSON();
+    packets.push(packet);
+    if (packet.op === 'configuration' && packet.settings?.workspace === '/srv/changed-fixture') {
+      return route.fulfill({ json: { ok: true, targetId: 'a'.repeat(64), memoryTargetId: 'b'.repeat(64), sessions: [] } });
+    }
+    return route.continue();
+  });
+  await page.route('**/__preview/connection', (route) => route.fulfill({ json: { ok: true } }));
+  const localRequests = [];
+  await page.route('**/__preview/local-sdk', (route) => {
+    localRequests.push(route.request().method());
+    return route.continue();
+  });
+  const entry = page.getByRole('button', { name: '设置', exact: true });
+  await entry.click();
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await openSettingsSection(settings, '连接');
+  const directory = settings.getByLabel(/^(远端项目目录|工作目录)$/u);
+  await directory.fill('/srv/changed-fixture');
+  await settings.getByRole('group', { name: '配置的执行位置' }).getByRole('button', { name: '本机 SDK' }).click();
+  await page.getByRole('dialog', { name: '有未保存的设置' }).getByRole('button', { name: '保存并继续' }).click();
+  await settings.getByRole('heading', { name: '本机 SDK 连接', exact: true }).waitFor();
+  await settings.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await settings.waitFor({ state: 'hidden' });
+  assert.equal(await history.getByRole('button', { name: 'VPS SSH' }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await row.getAttribute('aria-current'), 'true');
+  assert.equal(await draft.inputValue(), 'VPS 会话草稿');
+  assert.equal(await newLocation.inputValue(), 'local-sdk');
+  await page.waitForFunction(() => document.activeElement?.matches('.vc-sidebar-settings'));
+  assert.equal(await entry.evaluate((node) => node === document.activeElement), true);
+  assert.deepEqual(localRequests, ['GET']);
+  assert.ok(packets.length >= 2 && packets.every(({ op }) => op === 'configuration'));
+  await entry.click();
+  await openSettingsSection(settings, '连接');
+  assert.equal(await directory.inputValue(), '/srv/changed-fixture');
+});
+
+test('from local history an unvisited VPS loads only connection metadata and keeps browse access', { timeout: 35_000 }, async (t) => {
+  const page = await openPreview(t, { seed({ preferences }) {
+    preferences['dsh-vps-chat:desktop-view-location:v1'] = 'local-sdk';
+    preferences['dsh-vps-chat:desktop-new-location:v1'] = 'ssh-vps';
+  } });
+  const entry = page.getByRole('button', { name: '设置', exact: true });
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await entry.click();
+  await settings.getByLabel('配置名称', { exact: true }).fill('本机测试配置');
+  await settings.getByRole('button', { name: '选择工作目录并保存', exact: true }).click();
+  await settings.getByText('本机测试配置', { exact: true }).last().waitFor();
+  await settings.getByRole('button', { name: '关闭设置', exact: true }).click();
+  const draft = page.getByRole('textbox', { name: '本地对话草稿' });
+  await draft.fill('原本机会话');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await page.locator('[data-turn-state=completed]').getByText('收到 原本机会话', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '允许执行', exact: true }).click();
+  await page.getByRole('button', { name: '仅浏览', exact: true }).waitFor();
+  await draft.fill('本机会话草稿');
+  const originalRow = page.getByRole('complementary', { name: '本地对话历史' }).getByRole('button', { name: '原本机会话', exact: true });
+  const packets = [];
+  await page.route('**/dsh-vps-chat/api/rpc', (route) => {
+    packets.push(route.request().postDataJSON());
+    return route.continue();
+  });
+  await entry.click();
+  await settings.getByRole('group', { name: '配置的执行位置' }).getByRole('button', { name: 'VPS SSH' }).press('Enter');
+  const user = settings.getByLabel('SSH 用户名', { exact: true });
+  await user.waitFor();
+  await settings.getByText('已载入 VPS 预设', { exact: true }).waitFor();
+  assert.equal(await user.inputValue(), 'preview');
+  assert.equal(await settings.getByRole('button', { name: '测试连接', exact: true }).isDisabled(), true);
+  assert.equal(await settings.getByRole('button', { name: '试跑模型', exact: true }).isDisabled(), true);
+  await page.keyboard.press('Escape');
+  await settings.waitFor({ state: 'hidden' });
+  const history = page.getByRole('group', { name: '打开会话历史', exact: true });
+  assert.equal(await history.getByRole('button', { name: '本机 SDK', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await originalRow.getAttribute('aria-current'), 'true');
+  assert.equal(await draft.inputValue(), '本机会话草稿');
+  assert.equal(await page.getByLabel('新建位置').inputValue(), 'ssh-vps');
+  assert.equal(await entry.evaluate((node) => node === document.activeElement), true);
+  assert.deepEqual(packets, [{ op: 'configuration' }]);
 });
 
 for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 }, { width: 420, height: 640 }]) {

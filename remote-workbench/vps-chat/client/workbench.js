@@ -367,7 +367,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
   function Workbench({ projectCatalog, terminalView, active = true, visible = true, resourcesOpen, setResourcesOpen,
     access, accessPending, changeAccess, extensions, agentPresets, workflowStore, onNewChat, newChatRequest = 0,
-    settingsJump, navigateSettings, applicationPreferences }) {
+    settingsSurface, applicationPreferences }) {
     const workspaceSnapshot = React.useSyncExternalStore(projectCatalog.subscribe, projectCatalog.getSnapshot);
     const SubscriptionTerminal = React.useSyncExternalStore(terminalView.subscribe, terminalView.getSnapshot);
     const [subscriptionOpen, setSubscriptionOpen] = React.useState(false);
@@ -422,7 +422,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [feedback, setFeedback] = React.useState('');
     const [pollPaused, setPollPaused] = React.useState(false);
     const [settingsView, setSettingsView] = React.useState({ tab: false, visit: 0 });
-    const observedSettingsJump = React.useRef(null);
+    const [savedConfiguration, setSavedConfiguration] = React.useState(null);
     const settingsLabel = VpsConnectionChecks ? '设置' : 'VPS 设置';
     const [setupOpen, setSetupOpen] = React.useState(false);
     const [accountOpen, setAccountOpen] = React.useState(null);
@@ -482,19 +482,19 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const configuredTools = tools.filter(({ id, available }) => available && toolPreferences.ids.includes(id));
     const chatEnabled = ready && toolPreferences.ids.includes(connection.provider);
     const remoteEnabled = access?.mode !== 'browse' && !accessPending;
+    const settingsTab = settingsSurface ? settingsSurface.tab : settingsView.tab;
+    const configuration = savedConfiguration ?? { settings: connection, targetId: scope, memoryTargetId,
+      name: connectionName, tools: toolPreferences, profiles: toolProfiles };
+    const configurationReady = Boolean(configuration.settings && configuration.targetId);
     const modelAllowed = remoteEnabled && chatEnabled && providers[connection.provider]?.modelCatalog === true;
     const activeTool = showingSubscription ? subscriptionProvider : chatEnabled ? connection.provider : undefined;
     const activePreferences = { ...preferences, ...toolProfiles[activeTool] };
     const providerName = providers[connection?.provider ?? defaultSettings.provider].label;
-    const connectionDiagnostics = useVpsConnectionChecks({ rpc, readList, connection, scope, memoryTargetId,
-      toolIds: toolPreferences.ids, profiles: toolProfiles, remoteEnabled, visible, savePreference: saveConversationPreference });
+    const connectionDiagnostics = useVpsConnectionChecks({ rpc, readList, connection: configuration.settings,
+      scope: configuration.targetId, memoryTargetId: configuration.memoryTargetId,
+      toolIds: configuration.tools.ids, profiles: configuration.profiles, remoteEnabled,
+      visible: Boolean(settingsSurface) || visible, savePreference: saveConversationPreference });
     const rows = allRows[scope] ?? emptyList;
-    React.useEffect(() => {
-      if (!visible || !settingsJump || observedSettingsJump.current === settingsJump) return;
-      observedSettingsJump.current = settingsJump;
-      setSettingsError('');
-      setSettingsOpen(settingsJump.tab);
-    }, [visible, settingsJump]);
     const storedConversationOptions = React.useMemo(() => {
       if (!saveConversationPreference || !scope) return {};
       try { return readConversationOptions(scope); }
@@ -593,9 +593,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     React.useEffect(() => {
       if (!requestedAccount) return;
       setRequestedAccount(null);
-      if (!visible || !remoteEnabled || !ready || providerSwitchLocked || !connection.hostKeyConfirmed) return;
+      if ((!visible && !settingsTab && !setupOpen) || !remoteEnabled || !configurationReady ||
+          providerSwitchLocked || !configuration.settings.hostKeyConfirmed) return;
       connectionDiagnostics?.clear();
-      setAccountOpen({ actionId: requestedAccount.actionId, settings: connection });
+      setAccountOpen({ actionId: requestedAccount.actionId, settings: configuration.settings });
     }, [requestedAccount]);
     const report = reportedTurnSettings(turns, Boolean(attempt && lastTurn?.id !== attempt.id));
     const modelKey = `${scope}:${selected}`;
@@ -733,6 +734,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           if (controller.signal.aborted) return;
           setToolPreferences({ ...preferences, ids: preferences.ids ?? [preset.settings.provider] });
           setToolProfiles(readToolProfiles(preferences.key, toolIds));
+          setSavedConfiguration(null);
           activateConnection(preset.settings, preset, preset.name);
         } catch (error) {
           if (!controller.signal.aborted) {
@@ -751,10 +753,33 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       };
     }, [visible, loadingPreset, rpc]);
 
+    const readingConfiguration = Boolean(settingsSurface && settingsTab && !visible && !ready && !savedConfiguration);
     React.useEffect(() => {
-      if (!visible || !chatEnabled || working || handledNewChat.current === newChatRequest) return;
-      if (newSession('chat')) handledNewChat.current = newChatRequest;
-    }, [visible, chatEnabled, working, newChatRequest]);
+      if (!readingConfiguration) return undefined;
+      const controller = new AbortController();
+      const { signal } = controller;
+      async function loadConfiguration() {
+        try {
+          const preset = readPreset(await rpc('configuration', {}, signal));
+          const tools = preset ? await readToolPreferences(preset.settings, toolIds) : { key: '', ids: [] };
+          signal.throwIfAborted();
+          setSavedConfiguration({ ...preset, tools: { ...tools, ids: tools.ids ?? [preset.settings.provider] },
+            profiles: readToolProfiles(tools.key, toolIds) });
+        } catch (error) {
+          if (!signal.aborted) {
+            setSavedConfiguration({ tools: { key: '', ids: [] }, profiles: {} });
+            setSettingsError(errorText(error, 'VPS 配置无法读取。'));
+          }
+        }
+      }
+      void loadConfiguration();
+      return () => controller.abort();
+    }, [readingConfiguration, rpc]);
+
+    React.useEffect(() => {
+      if (!visible || working || handledNewChat.current === newChatRequest) return;
+      if (startNewChat()) handledNewChat.current = newChatRequest;
+    }, [visible, chatEnabled, working, newChatRequest, savedConfiguration]);
 
     function updateDraft(id, value) {
       if (submittedDraft.current?.sessionId === id) submittedDraft.current = null;
@@ -1280,16 +1305,24 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }
 
     function setSettingsOpen(tab) {
+      if (settingsSurface) {
+        if (!tab) settingsSurface.close();
+        else if (settingsTab) settingsSurface.setTab(tab);
+        else settingsSurface.open(tab);
+        return;
+      }
       setSettingsView(previous => previous.tab === tab ? previous : {
         tab, visit: previous.visit + Number(Boolean(tab) && !previous.tab),
       });
     }
 
     function openSettings(tab = ready ? 'tools' : 'connection') {
-      presetRequest.current?.abort();
-      setLoadingPreset(false);
+      if (!settingsSurface) {
+        presetRequest.current?.abort();
+        setLoadingPreset(false);
+        setHistoryOpen(false);
+      }
       setSettingsError('');
-      setHistoryOpen(false);
       dismissComposerPanel();
       setMaterialsOpen(false);
       setSettingsOpen(tab);
@@ -1301,12 +1334,29 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
     function openSetup() {
       if (providerSwitchLocked) return;
-      presetRequest.current?.abort();
-      setLoadingPreset(false);
+      if (!settingsSurface) {
+        presetRequest.current?.abort();
+        setLoadingPreset(false);
+      }
       setSettingsOpen(false);
       dismissComposerPanel();
       setMaterialsOpen(false);
       setSetupOpen(true);
+    }
+
+    function applySavedConfiguration(settings, list, tools) {
+      const name = '本机保存的 VPS';
+      const profiles = readToolProfiles(tools.key, toolIds);
+      if (list.targetId === scope && ready) {
+        setConnection(settings);
+        setConnectionName(name);
+        setToolPreferences(tools);
+        setToolProfiles(profiles);
+        setSavedConfiguration(null);
+      } else {
+        setSavedConfiguration({ ...list, settings, name, tools, profiles });
+        if (visible && !ready) setLoadingPreset(true);
+      }
     }
 
     async function applySetupConnection(settings, list, signal) {
@@ -1318,16 +1368,12 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       await saveConversationPreference(setupConnectionKey, JSON.stringify({ settings, targetId: list.targetId }));
       signal.throwIfAborted();
       setPinConfirmationRequired(false);
-      setToolPreferences({ ...saved, ids });
-      setToolProfiles(readToolProfiles(saved.key, toolIds));
-      setSubscriptionOpen(false);
-      activateConnection(settings, list, '本机保存的 VPS');
+      applySavedConfiguration(settings, list, { ...saved, ids });
     }
 
     async function enableSetupTool(id) {
-      const ids = toolIds.filter((tool) => tool === id || toolPreferences.ids.includes(tool));
-      await saveConversationPreference(toolPreferences.key, JSON.stringify(ids));
-      setToolPreferences({ ...toolPreferences, ids });
+      const ids = toolIds.filter((tool) => tool === id || configuration.tools.ids.includes(tool));
+      if (!await saveTools(ids, configuration.tools.key)) throw new Error('tool_preferences_unavailable');
     }
 
     function activateConnection(settings, { targetId: route, sessions: list, memoryTargetId: memoryRoute }, name = '') {
@@ -1354,12 +1400,13 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       return perform('settings', async (signal) => {
         setSettingsError('');
         try {
-          const list = readList(await rpc('list', { settings }, signal));
+          const op = settingsSurface ? 'configuration' : 'list';
+          const list = readList(await rpc(op, { settings }, signal));
           signal.throwIfAborted();
-          if (setupConnectionKey && ready && !pinConfirmedAgain) {
-            const previous = readList(await rpc('list', { settings: connection }, signal));
+          if (setupConnectionKey && configurationReady && !pinConfirmedAgain) {
+            const previous = readList(await rpc(op, { settings: configuration.settings }, signal));
             signal.throwIfAborted();
-            if (previous.targetId !== scope) {
+            if (previous.targetId !== configuration.targetId) {
               setPinConfirmationRequired(true);
               throw Object.assign(new Error('SSH 主机指纹已变化。请重新核对并确认后保存。'), { code: 'target_changed' });
             }
@@ -1370,14 +1417,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             await saveConversationPreference(setupConnectionKey, JSON.stringify({ settings, targetId: list.targetId }));
             signal.throwIfAborted();
             setPinConfirmationRequired(false);
-            setToolPreferences({ ...preferences, ids: preferences.ids ?? [settings.provider] });
-            setToolProfiles(readToolProfiles(preferences.key, toolIds));
-            setSubscriptionOpen(false);
-            const name = '本机保存的 VPS';
-            if (list.targetId === scope) {
-              setConnection(settings);
-              setConnectionName(name);
-            } else activateConnection(settings, list, name);
+            applySavedConfiguration(settings, list, { ...preferences, ids: preferences.ids ?? [settings.provider] });
             return true;
           }
           const ids = preferences.ids ?? (preferences.key === toolPreferences.key ? toolPreferences.ids : []);
@@ -1398,7 +1438,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }
 
     async function saveTools(ids, key) {
-      if (!key || !ready || providerSwitchLocked || key !== toolPreferences.key) return false;
+      if (!key || !configurationReady || providerSwitchLocked || key !== configuration.tools.key) return false;
       const next = toolIds.filter((id) => ids.includes(id));
       setSettingsError('');
       try {
@@ -1409,7 +1449,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         return false;
       }
       setToolPreferences((previous) => previous.key === key ? { ...previous, ids: next } : previous);
-      if (!next.includes(subscriptionProvider)) setSubscriptionOpen(false);
+      setSavedConfiguration((previous) => previous?.tools.key === key ? { ...previous, tools: { ...previous.tools, ids: next } } : previous);
+      if (toolPreferences.key === key && !next.includes(subscriptionProvider)) setSubscriptionOpen(false);
       return true;
     }
 
@@ -1431,10 +1472,13 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }
 
     function updateTool(id, patch) {
-      if (!ready || !toolPreferences.key || !toolIds.includes(id)) return false;
-      const next = { ...toolProfiles, [id]: { ...toolProfiles[id], ...patch } };
+      const key = configuration.tools.key;
+      if (!configurationReady || !key || !toolIds.includes(id)) return false;
+      const next = { ...configuration.profiles, [id]: { ...configuration.profiles[id], ...patch } };
       try {
-        setToolProfiles(writeToolProfiles(toolPreferences.key, next, toolIds));
+        const saved = writeToolProfiles(key, next, toolIds);
+        if (key === toolPreferences.key) setToolProfiles(saved);
+        setSavedConfiguration((previous) => previous?.tools.key === key ? { ...previous, profiles: saved } : previous);
       } catch {
         setSettingsError('执行端的独立设置未能保存到本机。');
         return false;
@@ -1443,32 +1487,32 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       return true;
     }
 
-    async function readProviderModels(provider, signal) {
-      if (!ready || !toolsWithModels.includes(provider)) throw new Error('当前执行端不提供模型目录。');
-      const settings = { ...connection, provider };
-      let targetId = scope;
-      if (provider !== connection.provider) {
-        const route = readList(await rpc('list', { settings }, signal));
-        if (VpsConnectionChecks && (!memoryTargetId || route.memoryTargetId !== memoryTargetId))
+    async function readProviderModels(provider, signal, route = { settings: connection, targetId: scope, memoryTargetId }) {
+      if (!route.settings || !route.targetId || !toolsWithModels.includes(provider)) throw new Error('当前执行端不提供模型目录。');
+      const settings = { ...route.settings, provider };
+      let targetId = route.targetId;
+      if (provider !== route.settings.provider) {
+        const resolved = readList(await rpc(settingsSurface ? 'configuration' : 'list', { settings }, signal));
+        if (VpsConnectionChecks && (!route.memoryTargetId || resolved.memoryTargetId !== route.memoryTargetId))
           throw new Error('SSH 主机指纹或 VPS 配置已变化。请重新核对连接。');
-        targetId = route.targetId;
+        targetId = resolved.targetId;
       }
       const models = readModelCatalog(await rpc('models', { settings, targetId }, signal));
       return { targetId, models };
     }
 
     async function readSettingsModels(provider, signal) {
-      const result = await readProviderModels(provider, signal);
+      const result = await readProviderModels(provider, signal, configuration);
       if (!signal.aborted) setModelCatalogs(previous => ({ ...previous, [result.targetId]: { models: result.models } }));
       return result;
     }
 
     async function readMemoryModels(signal) {
-      if (!remoteEnabled || !ready || !memoryTargetId || !connection?.hostKeyConfirmed) {
+      if (!remoteEnabled || !configurationReady || !configuration.memoryTargetId || !configuration.settings?.hostKeyConfirmed) {
         throw new Error('请连接并确认当前 VPS 后读取记忆提炼模型。');
       }
-      const settings = { ...connection, provider: 'codex' };
-      return readModelCatalog(await rpc('models', { settings, targetId: memoryTargetId }, signal));
+      const settings = { ...configuration.settings, provider: 'codex' };
+      return readModelCatalog(await rpc('models', { settings, targetId: configuration.memoryTargetId }, signal));
     }
 
     async function providerUpdate(provider, signal) {
@@ -1518,6 +1562,14 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           if (!signal.aborted) setFeedback(errorText(error, '暂时无法切换执行端。'));
         }
       });
+    }
+
+    function startNewChat() {
+      if (savedConfiguration?.settings && savedConfiguration.targetId !== scope) {
+        setLoadingPreset(true);
+        return true;
+      }
+      return newSession('chat');
     }
 
     function newSession(sessionMode, { carryDraft = false, projectId = category ?? '', playground = false } = {}) {
@@ -2053,7 +2105,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const pinnedFolders = [...projects].filter(([id]) => pinnedProjects.has(id));
     const newActions = h('div', { className: 'vc-new-actions' },
       h('button', {
-        type: 'button', className: 'vc-button vc-new vc-primary', onClick: onNewChat ?? (() => newSession('chat')),
+        type: 'button', className: 'vc-button vc-new vc-primary', onClick: onNewChat ?? startNewChat,
         disabled: !onNewChat && (!chatEnabled || Boolean(working)),
       }, sidebarActions ? h('span', { className: 'vc-menu-label' }, menuIcon(h, 'new-chat'), '新聊天') : '＋ 新对话'),
       sidebarActions ? null : h('button', {
@@ -2190,6 +2242,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       className: 'vc-canvas-history vc-disclosure-motion', 'data-expanded': canvasHistoryOpen, inert: !canvasHistoryOpen,
     }, h('div', { className: 'vc-disclosure-clip' }, conversationMessages)) : conversationMessages, conversationComposer);
 
+    const showSettingsOverlay = (element) => visible || !settingsSurface ? element :
+      settingsSurface.show(element, { 'data-vps-chat': '', 'data-vc-color': preferences.color,
+        'data-vc-accent': preferences.accent, 'data-vc-motion': preferences.motion });
+    const configuredProvider = configuration.settings?.provider;
     return h('div', { ref: workbench, 'data-vps-chat': '', 'data-resizing': resizing, hidden: !visible, inert: !visible,
       'data-subscription-open': showingSubscription,
       'data-vc-color': activePreferences.color, 'data-vc-accent': activePreferences.accent,
@@ -2369,8 +2425,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         },
         dismiss: () => setConversationDialog(null),
       }) : null,
-      accountOpen && remoteEnabled && ready && accountOpen.settings === connection
-        ? h(AccountDialog, { rpc, ...accountOpen, close: () => setAccountOpen(null) }) : null,
+      accountOpen && remoteEnabled && configurationReady && accountOpen.settings === configuration.settings
+        ? showSettingsOverlay(h(AccountDialog, { rpc, ...accountOpen, close: () => setAccountOpen(null) })) : null,
       ResourceLibrary && resourcesOpen ? h(ResourceLibrary, { key: scope, scope, projects, sessions: resourceSessions,
         readSession: readResourceSession, onClose: closeResources, onOpenSource: openResourceSource, writeClipboard,
         initialProject: category || (projects.has(selectedProject) ? selectedProject : ''),
@@ -2382,41 +2438,52 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           openSettings('agents');
         } : undefined,
       }) : null,
-      h(SettingsDialog, {
-        scope, settings: connection, ...settingsView, ready, name: connectionName, tools, activeTool,
-        savedTools: toolPreferences.ids, toolKey: toolPreferences.key,
+      showSettingsOverlay(h(SettingsDialog, {
+        scope: configuration.targetId, settings: configuration.settings, visit: settingsView.visit,
+        tab: settingsTab, ready: configurationReady, name: configuration.name, tools, activeTool: visible ? activeTool : undefined,
+        savedTools: configuration.tools.ids, toolKey: configuration.tools.key,
         setTab: (tab) => { setSettingsError(''); setSettingsOpen(tab); },
-        error: settingsError, busy: providerSwitchLocked || Boolean(settingsJump && loadingPreset),
+        error: settingsError, busy: providerSwitchLocked || readingConfiguration || (visible && loadingPreset),
         close: () => setSettingsOpen(false), saveConnection: saveSettings, saveTools,
         VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired,
-        navigateLocation: navigateSettings, settingsLabel,
+        navigateLocation: settingsSurface?.navigate, settingsLabel,
+        restoreFocus: settingsSurface?.restoreFocus,
         focusFallback: () => {
           const entry = Array.from(workbench.current?.querySelectorAll('.vc-sidebar-settings, .vc-header-settings') ?? [])
             .find((button) => button.getClientRects().length && !button.disabled);
           (entry ?? editor.current)?.focus({ preventScroll: true });
         },
         openSetup: SetupGuide ? openSetup : undefined,
-        preferences, updatePreferences, profiles: toolProfiles, updateTool, readModels: readSettingsModels,
+        preferences, updatePreferences, profiles: configuration.profiles, updateTool, readModels: readSettingsModels,
         modelTools: remoteEnabled ? toolsWithModels : emptyList, openAccount, remoteEnabled,
         agentSettings: AgentPresetSettings && agentPresets ? { Component: AgentPresetSettings, props: {
-          ...agentPresets, moduleCatalog, catalogScope: scope, availableProviders: remoteEnabled && ready ? toolPreferences.ids : emptyList,
+          ...agentPresets, moduleCatalog: savedConfiguration && moduleCatalog ? {
+            ...moduleCatalog, codexTargetId: configuration.memoryTargetId,
+            antigravityTargetId: configuredProvider === 'antigravity' ? configuration.targetId :
+              connectionDiagnostics?.resultFor('antigravity')?.checked?.list.targetId ?? '',
+          } : moduleCatalog,
+          catalogScope: configuration.targetId, availableProviders: remoteEnabled && configurationReady ? configuration.tools.ids : emptyList,
           readModels: async (provider, signal) => (await readSettingsModels(provider, signal)).models,
         } } : null,
         extensionSettings: ExtensionSettings && extensions ? { Component: ExtensionSettings, props: {
-          ...extensions, targetId: connection?.provider === 'codex' ? scope : '', memoryTargetId, projects, selectedProject,
-          readMemoryModels: remoteEnabled && ready && memoryTargetId ? readMemoryModels : undefined,
-          mcpTargetId: connection?.provider === 'codex' || connection?.provider === 'antigravity' ? scope : '',
-          mcpProvider: connection?.provider,
+          ...extensions, targetId: configuredProvider === 'codex' ? configuration.targetId : '',
+          memoryTargetId: configuration.memoryTargetId, projects,
+          selectedProject: configuration.targetId === scope ? selectedProject : null,
+          readMemoryModels: remoteEnabled && configurationReady && configuration.memoryTargetId ? readMemoryModels : undefined,
+          mcpTargetId: ['codex', 'antigravity'].includes(configuredProvider) ? configuration.targetId : '',
+          mcpProvider: configuredProvider,
         } } : null,
-      }),
-      SetupGuide && setupOpen ? h(SetupGuide, {
-        connection, connectionName, scope, memoryTargetId, tools: chatTools, toolIds: toolPreferences.ids, toolProfiles,
+      })),
+      SetupGuide && setupOpen ? showSettingsOverlay(h(SetupGuide, {
+        connection: configuration.settings, connectionName: configuration.name, scope: configuration.targetId,
+        memoryTargetId: configuration.memoryTargetId, tools: chatTools, toolIds: configuration.tools.ids, toolProfiles: configuration.profiles,
         trial: connectionDiagnostics?.trial,
         rpc, readList, remoteEnabled, accessPending, applyConnection: applySetupConnection, enableTool: enableSetupTool,
         onEnableExecution: access?.mode === 'browse' ? () => changeAccess({ ...access, mode: 'execute' }) : undefined,
         extensions: extensions?.state, agentPresets, selectedProject: projects.has(selectedProject) ? selectedProject : null,
-        openAccount, openSettings, onClose: () => setSetupOpen(false), workflow: workflows?.example,
-      }) : null);
+        openAccount, openSettings, onClose: () => setSetupOpen(false),
+        workflow: visible && (!ready || configuration.targetId === scope) ? workflows?.example : undefined,
+      })) : null);
   }
 
   return Workbench;

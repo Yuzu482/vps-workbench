@@ -61,6 +61,12 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     extractor: makeBridge({ ...bridgeOptions, root: join(workbenchRoot, 'project-memory') }) }) : backend;
   const bridge = {
     request(body, options) {
+      if (body.op === 'configuration') {
+        const saved = body.settings ? undefined : data?.preference(setupConnectionKey);
+        const read = (request) => backend.request(request, { current: true });
+        return saved === undefined ? read(body) :
+          readSetupPreset(saved, (settings) => read({ op: 'configuration', settings }));
+      }
       if (body.op === 'setup-trial') {
         return runSetupTrial(body, backend, () => permitsChat(access(), body.op) && (!options?.isLive || options.isLive()));
       }

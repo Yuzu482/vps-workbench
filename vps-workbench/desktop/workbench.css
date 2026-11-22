@@ -83,6 +83,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 .desktop-location-bar label { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .desktop-location-bar select { border-color: var(--desktop-line); background: var(--desktop-surface); }
 #root > :is([data-local-sdk], [data-vps-chat])[hidden] { display: none; }
+#root .desktop-settings-surface { display: contents; }
 @media (max-width: 620px) and (max-height: 560px) {
   #root:has(> [data-vps-chat]:not([hidden]) .vc-header[data-playground="true"]) {
     grid-template-rows: auto minmax(0, 1fr);

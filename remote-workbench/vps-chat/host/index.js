@@ -20,6 +20,7 @@ const maxDesignRequestBytes = 1280 * 1024;
 const maxResponseBytes = 2 * 1024 * 1024;
 const operations = Object.freeze({
   preset: ['op'],
+  configuration: ['op', 'settings'],
   list: ['op', 'settings'],
   models: ['op', 'settings', 'targetId'],
   'setup-check': ['op', 'settings', 'targetId', 'kind', 'mcpServers'],
@@ -133,6 +134,10 @@ function validRequest(value, { allowExtensions, allowProjectMemory, allowModelPa
   if (value.op === 'account-view') {
     return validAccountRequest(value);
   }
+  if (value.op === 'configuration') {
+    if (!allowSetupCheck) return false;
+    if (hasExactFields(value, ['op'])) return true;
+  }
   const design = value.op === 'send' && value.mode === 'design';
   const history = value.op === 'design-history';
   const historyTurn = history && Object.hasOwn(value, 'turnId');
@@ -207,8 +212,8 @@ function validRequest(value, { allowExtensions, allowProjectMemory, allowModelPa
       settings.port < 1 || settings.port > 65535 ||
       !settingsFields.slice(0, -1).filter(field => field !== 'port').every(field =>
         typeof settings[field] === 'string' && settings[field].length <= 2048 && !settings[field].includes('\0'))) return false;
-  if (value.op !== 'list' && (typeof value.targetId !== 'string' || !/^[0-9a-f]{64}$/.test(value.targetId))) return false;
-  if (!['list', 'models', 'model-options', 'setup-check'].includes(value.op) &&
+  if (!['list', 'configuration'].includes(value.op) && (typeof value.targetId !== 'string' || !/^[0-9a-f]{64}$/.test(value.targetId))) return false;
+  if (!['list', 'configuration', 'models', 'model-options', 'setup-check'].includes(value.op) &&
       (typeof value.sessionId !== 'string' || !guid.test(value.sessionId))) return false;
   if ((artifacts || historyTurn || ['send', 'stop', 'steer', 'approval', 'setup-trial'].includes(value.op)) &&
       (typeof value.turnId !== 'string' || !guid.test(value.turnId))) return false;
@@ -275,13 +280,13 @@ export function createBridge({
       if (disposed || typeof root !== 'string' || !isAbsolute(root) || !isAbsolute(pythonPath) ||
           !existsSync(pythonPath)) return notReady;
       const provider = body.settings?.provider;
-      if (['setup-check', 'workflow-artifacts', 'approval'].includes(body.op) ||
+      if (['configuration', 'setup-check', 'workflow-artifacts', 'approval'].includes(body.op) ||
           (provider === 'antigravity' && useCurrentAntigravity)) current = true;
       const advanced = body.op === 'send' && Object.hasOwn(body, 'advanced');
       const inspectingOptions = body.op === 'model-options';
       const scopedCodex = body.op === 'send' && provider === 'codex' &&
         (Object.hasOwn(body, 'workspaceAccess') || Object.hasOwn(body, 'extensions') || Object.hasOwn(body, 'designBase'));
-      const localOnly = ['preset', 'list', 'get', 'design-history'].includes(body.op) ||
+      const localOnly = ['preset', 'configuration', 'list', 'get', 'design-history'].includes(body.op) ||
         (body.op === 'models' && ['claude', 'claude-sdk'].includes(provider));
       let useCompatibility = Boolean(compatibilityDirectory) && localOnly && !current && body.op !== 'design-history';
       let directClaude = false;

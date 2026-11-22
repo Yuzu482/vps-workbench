@@ -285,7 +285,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
     toolKey, error, busy, close, openSetup,
     saveConnection, saveTools, preferences, updatePreferences, profiles, updateTool, readModels, modelTools, openAccount,
     remoteEnabled = true, extensionSettings, agentSettings, VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired,
-    navigateLocation, localPanels, settingsLabel = 'VPS 设置', focusFallback }) {
+    navigateLocation, localPanels, settingsLabel = 'VPS 设置', focusFallback, restoreFocus }) {
     const dialog = React.useRef(null);
     const confirmDialog = React.useRef(null);
     const pointerOutside = React.useRef(false);
@@ -338,7 +338,8 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
         }
       } else if (element.open) {
         element.close();
-        if (document.activeElement === document.body) focusFallback?.();
+        if (restoreFocus) restoreFocus();
+        else if (document.activeElement === document.body) focusFallback?.();
         return afterPopupMotion(element, () => setLastTab(false));
       }
     }, [openTab, visit]);
@@ -522,7 +523,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
                 locations.map(([id, label]) => h('button', { key: id, type: 'button', className: 'vc-button',
                   'aria-pressed': location === id, disabled: locked,
                   onClick: (event) => {
-                    if (id !== location) requestTransition(() => { close(); navigateLocation(id, tab); }, event.currentTarget);
+                    if (id !== location) requestTransition(() => navigateLocation(id, tab), event.currentTarget);
                   },
                 }, label))) : null,
             localPanels?.[tab] ?? null,

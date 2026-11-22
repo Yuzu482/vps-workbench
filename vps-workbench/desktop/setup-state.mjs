@@ -20,7 +20,7 @@ export async function checkVpsConnection({ rpc, readList, settings, signal, upda
   let step = 'ssh';
   try {
     updateStep(step, 'checking', '正在使用已核对的主机指纹连接 VPS…');
-    const list = readList(await rpc('list', { settings }, signal));
+    const list = readList(await rpc('configuration', { settings }, signal));
     signal.throwIfAborted();
     const { targetId } = list;
     if (expectedTargetId && targetId !== expectedTargetId || expectedMemoryTargetId && list.memoryTargetId !== expectedMemoryTargetId) {

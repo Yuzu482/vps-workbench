@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { createWorkbench } from '../../remote-workbench/vps-chat/client/workbench.js';
 import { menuIcon } from '../../remote-workbench/vps-chat/client/menu-icons.js';
@@ -157,7 +158,9 @@ try {
     const [visited, setVisited] = React.useState(() => new Set([location]));
     const [localNew, setLocalNew] = React.useState(0);
     const [sshNew, setSshNew] = React.useState(0);
-    const [settingsJump, setSettingsJump] = React.useState(null);
+    const [settings, setSettings] = React.useState(null);
+    const settingsLayer = React.useRef(null);
+    const settingsTrigger = React.useRef(null);
     const [appearance, setAppearance] = React.useState(readPreferences);
     const appearanceDraft = React.useRef(appearance);
     const appearanceWrites = React.useRef(Promise.resolve());
@@ -179,8 +182,30 @@ try {
       void saveLocalPreference(viewLocationKey, next).catch(reportChromeError);
     }
     function navigateSettings(next, tab) {
-      openLocation(next);
-      setSettingsJump({ location: next, tab });
+      setVisited((previous) => previous.has(next) ? previous : new Set([...previous, next]));
+      setSettings({ location: next, tab });
+    }
+    function settingsSurface(target) {
+      return {
+        tab: settings?.location === target ? settings.tab : false,
+        open(tab) {
+          if (!settings) settingsTrigger.current = document.activeElement;
+          navigateSettings(target, tab);
+        },
+        setTab(tab) { setSettings((previous) => previous?.location === target ? { ...previous, tab } : previous); },
+        close() { setSettings(null); },
+        restoreFocus() {
+          const trigger = settingsTrigger.current;
+          if (!settings && !document.querySelector('dialog:modal') && trigger?.isConnected) {
+            trigger.focus({ preventScroll: true });
+          }
+        },
+        navigate: navigateSettings,
+        show(element, attributes) {
+          return settingsLayer.current && createPortal(h('div', { ...attributes, className: 'desktop-settings-surface' }, element),
+            settingsLayer.current);
+        },
+      };
     }
     async function changeAppearance(patch) {
       const next = { ...appearanceDraft.current, ...patch };
@@ -261,7 +286,7 @@ try {
             locations.map(([id, label]) => h('option', { key: id, value: id }, label))))),
       visited.has('ssh-vps') ? h(Workbench, { projectCatalog, terminalView, resourcesOpen, setResourcesOpen,
         access, accessPending, changeAccess, visible: sshVisible, active: sshVisible, newChatRequest: sshNew,
-        settingsJump: settingsJump?.location === 'ssh-vps' ? settingsJump : null, navigateSettings,
+        settingsSurface: settingsSurface('ssh-vps'),
         applicationPreferences: { value: appearance, change: changeAppearance },
         onNewChat: newLocation === 'local-sdk' ? startChat : undefined,
         extensions: { state: extensions, change: changeExtensions, busy: extensionsBusy },
@@ -270,8 +295,9 @@ try {
           saveRun: saveWorkflowRun, saveAttachments: saveWorkflowAttachments, error: workflowError } }) : null,
       visited.has('local-sdk') ? h(LocalWorkspace, { native, active: !sshVisible, access, accessPending, changeAccess,
         newConversation: localNew, onNewChat: startChat, defaultLocation: newLocation,
-        settingsJump: settingsJump?.location === 'local-sdk' ? settingsJump : null, navigateSettings,
-        appearance, changeAppearance, sendKey: appearance.sendKey, savePreference: saveLocalPreference }) : null);
+        settingsSurface: settingsSurface('local-sdk'),
+        appearance, changeAppearance, sendKey: appearance.sendKey, savePreference: saveLocalPreference }) : null,
+      h('div', { ref: settingsLayer, className: 'desktop-settings-surface' }));
   }
   root.render(h(DesktopApp));
 } catch {

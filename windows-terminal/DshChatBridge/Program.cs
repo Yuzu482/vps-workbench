@@ -20,11 +20,12 @@ internal static class Program
             var bytes = BridgeProtocol.ReadBounded(input, DesignContext.MaxRequestBytes);
             using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 8 });
             var request = document.RootElement;
-            if (BridgeProtocol.Text(request, "op") == "preset" && BridgeProtocol.HasFields(request, "op"))
+            string? op = BridgeProtocol.Text(request, "op");
+            if (op is ("preset" or "configuration") && BridgeProtocol.HasFields(request, "op"))
             {
                 if (bytes.Length > MaxRequestBytes)
                     throw new BridgeError("invalid_request", "输入内容超出大小限制。");
-                response = ChatBridge.ReadPreset(stateRoot);
+                response = ChatBridge.ReadPreset(stateRoot, includeSessions: op == "preset");
             }
             else
             {

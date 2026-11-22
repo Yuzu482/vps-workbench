@@ -297,9 +297,13 @@ export function createPreviewFixtures() {
 
   function chat(packet) {
     if (packet?.op === 'preset') return ok({ preset: { name: previewName, settings: { ...settings }, ...list('codex') } });
+    if (packet?.op === 'configuration' && !packet.settings) return ok({ preset: {
+      name: previewName, settings: { ...settings }, targetId: targetFor('codex'), memoryTargetId: targetFor('codex'), sessions: [],
+    } });
     if (packet?.op === 'account-view') return fail('preview_only', '本地预览不启动账号窗口。');
     if (!readSettings(packet?.settings)) return fail('invalid_settings', '预览仅使用内置的 workbench-preview.invalid 主机。');
     const { provider } = packet.settings;
+    if (packet.op === 'configuration') return ok({ targetId: targetFor(provider), memoryTargetId: targetFor('codex'), sessions: [] });
     if (packet.op === 'list') return ok(list(provider));
     if (packet.targetId !== targetFor(provider)) return fail('invalid_settings', '无法找到这个演示连接。');
     if (packet.op === 'models') return ok({ models: structuredClone(models[provider]) });

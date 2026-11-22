@@ -342,7 +342,7 @@ internal static class BridgeProtocol
         bool hasWorkflowFiles = isObject && value.TryGetProperty("workflowFiles", out _);
         bool valid = op switch
         {
-            "list" => HasFields(value, "op", "settings"),
+            "list" or "configuration" => HasFields(value, "op", "settings"),
             "models" => HasFields(value, "op", "settings", "targetId"),
             "setup-check" => HasFields(value, "op", "settings", "targetId", "kind", "mcpServers"),
             "get" or "design-history" => HasFields(value, "op", "settings", "targetId", "sessionId") ||
@@ -373,7 +373,7 @@ internal static class BridgeProtocol
         };
         if (!valid) throw new BridgeError("invalid_request", "工作台请求格式无效。");
 
-        Guid session = op is "list" or "models" or "setup-check" ? Guid.Empty : Id(value, "sessionId");
+        Guid session = op is "list" or "configuration" or "models" or "setup-check" ? Guid.Empty : Id(value, "sessionId");
         Guid turn = op is "send" or "stop" or "steer" or "approval" or "workflow-artifacts" ||
             (op is "get" or "design-history" && value.TryGetProperty("turnId", out _))
             ? Id(value, "turnId") : Guid.Empty;
@@ -434,7 +434,7 @@ internal static class BridgeProtocol
         if (settings.Provider == "antigravity" && model is not null && !model.StartsWith("gemini-", StringComparison.Ordinal))
             throw new BridgeError("invalid_request", "请从 Antigravity 模型目录选择 Gemini 模型。");
         string targetId = settings.Fingerprint();
-        if (op != "list" && Text(value, "targetId") != targetId)
+        if (op is not ("list" or "configuration") && Text(value, "targetId") != targetId)
             throw new BridgeError("target_changed", "VPS 设置或主机指纹已变化，请重新核对。");
 
         var context = hasContext ? DesignContext.Parse(value.GetProperty("designContext")) : null;

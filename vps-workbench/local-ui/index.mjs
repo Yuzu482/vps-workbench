@@ -109,7 +109,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
 
   return function LocalWorkspace({
     native, active, access, accessPending, changeAccess, newConversation, sendKey, appearance,
-    onNewChat, defaultLocation, savePreference, settingsJump, navigateSettings, changeAppearance,
+    onNewChat, defaultLocation, savePreference, settingsSurface, changeAppearance,
   }) {
     const [status, setStatus] = React.useState(null);
     const [statusError, setStatusError] = React.useState(false);
@@ -124,8 +124,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     const writes = React.useRef(new Map());
     const [historyOpen, setHistoryOpen] = React.useState(false);
     const [registerBusy, setRegisterBusy] = React.useState(false);
-    const [settingsTab, setSettingsTab] = React.useState(false);
-    const observedSettingsJump = React.useRef(null);
+    const settingsTab = settingsSurface.tab;
     const [registerError, setRegisterError] = React.useState('');
     const [name, setName] = React.useState('');
     const [modelId, setModelId] = React.useState('');
@@ -136,7 +135,6 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     const composing = React.useRef(false);
     const compositionEndedAt = React.useRef(-Infinity);
     const editor = React.useRef(null);
-    const settingsEntry = React.useRef(null);
     const historyToggle = React.useRef(null);
     const feed = React.useRef(null);
     const follow = React.useRef(true);
@@ -214,20 +212,15 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       }
     }
 
+    const needsStatus = active || Boolean(settingsTab);
     React.useEffect(() => {
-      if (active) void loadStatus();
-      else setHistoryOpen(false);
+      if (needsStatus) void loadStatus();
       return () => { statusToken.current = null; };
-    }, [active, native]);
+    }, [needsStatus, native]);
 
     React.useLayoutEffect(() => {
-      if (!active) {
-        setSettingsTab(false);
-      } else if (settingsJump && settingsJump !== observedSettingsJump.current) {
-        observedSettingsJump.current = settingsJump;
-        setSettingsTab(settingsJump.tab);
-      }
-    }, [active, settingsJump]);
+      if (!active) setHistoryOpen(false);
+    }, [active]);
 
     React.useEffect(() => {
       if (epoch.current === newConversation) return;
@@ -449,7 +442,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
 
     function showOptions() {
       setRegisterError('');
-      setSettingsTab('connection');
+      settingsSurface.open('connection');
     }
 
     const statusLine = statusError ? '状态读取失败' : !status ? '正在读取本机状态…' :
@@ -472,6 +465,18 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       }, row.title);
     }
 
+    const settings = h(SettingsDialog, {
+      tab: settingsTab, setTab: settingsSurface.setTab, close: settingsSurface.close, busy: registerBusy,
+      settingsLabel: '设置', navigateLocation: settingsSurface.navigate, preferences: appearance, updatePreferences: changeAppearance,
+      restoreFocus: settingsSurface.restoreFocus,
+      localPanels: {
+        connection: h(React.Fragment, null, connectionChecks(), profileFields()),
+        tools: profileFields(),
+        accounts: connectionChecks(),
+        agents: note('本机 SDK 支持只读文本会话。Agent 预设、MCP 和提示词模板可在 VPS SSH 的设置中管理。'),
+        memory: note('本机 Codex 历史保存在独立的本机配置中。项目记忆可在 VPS SSH 的设置中管理。'),
+      },
+    });
     return h('div', {
       'data-local-sdk': '', hidden: !active, inert: !active, 'data-history-open': String(historyOpen), 'data-tool-theme': 'codex',
       'data-vc-color': appearance?.color, 'data-vc-accent': appearance?.accent, 'data-vc-motion': appearance?.motion,
@@ -514,7 +519,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
             title: '本机配置状态。账户和网络以实际对话结果为准。',
           }, statusLine))),
         h('div', { className: 'local-actions' },
-          h(Button, { ref: settingsEntry, onClick: showOptions, title: optionsLabel, 'aria-label': '设置', 'aria-haspopup': 'dialog' },
+          h(Button, { onClick: showOptions, title: optionsLabel, 'aria-label': '设置', 'aria-haspopup': 'dialog' },
             icon?.(h, 'settings'), '设置'),
           h(Button, { disabled: accessPending, 'aria-pressed': browsing, title: browsing ? '切换为允许执行' : '切换为仅浏览',
             onClick: () => changeAccess?.({ ...access, mode: browsing ? 'execute' : 'browse' }) },
@@ -554,18 +559,8 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
           h('div', { className: 'local-composer-footer' },
             h('span', { className: 'local-muted' }, composerNote),
             h(Button, { type: 'submit', className: 'local-primary', disabled: !canSend }, '发送'))))),
-    h(SettingsDialog, {
-      tab: settingsTab, setTab: setSettingsTab, close: () => setSettingsTab(false), busy: registerBusy,
-      settingsLabel: '设置', navigateLocation: navigateSettings, preferences: appearance, updatePreferences: changeAppearance,
-      focusFallback: () => settingsEntry.current?.focus({ preventScroll: true }),
-      localPanels: {
-        connection: h(React.Fragment, null, connectionChecks(), profileFields()),
-        tools: profileFields(),
-        accounts: connectionChecks(),
-        agents: note('本机 SDK 支持只读文本会话。Agent 预设、MCP 和提示词模板可在 VPS SSH 的设置中管理。'),
-        memory: note('本机 Codex 历史保存在独立的本机配置中。项目记忆可在 VPS SSH 的设置中管理。'),
-      },
-    }));
+    active ? settings : settingsSurface.show(settings, { 'data-local-sdk': '', 'data-tool-theme': 'codex',
+      'data-vc-color': appearance?.color, 'data-vc-accent': appearance?.accent, 'data-vc-motion': appearance?.motion }));
 
     function connectionChecks() {
       return h(React.Fragment, null,
@@ -590,7 +585,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
             } : null }),
           h(ConnectionResult, { id: 'response', label: '实际模型响应', detail: '试跑使用所选配置的模型和本机网络。',
             result: trialResult(trial, trialTarget) },
-          h(TrialActions, { trial, target: trialTarget, allowed: active && !browsing && !accessPending && !statusBusy }))));
+          h(TrialActions, { trial, target: trialTarget, allowed: Boolean(settingsTab) && !browsing && !accessPending && !statusBusy }))));
     }
 
     function profileFields() {

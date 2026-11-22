@@ -46,6 +46,8 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
         bool needsPinStorage = request.Op is "send" or "setup-check" ||
             (request.Op == "models" && settings.Provider is ("codex" or "antigravity"));
         EnsureDirectory(stateRoot, needsPinStorage);
+        if (request.Op == "configuration") return new { ok = true, targetId = request.TargetId,
+            memoryTargetId = settings.MemoryFingerprint(), sessions = Array.Empty<object>() };
         EnsureDirectory(directory, needsPinStorage);
         if (request.Op == "list") return new { ok = true, targetId = request.TargetId,
             memoryTargetId = settings.MemoryFingerprint(), sessions = ListSessions() };
@@ -154,7 +156,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
         }
     }
 
-    internal static object ReadPreset(string stateRoot)
+    internal static object ReadPreset(string stateRoot, bool includeSessions)
     {
         EnsureDirectory(stateRoot, create: false);
         string path = Path.Combine(stateRoot, "default-target.json");
@@ -175,13 +177,18 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
         string targetId = target.Fingerprint();
         if (BridgeProtocol.Text(preset, "targetId") != targetId)
             throw new BridgeError("target_changed", "默认 VPS 的连接设置或主机指纹已变化，请重新核对。");
-        var bridge = new ChatBridge(stateRoot, new("list", target, targetId, Guid.Empty, Guid.Empty, null));
-        EnsureDirectory(bridge.directory, create: false);
+        object[] sessions = [];
+        if (includeSessions)
+        {
+            var bridge = new ChatBridge(stateRoot, new("list", target, targetId, Guid.Empty, Guid.Empty, null));
+            EnsureDirectory(bridge.directory, create: false);
+            sessions = bridge.ListSessions();
+        }
         return new
         {
             ok = true,
             preset = new { name, settings = form.Clone(), targetId, memoryTargetId = target.MemoryFingerprint(),
-                sessions = bridge.ListSessions() }
+                sessions }
         };
     }
 

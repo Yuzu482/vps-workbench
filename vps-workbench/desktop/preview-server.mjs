@@ -216,7 +216,7 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
       try {
         const { op, value } = await readPacket(request);
         if (op !== 'save-connection') throw new Error('invalid_preview_connection');
-        const saved = await readSetupPreset(value, (settings) => fixtures.chat({ op: 'list', settings }));
+        const saved = await readSetupPreset(value, (settings) => fixtures.chat({ op: 'configuration', settings }));
         if (!saved.ok) throw new Error('invalid_preview_connection');
         await data.setPreference(setupConnectionKey, value);
         return json(response, { ok: true });
@@ -285,6 +285,11 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
       try {
         const packet = await readPacket(request);
         if (!(isChat ? permitsChat : permitsTerminal)(access, packet.op)) return json(response, accessDenied, 403);
+        if (isChat && packet.op === 'configuration') {
+          const saved = packet.settings ? undefined : data.preference(setupConnectionKey);
+          return json(response, saved === undefined ? fixtures.chat(packet) :
+            await readSetupPreset(saved, (settings) => fixtures.chat({ op: 'configuration', settings })));
+        }
         if (isChat && packet.op === 'preset' && data.preference(setupConnectionKey)) {
           return json(response, await readSetupPreset(data.preference(setupConnectionKey), (settings) => chat.request({ op: 'list', settings })));
         }

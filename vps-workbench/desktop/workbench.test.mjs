@@ -693,18 +693,24 @@ test('setup checks are scoped to the verified route and saved connections are re
     { ...ssh, settings: { ...settings, hostKeyConfirmed: false } },
     { ...trial, prompt: 'unexpected' }, { ...trial, kind: 'inspect', model: 'preview-codex' },
     { ...trial, sessionId: trial.turnId }, { ...trial, targetId: 'local-' + trial.sessionId },
+    { op: 'configuration', settings, targetId },
+    { op: 'configuration', settings: { ...settings, hostKeyConfirmed: false } },
   ]) assert.equal((await rpc(invalid)).status, 400);
   access = { ...access, mode: 'browse' };
   assert.equal((await rpc(ssh)).status, 403);
   assert.equal((await rpc(trial)).status, 403);
   assert.deepEqual(calls, []);
+  await data.setPreference(setupConnectionKey, JSON.stringify({ settings, targetId }));
+  const configured = await (await rpc({ op: 'configuration' })).json();
+  assert.deepEqual(configured.preset, { name: '本机保存的 VPS', settings, ok: true, targetId, memoryTargetId: targetId, sessions: [] });
+  assert.deepEqual(calls, ['configuration']);
   access = { ...access, mode: 'execute' };
   assert.deepEqual(await (await rpc(ssh)).json(), { ok: true, targetId, status: 'connected' });
   await data.setPreference(setupConnectionKey, JSON.stringify({ settings, targetId }));
   assert.equal((await (await rpc({ op: 'preset' })).json()).preset.targetId, targetId);
   await data.setPreference(setupConnectionKey, JSON.stringify({ settings, targetId: 'c'.repeat(64) }));
   assert.equal((await (await rpc({ op: 'preset' })).json()).code, 'target_changed');
-  assert.deepEqual(calls, ['setup-check', 'list', 'list']);
+  assert.deepEqual(calls, ['configuration', 'setup-check', 'list', 'list']);
   assert.equal((await (await rpc({ ...trial, kind: 'inspect' })).json()).status, 'unknown');
   assert.equal(calls.at(-1), 'get');
   const started = await (await rpc(trial)).json();
