@@ -907,6 +907,14 @@ test('from local history an unvisited VPS loads only connection metadata and kee
   await settings.getByRole('button', { name: '选择工作目录并保存', exact: true }).click();
   await settings.getByText('本机测试配置', { exact: true }).last().waitFor();
   await settings.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await page.getByText('向本机 Codex 提问，或让它带你熟悉当前项目。', { exact: true }).waitFor();
+  const model = page.getByRole('dialog', { name: '模型', exact: true });
+  await page.getByRole('button', { name: '模型', exact: true }).click();
+  await model.locator('.vc-advanced-model > summary').click();
+  await model.locator('select[name=verbosity]').selectOption('low');
+  await model.getByRole('button', { name: '应用', exact: true }).click();
+  await model.getByText('已应用到后续请求。', { exact: true }).waitFor();
+  await model.getByRole('button', { name: '关闭', exact: true }).click();
   const draft = page.getByRole('textbox', { name: '本地对话草稿' });
   await draft.fill('原本机会话');
   await page.getByRole('button', { name: '发送', exact: true }).click();

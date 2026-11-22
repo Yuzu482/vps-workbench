@@ -81,15 +81,20 @@ test('desktop workbench opens legacy chats and persists independent design branc
   const first = await f.legacy({ op: 'send', sessionId: 'local-' + legacyId, turnId: randomUUID(), targetId: f.route.targetId, prompt: '旧版对话' });
   await f.finish({ sessionId: legacyId, turnId: first.session.turns[0].id });
   assert.equal((await f.request('list')).sessions[0].id, legacyId);
-  const continued = f.send('续聊', { sessionId: legacyId, model: 'gpt-6-sol', effort: 'high' });
+  const { fields } = await f.request('model-options');
+  assert.deepEqual(fields, ['verbosity']);
+  assert.equal((await f.send('无效参数', { advanced: { temperature: 0.1 } }).result).code, 'invalid_request');
+  const advanced = { verbosity: 'low' };
+  const continued = f.send('续聊', { sessionId: legacyId, model: 'gpt-6-sol', effort: 'high', advanced });
   assert.equal((await continued.result).ok, true);
   await f.finish(continued);
   assert.ok(f.calls[1].threadId);
   assert.equal(f.calls[1].profile.effort, 'high');
+  assert.equal(f.calls[1].options.verbosity, 'low');
   assert.equal((await f.request('send', { sessionId: legacyId, turnId: continued.turnId, prompt: '续聊',
-    model: 'gpt-6-sol', effort: 'high' })).duplicate, true);
+    model: 'gpt-6-sol', effort: 'high', advanced })).duplicate, true);
   assert.equal((await f.request('send', { sessionId: legacyId, turnId: continued.turnId, prompt: '续聊',
-    model: 'gpt-6-sol', effort: 'medium' })).code, 'turn_conflict');
+    model: 'gpt-6-sol', effort: 'high', advanced: { verbosity: 'high' } })).code, 'turn_conflict');
 
   const initial = f.send('制作图标页', { mode: 'design', designContext: { text: '参考用图', images: [
     { name: 'image.png', dataUrl: 'data:image/png;base64,iVBORw0KGgo=' },
@@ -115,7 +120,7 @@ test('desktop workbench opens legacy chats and persists independent design branc
   assert.deepEqual(history.map(({ parentTurnId, fork }) => [parentTurnId, fork]), [[null, false], [initial.turnId, false], [initial.turnId, true]]);
   assert.equal((await f.request('design-history', { sessionId: initial.sessionId, turnId: next.turnId })).turn.state, 'complete');
   assert.equal((await f.request('send', { sessionId: legacyId, turnId: continued.turnId, prompt: '续聊',
-    model: 'gpt-6-sol', effort: 'high' })).duplicate, true);
+    model: 'gpt-6-sol', effort: 'high', advanced })).duplicate, true);
   assert.equal(f.calls.length, count);
 });
 

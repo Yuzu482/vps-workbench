@@ -1356,6 +1356,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       assert.notEqual(greenColors.color, darkColors.color);
       assert.equal(greenColors.accent, '#94d5b9');
       assertSharedFade(darkColors, middleAccent, greenColors);
+      await dialog.locator('.vc-settings-disclosure:not([open]) > summary').filter({ hasText: '强调色' }).waitFor();
       await accents.click();
       await dialog.getByRole('button', { name: '跟随执行端', exact: true }).click();
       assert.deepEqual(await checkWindowColors(), darkColors);

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { extractHtmlFences } from '../../remote-workbench/vps-chat/client/design-preview.js';
+import { modelParameterFields, validModelParameters } from '../../remote-workbench/vps-chat/client/model-parameters.js';
 import { validDesignContext, validWorkflowArtifactQuery } from '../../remote-workbench/vps-chat/host/index.js';
 import { createProjectMemoryBridge } from '../desktop/project-memory.mjs';
 import { canonicalLocalDirectory } from '../desktop/codex-runtime.mjs';
@@ -31,7 +32,7 @@ const actions = {
 };
 const optional = {
   list: ['targetId'], refresh: ['turnId'], 'design-history': ['turnId'], 'workflow-artifacts': ['after', 'path', 'offset'],
-  send: ['mode', 'model', 'effort', 'designBase', 'designContext', 'extensions', 'projectMemory', 'workflowStage'],
+  send: ['mode', 'model', 'effort', 'advanced', 'designBase', 'designContext', 'extensions', 'projectMemory', 'workflowStage'],
 };
 
 function fingerprint(value) {
@@ -57,6 +58,7 @@ function validRequest(body) {
       workflowUuid(body.designBase.parentTurnId) && typeof body.designBase.fork === 'boolean')) &&
     (body.model === undefined || (typeof body.model === 'string' && body.model.length <= 100)) &&
     (body.effort === undefined || (typeof body.effort === 'string' && body.effort.length <= 24 && body.model !== undefined)) &&
+    (body.advanced === undefined || validModelParameters(backend, body.advanced)) &&
     (body.projectMemory === undefined || (exactFields(body.projectMemory, 'projectId') &&
       (body.projectMemory.projectId === null || (typeof body.projectMemory.projectId === 'string' &&
         body.projectMemory.projectId.trim() && body.projectMemory.projectId.length <= 256 &&
@@ -178,7 +180,7 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data,
       ...entry, displayName: label, isDefault: entry.id === profile.model,
       defaultEffort: entry.id === profile.model && entry.efforts.includes(profile.effort) ? profile.effort : entry.defaultEffort,
     })) };
-    if (body.op === 'model-options') return { ok: true, fields: [] };
+    if (body.op === 'model-options') return { ok: true, fields: modelParameterFields(backend) };
     if (body.op === 'list') {
       const result = await raw(body, profile, 'list');
       return result.ok ? { ...result, memoryTargetId: targetId, sessions: result.sessions.map(({ id, ...row }) => ({
@@ -256,7 +258,8 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data,
           [{ type: 'text', text: '参考图 ' + name }, image])] : text;
       };
       const signature = original?.signature ?? fingerprint(body);
-      const result = await raw(body, profile, 'send', { fingerprint: signature, model: model.id, effort, mode, base, input, designInput,
+      const result = await raw(body, profile, 'send', { fingerprint: signature, model: model.id, effort,
+        verbosity: body.advanced?.verbosity, mode, base, input, designInput,
         mcpServers, permittedResources,
         background: background || Boolean(body.workflowFiles),
         workspace: background || body.workflowFiles ? 'private' : 'profile' }, { prompt: body.prompt });

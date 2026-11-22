@@ -108,7 +108,7 @@ export async function openCodexRuntime({ runtimeRoot, stateRoot, apiKey, environ
   return {
     runtimeAvailable,
     credentialConfigured: () => credentialConfigured,
-    async createThread(profile, threadId, { workspace, sessionId, rasterInput, mcpServers = [] } = {}) {
+    async createThread(profile, threadId, { workspace, sessionId, rasterInput, mcpServers = [], verbosity } = {}) {
       if (!credentialConfigured) throw error('auth_required');
       if (!runtimeAvailable) throw error('invalid_environment');
       // Recheck each run so a replaced directory cannot redirect an existing profile.
@@ -135,6 +135,7 @@ export async function openCodexRuntime({ runtimeRoot, stateRoot, apiKey, environ
         configOverrides: [projectTrustOverride(directory), localMcpOverride(mcpServers)],
         config: {
           model_provider: 'openai', forced_login_method: 'api', cli_auth_credentials_store: 'keyring',
+          ...(verbosity && { model_verbosity: verbosity }),
           windows: { sandbox: 'unelevated' }, check_for_update_on_startup: false,
           shell_environment_policy: { inherit: 'none', ignore_default_excludes: false },
           features: { apps: false, plugins: false, memories: false, memory_tool: false,

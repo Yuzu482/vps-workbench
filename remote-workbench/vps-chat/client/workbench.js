@@ -1563,7 +1563,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     async function readMemoryModels(signal) {
       if (!remoteEnabled || !configurationReady || !configuration.memoryTargetId ||
           (!localSdk && !configuration.settings?.hostKeyConfirmed)) {
-        throw new Error('请连接并确认当前 VPS 后读取记忆提炼模型。');
+        throw new Error(localSdk ? '请选择本机配置并启用执行后读取记忆提炼模型。' : '请连接并确认当前 VPS 后读取记忆提炼模型。');
       }
       const settings = { ...configuration.settings, provider: 'codex' };
       return readModelCatalog(await rpc('models', { settings, targetId: configuration.memoryTargetId }, signal));
@@ -1729,7 +1729,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         if (!controller.signal.aborted) setModelCatalogs((previous) => ({ ...previous, [targetId]: { models } }));
       } catch (error) {
         if (!controller.signal.aborted) setModelCatalogs((previous) => ({
-          ...previous, [targetId]: { error: errorText(error, '暂时无法读取 VPS 模型目录。') },
+          ...previous, [targetId]: { error: errorText(error, localSdk ? '暂时无法读取本机 Codex 模型目录。' : '暂时无法读取 VPS 模型目录。') },
         }));
       } finally {
         if (modelReads.current.get(targetId) === controller) modelReads.current.delete(targetId);
@@ -2220,7 +2220,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
                 onClick: openSetup }, '打开接入向导') : null)
             : working !== 'history' && snapshot ? h(React.Fragment, null,
               h('p', null, design ? '描述用途、目标用户和视觉方向。原型会出现在设计画布。'
-                : '向 VPS 上的助手提问，或让它带你熟悉当前项目。'),
+                : localSdk ? '向本机 Codex 提问，或让它带你熟悉当前项目。' : '向 VPS 上的助手提问，或让它带你熟悉当前项目。'),
               !draft ? h('button', { type: 'button', className: 'vc-button vc-example', onClick: fillExample,
                 'aria-label': design ? '填入设计示例' : '填入对话示例',
               }, design ? '独立书店网站示例' : '项目导读示例') : null) : null)));

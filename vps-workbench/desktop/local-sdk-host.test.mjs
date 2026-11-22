@@ -56,6 +56,7 @@ test('pinned SDK receives only the selected Windows API route, private state and
   assert.ok(sdk.configOverrides[0].includes(JSON.stringify(directory) + ' = { trust_level = "untrusted" }'));
   assert.equal(sdk.config.windows.sandbox, 'unelevated');
   assert.equal(sdk.config.model_provider, 'openai');
+  assert.equal(Object.hasOwn(sdk.config, 'model_verbosity'), false);
   assert.equal(sdk.config.forced_login_method, 'api');
   assert.equal(sdk.config.shell_environment_policy.inherit, 'none');
   assert.equal(sdk.config.features.system_proxy_fallback, false);
@@ -63,7 +64,9 @@ test('pinned SDK receives only the selected Windows API route, private state and
   for (const name of ['HTTPS_PROXY', 'OPENAI_BASE_URL', 'OPENAI_API_KEY', 'SSH_CONNECTION',
     'CODEX_WINDOWS_REGISTERED_CORE', 'NODE_OPTIONS', localCredentialVariable]) assert.equal(Object.hasOwn(sdk.env, name), false);
   assert.equal(sdk.env.PATH.includes('untrusted'), false);
-  assert.deepEqual(await runtime.createThread(profile, 'native-thread'), { ...first, method: 'resume', id: 'native-thread' });
+  assert.deepEqual(await runtime.createThread(profile, 'native-thread', { verbosity: 'low' }),
+    { ...first, method: 'resume', id: 'native-thread' });
+  assert.equal(calls[1].config.model_verbosity, 'low');
   await writeFile(join(sdk.env.CODEX_HOME, 'config.toml'), 'Injected per-user configuration.');
   await assert.rejects(runtime.createThread(profile, 'native-thread'), { code: 'invalid_environment' });
   const unauthenticated = await openCodexRuntime({ ...options, apiKey: undefined });

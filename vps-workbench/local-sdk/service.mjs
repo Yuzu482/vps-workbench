@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { parameterLevels } from '../../remote-workbench/vps-chat/client/model-parameters.js';
 import { lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 
@@ -149,10 +150,12 @@ function validateStore(store) {
         const meta = turn.execution;
         const fields = ['fingerprint', 'model', 'effort', 'workspace'];
         if (Object.hasOwn(meta, 'usedTokens')) fields.push('usedTokens');
+        if (Object.hasOwn(meta, 'verbosity')) fields.push('verbosity');
         if (session.mode === 'design') fields.push('branch');
         if (!exact(meta, fields) || !digest.test(meta.fingerprint) || !validText(meta.model) || !validText(meta.effort) ||
             !['profile', 'private'].includes(meta.workspace) || (fields.includes('usedTokens') &&
-              (!Number.isSafeInteger(meta.usedTokens) || meta.usedTokens < 0))) return false;
+              (!Number.isSafeInteger(meta.usedTokens) || meta.usedTokens < 0)) ||
+            (fields.includes('verbosity') && !parameterLevels.includes(meta.verbosity))) return false;
         if (session.mode === 'design') {
           const branch = meta.branch;
           if (!exact(branch, ['parentTurnId', 'fork', 'nativeThreadId']) ||
@@ -400,6 +403,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       const thread = await createThread({ ...profile, ...(start.execution && {
         model: start.execution.model, effort: start.execution.effort,
       }) }, start.nativeThreadId, { workspace: start.execution?.workspace, sessionId, signal, mcpServers: options?.mcpServers,
+        verbosity: start.execution?.verbosity,
         rasterInput: Array.isArray(input) && input.some(({ type }) => type === 'raster') });
       const beforeDispatch = executionBlock();
       if (signal.aborted || beforeDispatch === 'browse_only') return await finish(stateResult('stopped'));
@@ -487,7 +491,8 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       branch = { parentTurnId: base?.id ?? null, fork: options.base?.fork ?? false, nativeThreadId: null };
       input = options.designInput(base?.reply ?? '');
     }
-    const execution = options && { fingerprint: options.fingerprint, model, effort, workspace, ...(branch && { branch }) };
+    const execution = options && { fingerprint: options.fingerprint, model, effort, workspace,
+      ...(branch && { branch }), ...(options.verbosity && { verbosity: options.verbosity }) };
     const currentRevocation = revocation;
     await commit((next) => {
       const updatedAt = new Date().toISOString();
