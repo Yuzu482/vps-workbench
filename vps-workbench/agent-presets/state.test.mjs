@@ -192,7 +192,7 @@ test('resource editor keeps stale selections visible, blocks rebinding and emits
   assert.equal(control(initial, '默认不共享').props.checked, true);
   assert.equal(control(initial, '独立上下文').props.checked, false);
   control(initial, 'MCP 服务').props.onClick();
-  control(initial, '插件提示词模板').props.onClick();
+  control(initial, '提示词模板').props.onClick();
   assert.equal(emitted, undefined);
 
   const open = render(props);
@@ -226,10 +226,10 @@ test('resource editor keeps stale selections visible, blocks rebinding and emits
   assert.equal(control(stale, 'index'), undefined);
   assert.equal(control(stale, `${installed.name} · ${template.title}`), undefined);
   const staleReasons = elements(stale).filter(({ type }) => type === 'small').map(({ children }) => children[0]);
-  assert.deepEqual(staleReasons, ['属于其他连接，可移除后重新选择', '插件已停用']);
+  assert.deepEqual(staleReasons, ['属于其他连接，可移除后重新选择', '提示词模板已停用']);
   control(stale, '移除MCP 服务 docs').props.onClick();
   assert.deepEqual(emitted, { ...agent, mcpServers: [] });
-  const removePlugin = elements(stale).find(({ props }) => props?.['aria-label']?.startsWith('移除插件提示词模板'));
+  const removePlugin = elements(stale).find(({ props }) => props?.['aria-label']?.startsWith('移除提示词模板'));
   removePlugin.props.onClick();
   assert.deepEqual(emitted, { ...agent, plugins: [] });
   assert.equal(control(render({ ...props, provider: 'claude', agent }), 'index'), undefined);

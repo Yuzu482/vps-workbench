@@ -125,17 +125,17 @@ export function createExtensionSettings(React) {
     return h(React.Fragment, null,
       h('p', null, '启用后，可从输入栏插入清单中的纯文本提示词模板。'),
       h('section', { className: 'vc-settings-group' },
-        h('h4', null, '导入模板清单'),
+        h('h4', null, '导入提示词模板清单'),
         field('粘贴 JSON 清单', { value: source, maxLength: maxImportBytes, disabled, spellCheck: false,
           onChange: event => setSource(event.target.value) }, 'textarea'),
         h('input', { hidden: true, ref: fileInput, type: 'file', accept: '.json,application/json', disabled, onChange: fileImport }),
-        actions(button('导入粘贴内容', pasteImport, disabled || !source.trim(), true),
-          button('选择 JSON 文件', () => fileInput.current?.click(), disabled))),
+        actions(button('导入粘贴的提示词模板', pasteImport, disabled || !source.trim(), true),
+          button('从 JSON 文件导入', () => fileInput.current?.click(), disabled))),
       state.plugins.map(plugin => h('section', { key: plugin.id, className: 'vc-settings-group' },
         h('h4', null, plugin.name), h('p', { className: 'vc-settings-description' }, `${plugin.id} · ${plugin.version}`),
         plugin.description ? h('p', { className: 'vc-extension-preview' }, plugin.description) : null,
-        actions(toggle('启用插件', plugin.enabled, enabled => submit({ op: 'set-plugin', id: plugin.id, enabled }), disabled),
-          button('移除插件', () => submit({ op: 'remove-plugin', id: plugin.id }), disabled)),
+        actions(toggle('启用提示词模板', plugin.enabled, enabled => submit({ op: 'set-plugin', id: plugin.id, enabled }), disabled),
+          button('移除提示词模板', () => submit({ op: 'remove-plugin', id: plugin.id }), disabled)),
         h('details', { className: 'vc-settings-disclosure vc-details-motion' },
           h('summary', null, h('strong', { className: 'vc-settings-description' }, '提示词模板'),
             h('i', { className: 'vc-settings-chevron', 'aria-hidden': true })),
@@ -210,7 +210,7 @@ export function createExtensionSettings(React) {
         button('保存提炼设置', save, disabled || !ready || loading || !dirty || !available, true)));
   }
 
-  function MemorySettings({ state, submit, targetId, memoryTargetId, readMemoryModels, projects, selectedProject, disabled }) {
+  function MemorySettings({ state, submit, targetId, memoryTargetId, connectionName, readMemoryModels, projects, selectedProject, disabled }) {
     const [draft, setDraft] = React.useState(null);
     const [automaticProject, setAutomaticProject] = React.useState(selectedProject);
     React.useEffect(() => setAutomaticProject(selectedProject), [selectedProject]);
@@ -266,6 +266,8 @@ export function createExtensionSettings(React) {
         button('取消', () => setDraft(null), disabled))) : null;
 
     return h(React.Fragment, null,
+      h('p', { className: 'vc-settings-current' }, memoryTargetId ? `作用范围 · VPS SSH · ${connectionName || '当前 VPS'}`
+        : '配置 VPS SSH 后可查看此连接的记忆。'),
       h('section', { className: 'vc-settings-group' },
         toggle('开启个人自动记忆', state.personalMemory?.enabled ?? false,
           enabled => submit({ op: 'set-personal-memory', enabled }), disabled, {
@@ -279,7 +281,8 @@ export function createExtensionSettings(React) {
           disabled || !memoryTargetId || !projectId, {
             title: '自动项目记忆', description: '同一 VPS 下，项目会话可以跨工具引用相关记忆，包括手动添加的项目记忆。',
           }),
-        field('项目', { value: projectId, disabled: disabled || !projects.size || Boolean(draft?.source && draft.projectId !== null),
+        field('记忆所属项目', { 'aria-label': '记忆所属项目', value: projectId,
+          disabled: disabled || !projects.size || Boolean(draft?.source && draft.projectId !== null),
           onChange: event => setAutomaticProject(event.target.value) }, 'select', [
           h('option', { key: '', value: '' }, '选择项目'), ...projectOptions,
         ]),
@@ -321,7 +324,7 @@ export function createExtensionSettings(React) {
         return true;
       } catch {
         setError(op === 'set-memory-extraction-model' ? '无法保存记忆提炼设置。请核对 VPS 连接和 Codex 模型目录，或恢复默认。'
-          : section === 'plugins' ? '无法保存插件设置，请检查清单格式、内容长度及插件 ID。' : '无法保存，请检查设置内容和长度后重试。');
+          : section === 'plugins' ? '无法保存提示词模板，请检查清单格式、内容长度和清单 ID。' : '无法保存，请检查设置内容和长度后重试。');
         return false;
       } finally {
         request.current = false;

@@ -341,8 +341,8 @@ export function createStageGraph(React, { defaultModel, providerLabel, agentMemo
           h('dt', null, '模型'), h('dd', null, model || defaultModel(provider)),
           hasResources && h(React.Fragment, null,
             h('dt', null, 'MCP 服务'), h('dd', null, servers.join('、') || '无'),
-            h('dt', null, '插件模板'), h('dd', null, templates.join('、') || '无'))),
-        !hasResources && h('p', null, '未配置 MCP 服务或插件模板')), detailDialog);
+            h('dt', null, '提示词模板'), h('dd', null, templates.join('、') || '无'))),
+        !hasResources && h('p', null, '未配置 MCP 服务或提示词模板')), detailDialog);
     }
 
     const sourceIndexInDraft = source ? stages.findIndex(({ id }) => id === source) : -1;

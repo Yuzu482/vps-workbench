@@ -7,6 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { openSettingsSection } from './test-settings.mjs';
 import { openAppData } from './data.mjs';
+import { createBridge } from '../../remote-workbench/vps-chat/host/index.js';
 
 const require = createRequire(import.meta.url);
 const { _electron } = require('../../dsh-terminal-workbench/client/browser-test/node_modules/playwright-core');
@@ -53,6 +54,16 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
   }
   await writeFile(join(conversations, 'default-target.json'),
     JSON.stringify({ name: '独立验收服务器', settings, targetId }));
+  if (!legacyBaseline) {
+    const bridge = createBridge({ root: conversations, executable: join(runtime, 'DshVpsChatBridge.exe'),
+      compatibilityDirectory: join(runtime, 'compat'), pythonPath: join(directory, 'unused-python.exe') });
+    const response = await bridge.request({ op: 'configuration' });
+    bridge.dispose();
+    assert.equal(response.ok, true);
+    assert.equal(response.preset.targetId, targetId);
+    assert.match(response.preset.memoryTargetId, /^[a-f0-9]{64}$/);
+    assert.deepEqual(response.preset.sessions, []);
+  }
   // Enforce an invalid relay for the fixture so any unexpected real operation fails before SSH.
   await writeFile(join(conversations, 'ssh-relay.json'), '{}');
   const python = join(process.env.LOCALAPPDATA, 'Programs/Python/Python311/python.exe');
@@ -413,8 +424,8 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
         schema: 1, id: 'fixture-tools', name: '示例插件', version: '1.0.0', description: '',
         prompts: [{ title: '检查资源', text: template }],
       }));
-      await settingsPanel.getByRole('button', { name: '导入粘贴内容', exact: true }).click();
-      const plugin = settingsPanel.getByRole('switch', { name: '启用插件', exact: true });
+      await settingsPanel.getByRole('button', { name: '导入粘贴的提示词模板', exact: true }).click();
+      const plugin = settingsPanel.getByRole('switch', { name: '启用提示词模板', exact: true });
       assert.equal(await plugin.isChecked(), false);
       await plugin.click();
       await plugin.and(settingsPanel.locator('input:checked')).waitFor();
@@ -433,7 +444,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       });
       await settingsPanel.getByText('个人自动记忆', { exact: true }).click();
       await personalMemory.and(settingsPanel.locator('input:not(:checked)')).waitFor();
-      await settingsPanel.getByRole('combobox', { name: /^项目/ }).selectOption('');
+      await settingsPanel.getByRole('combobox', { name: '记忆所属项目', exact: true }).selectOption('');
       assert.equal(await settingsPanel.getByRole('switch', { name: '开启此项目的自动记忆', exact: true }).isDisabled(), true);
       assert.equal(await settingsPanel.getByRole('combobox', { name: /^Codex 模型/ }).inputValue(), '');
       assert.equal(await settingsPanel.getByRole('combobox', { name: /^提炼推理强度/ }).inputValue(), '');
@@ -447,8 +458,8 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await settingsPanel.getByRole('button', { name: '完成', exact: true }).click();
       await settingsPanel.waitFor({ state: 'hidden' });
       await editor.fill('');
-      await page.getByRole('button', { name: '插件模板', exact: true }).click();
-      await page.getByRole('dialog', { name: '插件模板', exact: true })
+      await page.getByRole('button', { name: '提示词模板', exact: true }).click();
+      await page.getByRole('dialog', { name: '提示词模板', exact: true })
         .getByRole('button', { name: '检查资源', exact: true }).click();
       assert.equal(await editor.inputValue(), template);
       await page.getByText('长期记忆 1 条', { exact: true }).waitFor();

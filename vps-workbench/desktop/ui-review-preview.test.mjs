@@ -9,6 +9,7 @@ import { agentPresetKey, applyAgentPresetChange } from '../agent-presets/state.m
 import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
 import { designExportMenu } from '../../remote-workbench/vps-chat/client/design-export-menu.js';
 import { setupConnectionKey } from './setup-state.mjs';
+import { extensionPreferenceKey, readExtensions } from '../extensions/state.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('../../dsh-terminal-workbench/client/browser-test/node_modules/playwright-core');
@@ -491,7 +492,7 @@ test('P4 keeps base failures blocking and runs the isolated sample despite optio
   await check.click();
   await base.getByText('4 / 4 项通过', { exact: true }).waitFor();
   await step(extras, 'MCP 服务器').getByRole('alert').getByText(/missing-fixture-mcp/).waitFor();
-  await step(extras, '插件模板').getByText('已通过', { exact: true }).waitFor();
+  await step(extras, '提示词模板').getByText('已通过', { exact: true }).waitFor();
   assert.equal(await example.isEnabled(), true);
 
   await selected.selectOption(modelId);
@@ -786,7 +787,7 @@ test('saving VPS settings and closing from the other location preserves the sele
   await entry.click();
   const settings = page.getByRole('dialog', { name: '设置', exact: true });
   await openSettingsSection(settings, '连接');
-  const directory = settings.getByLabel(/^(远端项目目录|工作目录)$/u);
+  const directory = settings.getByLabel('工作目录', { exact: true });
   await directory.fill('/srv/changed-fixture');
   await settings.getByRole('group', { name: '配置的执行位置' }).getByRole('button', { name: '本机 SDK' }).click();
   await page.getByRole('dialog', { name: '有未保存的设置' }).getByRole('button', { name: '保存并继续' }).click();
@@ -850,6 +851,95 @@ test('from local history an unvisited VPS loads only connection metadata and kee
   assert.deepEqual(packets, [{ op: 'configuration' }]);
 });
 
+test('local resource pages link to the matching VPS settings and keep the local draft', { timeout: 35_000 }, async (t) => {
+  const page = await openPreview(t, { seed({ preferences }) {
+    preferences['dsh-vps-chat:desktop-view-location:v1'] = 'local-sdk';
+    preferences['dsh-vps-chat:desktop-new-location:v1'] = 'local-sdk';
+  } });
+  const requests = [];
+  await page.route('**/dsh-vps-chat/api/rpc', (route) => {
+    requests.push(route.request().postDataJSON());
+    return route.continue();
+  });
+  const draft = page.getByRole('textbox', { name: '本地对话草稿', exact: true });
+  await draft.fill('本机草稿');
+  const entry = page.getByRole('button', { name: '设置', exact: true });
+  await entry.press('Enter');
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await settings.getByText(/独立的本机存储/u).waitFor();
+  const cases = [
+    ['提示词模板', '打开 VPS 提示词模板', settings.getByLabel('粘贴 JSON 清单', { exact: true })],
+    ['Agent 预设', '打开 VPS Agent 预设', settings.getByRole('button', { name: '新建预设', exact: true })],
+    ['MCP 服务器', '打开 VPS MCP 服务器', settings.getByLabel('服务 ID', { exact: true })],
+    ['长期记忆', '打开 VPS 记忆', settings.getByText(/作用范围 · VPS SSH/u)],
+  ];
+  const locations = settings.getByRole('group', { name: '配置的执行位置', exact: true });
+  for (const [section, label, targetControl] of cases) {
+    await openSettingsSection(settings, section);
+    assert.equal(await targetControl.count(), 0);
+    await settings.getByRole('button', { name: label, exact: true }).press('Enter');
+    await targetControl.waitFor();
+    assert.equal(await locations.getByRole('button', { name: 'VPS SSH', exact: true }).getAttribute('aria-pressed'), 'true');
+    if (section === '长期记忆') {
+      await settings.getByLabel('记忆所属项目', { exact: true }).selectOption({ label: '纸间书店' });
+      for (const name of ['开启个人自动记忆', '开启此项目的自动记忆', '随消息发送手动记忆']) {
+        assert.equal(await settings.getByRole('switch', { name, exact: true }).count(), 1);
+      }
+      assert.equal(await settings.getByRole('heading', { name: '记忆提炼模型', exact: true }).count(), 1);
+    }
+    await locations.getByRole('button', { name: '本机 SDK', exact: true }).and(settings.locator('button:enabled')).press('Enter');
+    await settings.getByRole('button', { name: label, exact: true }).waitFor();
+  }
+  await page.keyboard.press('Escape');
+  await settings.waitFor({ state: 'hidden' });
+  assert.equal(await draft.inputValue(), '本机草稿');
+  assert.equal(await page.getByLabel('新建位置', { exact: true }).inputValue(), 'local-sdk');
+  assert.equal(await entry.evaluate((node) => node === document.activeElement), true);
+  assert.deepEqual(requests, [{ op: 'configuration' }]);
+});
+
+test('prompt-template actions preserve the manifest and the existing DSH import entry', { timeout: 35_000 }, async (t) => {
+  const page = await openPreview(t, { viewport: { width: 365, height: 480 } });
+  await page.getByText('本地演示 · VPS 已配置', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '文件', exact: true }).press('ArrowDown');
+  await page.getByRole('menuitem', { name: '导入 DSH 对话数据…', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  const entry = page.getByRole('button', { name: '设置', exact: true });
+  const showSidebar = page.getByRole('button', { name: '展开会话侧栏', exact: true });
+  if (!await entry.isVisible()) await showSidebar.click();
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await entry.click();
+  await openSettingsSection(settings, '提示词模板');
+  const manifest = { schema: 1, id: 'fixture-review', name: '审校清单', version: '1.0.0', description: '',
+    prompts: [{ title: '审校证据', text: '检查每条结论的证据。' }] };
+  await settings.getByLabel('粘贴 JSON 清单', { exact: true }).fill(JSON.stringify(manifest));
+  await settings.getByRole('button', { name: '导入粘贴的提示词模板', exact: true }).press('Enter');
+  const group = settings.locator('.vc-settings-group').filter({ has: page.getByRole('heading', { name: manifest.name, exact: true }) });
+  const enable = group.getByRole('switch', { name: '启用提示词模板', exact: true });
+  await enable.press('Space');
+  await group.getByRole('switch', { name: '启用提示词模板', checked: true }).waitFor();
+  const saved = async () => readExtensions(await page.evaluate(({ storage, key }) =>
+    JSON.parse(sessionStorage.getItem(storage)).preferences[key], { storage: previewStorageKey, key: extensionPreferenceKey }));
+  const imported = (await saved()).plugins.find(({ id }) => id === manifest.id);
+  assert.equal(imported.version, manifest.version);
+  assert.deepEqual(imported.prompts, manifest.prompts);
+  await settings.getByRole('button', { name: '关闭设置', exact: true }).press('Enter');
+  const hideSidebar = page.getByRole('button', { name: '收起会话侧栏', exact: true });
+  if (await hideSidebar.isVisible()) await hideSidebar.click();
+  const composerTemplate = page.getByRole('button', { name: '提示词模板', exact: true });
+  await assertWithinViewport(composerTemplate);
+  await assertWithinViewport(page.getByRole('button', { name: '发送', exact: true }));
+  await composerTemplate.press('Enter');
+  await page.getByRole('dialog', { name: '提示词模板', exact: true }).getByRole('button', { name: '审校证据', exact: true }).press('Enter');
+  assert.equal(await page.getByRole('textbox', { name: '消息', exact: true }).inputValue(), manifest.prompts[0].text);
+  if (!await entry.isVisible()) await showSidebar.click();
+  await entry.press('Enter');
+  await openSettingsSection(settings, '提示词模板');
+  await group.getByRole('button', { name: '移除提示词模板', exact: true }).press('Enter');
+  await group.waitFor({ state: 'hidden' });
+  assert.equal((await saved()).plugins.some(({ id }) => id === manifest.id), false);
+});
+
 for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 }, { width: 420, height: 640 }]) {
   test(`settings separate execution locations and keep controls reachable at ${viewport.width}×${viewport.height}`,
     { timeout: 35_000 }, async (t) => {
@@ -861,7 +951,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
       const settings = page.getByRole('dialog', { name: '设置', exact: true });
       const navigation = settings.getByRole('navigation', { name: '设置分类', exact: true });
       assert.deepEqual(await navigation.getByRole('button').allTextContents(),
-        ['连接', '模型与账号', 'Agent 与工具', '数据与记忆', '应用偏好']);
+        ['连接', '模型与账号', 'Agent 与工具', '记忆', '应用偏好']);
       await openSettingsSection(settings, '提示词模板');
       await settings.getByRole('heading', { name: '提示词模板', exact: true }).waitFor();
       await assertWithinViewport(settings.getByRole('button', { name: '完成', exact: true }));
@@ -899,6 +989,15 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
       await settings.getByRole('button', { name: '测试本机配置', exact: true }).click();
       await settings.getByRole('listitem', { name: '本机 SDK', exact: true }).getByText('已通过', { exact: true }).waitFor();
       assert.equal(requests.length, priorVpsRequests);
+      await openSettingsSection(settings, '长期记忆');
+      const memoryLink = settings.getByRole('button', { name: '打开 VPS 记忆', exact: true });
+      await assertWithinViewport(memoryLink);
+      await memoryLink.press('Enter');
+      await settings.getByText(/作用范围 · VPS SSH/u).waitFor();
+      await assertWithinViewport(settings.getByRole('button', { name: '完成', exact: true }));
+      assert.equal(requests.length, priorVpsRequests);
+      await routeOptions.getByRole('button', { name: '本机 SDK', exact: true }).press('Enter');
+      await memoryLink.waitFor();
       await openSettingsSection(settings, '外观');
       const light = settings.getByRole('button', { name: '浅色', exact: true });
       await light.press('Enter');

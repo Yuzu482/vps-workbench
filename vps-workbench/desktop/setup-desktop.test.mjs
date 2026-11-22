@@ -78,7 +78,7 @@ test('a fresh desktop connection diagnoses each setup step and runs the sample o
 
     const fields = [
       ['VPS 主机', settings.host], ['SSH 端口', settings.port], ['SSH 用户名', settings.user],
-      ['远端项目目录', settings.workspace], ['SSH 私钥文件路径', settings.identityPath],
+      ['工作目录', settings.workspace], ['SSH 私钥文件路径', settings.identityPath],
       ['known_hosts 文件路径', settings.knownHostsPath], ['预期 VPS 出口 IPv4', settings.expectedIpv4],
     ];
     for (const [label, value] of fields) await guide.getByLabel(label, { exact: true }).fill(String(value));

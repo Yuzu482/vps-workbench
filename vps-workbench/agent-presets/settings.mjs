@@ -250,7 +250,7 @@ export function createAgentModulesEditor(React) {
     function templateStatus({ id, version, title }) {
       const current = installed.find((plugin) => plugin.id === id && plugin.version === version);
       if (!current || !current.prompts.some((prompt) => prompt.title === title)) return '模板或版本不可用';
-      return current.enabled ? '' : '插件已停用';
+      return current.enabled ? '' : '提示词模板已停用';
     }
 
     return h('fieldset', { className: 'vc-agent-modules' },
@@ -267,7 +267,7 @@ export function createAgentModulesEditor(React) {
           update: (mcpServers) => change({ mcpServers }),
         }),
         h(ResourcePicker, {
-          label: '插件提示词模板', selected: plugins, options: templateOptions, limit: maxStagePlugins,
+          label: '提示词模板', selected: plugins, options: templateOptions, limit: maxStagePlugins,
           identify: pluginKey, renderLabel: ({ id, version, title }) => `${title} · ${id} ${version}`,
           status: templateStatus, disabled, help: '没有可添加的提示词模板。',
           update: (plugins) => change({ plugins }),

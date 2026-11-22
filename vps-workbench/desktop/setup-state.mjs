@@ -2,7 +2,7 @@ import { readModelCatalog } from '../../remote-workbench/vps-chat/client/model-c
 
 export const setupConnectionKey = 'dsh-vps-chat:setup-connection:v1';
 export const setupChecks = [
-  ['ssh', 'SSH 连接与主机指纹', '核对主机指纹、SSH 登录和远端项目目录。'],
+  ['ssh', 'SSH 连接与主机指纹', '核对主机指纹、SSH 登录和VPS 工作目录。'],
   ['egress', '预期 VPS 出口', '核对 IPv4、已配置的 IPv6 和执行端的服务路由。'],
   ['account', '账号登录', '检查 VPS 上所选执行端的登录状态或 API 密钥。'],
   ['model', '模型目录', '读取所选执行端的模型选项。'],
@@ -33,7 +33,7 @@ export async function checkVpsConnection({ rpc, readList, settings, signal, upda
       return reply.status;
     }
     if (await probe('ssh') !== 'connected') throw new Error('VPS 未确认 SSH 连接。');
-    updateStep(step, 'passed', 'SSH 指纹、用户认证和远端项目目录已核对。');
+    updateStep(step, 'passed', 'SSH 指纹、用户认证和VPS 工作目录已核对。');
 
     step = 'egress';
     updateStep(step, 'checking', '正在核对 VPS 出口和执行端服务路由…');

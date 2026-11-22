@@ -57,7 +57,7 @@ function composeAgentPreset({ name, modules }) {
   const plugins = configs.get('plugins');
   const memory = configs.get('memory');
   if (mcp && (!Array.isArray(mcp.servers) || !mcp.servers.length)) throw new Error('MCP 服务列表无效。');
-  if (plugins && (!Array.isArray(plugins.templates) || !plugins.templates.length)) throw new Error('插件模板列表无效。');
+  if (plugins && (!Array.isArray(plugins.templates) || !plugins.templates.length)) throw new Error('提示词模板列表无效。');
   const agent = mcp || plugins || memory ? validateStageAgent({
     mcpServers: mcp ? mcp.servers : [],
     plugins: plugins ? plugins.templates : [],

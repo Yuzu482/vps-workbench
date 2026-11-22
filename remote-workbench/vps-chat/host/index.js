@@ -277,8 +277,8 @@ export function createBridge({
   let active = 0;
   return {
     async request(body, { current = false } = {}) {
-      if (disposed || typeof root !== 'string' || !isAbsolute(root) || !isAbsolute(pythonPath) ||
-          !existsSync(pythonPath)) return notReady;
+      if (disposed || typeof root !== 'string' || !isAbsolute(root) ||
+          (body.op !== 'configuration' && (!isAbsolute(pythonPath) || !existsSync(pythonPath)))) return notReady;
       const provider = body.settings?.provider;
       if (['configuration', 'setup-check', 'workflow-artifacts', 'approval'].includes(body.op) ||
           (provider === 'antigravity' && useCurrentAntigravity)) current = true;

@@ -26,11 +26,11 @@ export function checkStageResources({ provider, agent }, targetId, state) {
   for (const { id, version, title } of agent?.plugins ?? []) {
     const plugin = state.plugins.find((item) => item.enabled && item.id === id && item.version === version);
     const template = plugin?.prompts.find((item) => item.title === title);
-    if (!template) return unavailable(`插件模板「${title}」已停用、删除或换版。请重新选择该模板。`);
+    if (!template) return unavailable(`提示词模板「${title}」已停用、删除或换版。请重新选择该模板。`);
     pluginBlocks.push(`插件「${plugin.name}」的模板「${title}」\n${template.text}`);
   }
   try {
-    const pluginInstructions = pluginBlocks.length ? workflowText(pluginBlocks.join('\n\n'), 2200, '插件模板组合') : '';
+    const pluginInstructions = pluginBlocks.length ? workflowText(pluginBlocks.join('\n\n'), 2200, '提示词模板组合') : '';
     return { ok: true, mcpServers, pluginInstructions };
   } catch (error) { return unavailable(error.message); }
 }
@@ -66,6 +66,6 @@ export function prepareWorkflowStage(body, reference, readRun, state, isProject,
     return { ok: true, projectId, memory: stage.agent?.memory ?? 'isolated', mcpServers, fileAccess,
       prompt: workflowStagePrompt(run, index, pluginInstructions, true) };
   } catch {
-    return unavailable('此阶段的任务和插件模板组合过长。请缩短任务或减少模板。');
+    return unavailable('此阶段的任务和提示词模板组合过长。请缩短任务或减少模板。');
   }
 }

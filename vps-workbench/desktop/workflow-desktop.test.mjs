@@ -205,10 +205,11 @@ test('packaged Agent resources, scoped memory and legacy presets apply to a para
     await settings.getByRole('textbox', { name: '角色指令', exact: true }).fill(persona);
     await settings.getByRole('button', { name: '添加输出规范', exact: true }).click();
     await settings.getByRole('textbox', { name: '输出规范', exact: true }).fill(output);
-    const templates = settings.getByRole('button', { name: '插件提示词模板', exact: true });
+    const templates = settings.getByRole('region', { name: 'Agent 预设', exact: true })
+      .getByRole('button', { name: '提示词模板', exact: true });
     await templates.click();
     await settings.getByRole('button', { name: '文案工具 · 简洁表达', exact: true }).click();
-    await settings.getByRole('button', { name: /^移除插件提示词模板 /u }).waitFor();
+    await settings.getByRole('button', { name: /^移除提示词模板 /u }).waitFor();
     await radio(settings, '共享记忆').press('Space');
     await settings.getByRole('button', { name: '保存预设', exact: true }).click();
     await settings.getByRole('button', { name: '活动页文案 Agent', exact: true }).waitFor();
@@ -296,7 +297,7 @@ test('packaged Agent resources, scoped memory and legacy presets apply to a para
     assert.equal(await radio(copyStage, '共享记忆').isChecked(), true);
     await presetCard(legacyId, copyStage).click();
     assert.equal(await radio(copyStage, '默认不共享').isChecked(), true);
-    assert.equal(await copyStage.getByRole('button', { name: /^移除插件提示词模板 /u }).count(), 0);
+    assert.equal(await copyStage.getByRole('button', { name: /^移除提示词模板 /u }).count(), 0);
     await selectedCard.click();
     if (process.env.VPS_WORKBENCH_WORKFLOW_PRESETS_IMAGE) {
       await gallery(copyStage).scrollIntoViewIfNeeded();
@@ -330,7 +331,7 @@ test('packaged Agent resources, scoped memory and legacy presets apply to a para
     await checkAgentNode(secondNode, copyAgent.name, '共享记忆', 'claude-sdk');
     assert.ok(!(await secondNode.innerText()).includes(stages[1].model));
     await secondNode.hover();
-    await checkAgentTip([stages[1].model, 'MCP', '插件', '文案工具', '简洁表达']);
+    await checkAgentTip([stages[1].model, 'MCP', '提示词模板', '文案工具', '简洁表达']);
     if (process.env.VPS_WORKBENCH_WORKFLOW_AGENT_NODE_IMAGE) {
       await panel.screenshot({ path: process.env.VPS_WORKBENCH_WORKFLOW_AGENT_NODE_IMAGE, animations: 'disabled' });
     }
@@ -373,7 +374,7 @@ test('packaged Agent resources, scoped memory and legacy presets apply to a para
     const inspectionNode = graphNode(3, stages[2].name);
     await checkAgentNode(inspectionNode, statusPresetName, '独立上下文', 'codex');
     await inspectionNode.hover();
-    await checkAgentTip([stages[2].model, 'fixture-status', '插件']);
+    await checkAgentTip([stages[2].model, 'fixture-status', '提示词模板']);
     await graphNode(4, stages[3].name).hover();
     await checkAgentNode(graphNode(4, stages[3].name), '自定义 Agent', '默认不共享', 'antigravity');
     await checkAgentTip(['VPS CLI 默认模型']);

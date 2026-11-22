@@ -50,11 +50,12 @@ const desktopGroups = [
   ['connection', '连接', 'server', ['connection']],
   ['models', '模型与账号', 'model', ['tools', 'accounts']],
   ['agent', 'Agent 与工具', 'fork', ['agents', 'mcp', 'plugins']],
-  ['data', '数据与记忆', 'library', ['memory']],
+  ['memory', '记忆', 'library', ['memory']],
   ['preferences', '应用偏好', 'canvas', ['appearance', 'interaction', 'tool-overrides']],
 ];
 const desktopLabels = { tools: '执行端与模型', accounts: '账号', plugins: '提示词模板' };
 const locations = [['local-sdk', '本机 SDK'], ['ssh-vps', 'VPS SSH']];
+const locationTabs = new Set(['connection', 'tools', 'accounts', 'agents', 'mcp', 'plugins', 'memory', 'tool-overrides']);
 const noTools = [];
 const appearanceRows = [
   ['color', '主题', '切换 VPS 对话的浅色或深色外观。'],
@@ -90,10 +91,10 @@ function createDisclosure(React) {
 export function createConnectionFields(React) {
   const h = React.createElement;
   const Disclosure = createDisclosure(React);
-  return function ConnectionSettings({ form, edit, busy }) {
+  return function ConnectionSettings({ form, edit, busy, desktop = false }) {
     function field(key) {
       const { label, optional, ...attributes } = fields[key];
-      return h('label', { key, className: 'vc-field' }, label, h('input', {
+      return h('label', { key, className: 'vc-field' }, desktop && key === 'workspace' ? '工作目录' : label, h('input', {
         ...attributes, value: form[key], required: !optional, disabled: busy, autoComplete: 'off',
         spellCheck: false, maxLength: 2048, 'data-connection-field': key, onChange: (event) => edit(key, event.target.value),
       }));
@@ -101,7 +102,8 @@ export function createConnectionFields(React) {
     return h(React.Fragment, null,
       h('section', { className: 'vc-settings-group' }, h('h4', null, '服务器'),
         h('div', { className: 'vc-settings-address' }, field('host'), field('port')),
-        field('user'), field('workspace')),
+        field('user'), desktop ? null : field('workspace')),
+      desktop ? h('section', { className: 'vc-settings-group' }, h('h4', null, 'VPS 工作区'), field('workspace')) : null,
       h('section', { className: 'vc-settings-group' }, h('h4', null, 'SSH 验证'),
         field('identityPath'), field('knownHostsPath'),
         h('label', { className: 'vc-settings-confirm' },
@@ -336,7 +338,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
     const tab = openTab || lastTab;
     const grouped = Boolean(navigateLocation || localPanels || VpsConnectionChecks);
     const location = localPanels ? 'local-sdk' : 'ssh-vps';
-    const available = ([id]) => !['mcp', 'plugins', 'memory'].includes(id) || extensionSettings || localPanels && id === 'memory';
+    const available = ([id]) => !['mcp', 'plugins', 'memory'].includes(id) || extensionSettings || localPanels?.[id];
     const tabs = [...pages, ...extensionPages, ...(grouped ? [overridePage] : [])].filter(([id]) => (id !== 'agents' || agentSettings || localPanels))
       .filter(available);
     const group = desktopGroups.find(([, , , ids]) => ids.includes(tab));
@@ -526,10 +528,9 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
       appearance: ['外观', '应用偏好 · 执行端的独立设置优先生效。'],
       interaction: ['交互', '应用偏好 · 输入与动画设置。执行端的独立设置优先生效。'],
       'tool-overrides': ['按执行端覆盖', '为当前执行位置单独设置外观和交互。'],
-      mcp: ['MCP 服务器', '为当前执行端选择 VPS 上已审核的 stdio 服务。'],
+      mcp: ['MCP 服务器', '为当前执行端选择已审核的 stdio 服务。'],
       plugins: [grouped ? '提示词模板' : '插件', '管理可插入输入栏的提示词模板。'],
-      memory: localPanels ? ['本机数据', '本机 SDK 会话使用独立的本机存储。'] :
-        ['长期记忆', '将选定的参考内容用于当前 VPS 和项目的后续对话。'],
+      memory: ['长期记忆', '将选定的参考内容用于当前 VPS 和项目的后续对话。'],
     }[tab];
     const customPanel = extensionSettings && extensionPages.some(([id]) => id === tab);
     function showBackend(id, page) {
@@ -576,8 +577,9 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
             }, desktopLabels[id] ?? label))) : null,
           h('section', { key: tab, className: 'vc-settings-pane', 'aria-labelledby': panelId },
             h('h3', { id: panelId, 'aria-label': header[0] }, header[0], prefPage ? liveSave() : null),
-            h('p', { className: 'vc-settings-intro' }, header[1]),
-            grouped && navigateLocation && (tab === 'connection' || tab === 'tools' || tab === 'accounts') ?
+            localPanels && ['agents', 'mcp', 'plugins', 'memory', 'tool-overrides'].includes(tab) ? null
+              : h('p', { className: 'vc-settings-intro' }, header[1]),
+            grouped && navigateLocation && locationTabs.has(tab) ?
               h('div', { className: 'vc-settings-subnav vc-settings-locations', role: 'group', 'aria-label': '配置的执行位置' },
                 locations.map(([id, label]) => h('button', { key: id, type: 'button', className: 'vc-button',
                   'aria-pressed': location === id, disabled: locked,
@@ -595,7 +597,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
               VpsConnectionChecks && h(VpsConnectionChecks, { diagnostics: connectionDiagnostics, ready, dirty: connectionDirty,
                 busy: locked, remoteEnabled, provider: form.provider, openAccount: guardedAccount,
                 openTools: () => setTab('tools'), focusField }),
-              h(ConnectionSettings, { form, edit, busy: locked })) : null,
+              h(ConnectionSettings, { form, edit, busy: locked, desktop: grouped })) : null,
             !localPanels && tab === 'tools' ? ready ? h(ToolSettings, {
               tools, configured, setConfigured, profiles, preferences, updateTool, readModels, modelTools, activeTool, busy: locked,
               diagnostics: connectionDiagnostics, scope: origin,

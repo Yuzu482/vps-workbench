@@ -16,14 +16,14 @@ const steps = setupChecks.filter(([id]) => id !== 'response');
 const agentSteps = [
   ['agentModel', 'Agent 模型'],
   ['mcp', 'MCP 服务器'],
-  ['plugins', '插件模板'],
+  ['plugins', '提示词模板'],
   ['memory', '记忆范围'],
 ];
 const initialDetail = {
   ...Object.fromEntries(setupChecks.map(([id, , detail]) => [id, detail])),
   agentModel: '核对预设指定的模型。',
   mcp: '核对预设引用的 MCP 服务器。',
-  plugins: '核对预设引用的插件模板。',
+  plugins: '核对预设引用的提示词模板。',
   memory: '核对预设的记忆范围。',
 };
 const button = (text, onClick, extra) => h('button', { type: 'button', className: 'vc-button vc-settings-outline', onClick, ...extra }, text);
@@ -116,7 +116,7 @@ export function SetupGuide({ connection, connectionName, scope, memoryTargetId, 
     const pluginRefs = agent.agent?.plugins ?? [];
     const plugins = checkStageResources({ provider, agent: { plugins: pluginRefs } }, targetId, extensions);
     updateStep('plugins', plugins.ok ? 'passed' : 'failed', plugins.ok
-      ? pluginRefs.length ? `已核对 ${pluginRefs.map(({ title }) => title).join('、')}。` : '预设未配置插件模板。'
+      ? pluginRefs.length ? `已核对 ${pluginRefs.map(({ title }) => title).join('、')}。` : '预设未配置提示词模板。'
       : plugins.message);
 
     const mode = agent.agent?.memory;
@@ -230,7 +230,7 @@ export function SetupGuide({ connection, connectionName, scope, memoryTargetId, 
             h('span', { role: 'status' }, ready && passedCount < steps.length ? '基础预检完成' : `${passedCount} / ${steps.length} 项通过`)),
           h('ol', { className: 'vc-setup-steps' }, setupChecks.map(([id, label]) => stepCard(id, label,
             id === 'ssh' && editing ? h('div', { className: 'vc-setup-fields' }, h(ConnectionFields, {
-              form, busy: disabled, edit(key, value) { setForm((previous) => editConnectionForm(previous, key, value)); reset(); },
+              form, desktop: true, busy: disabled, edit(key, value) { setForm((previous) => editConnectionForm(previous, key, value)); reset(); },
             }), connectionName && button('取消修改', () => { setEditing(false); reset(); }, { disabled })) : null,
             (id === 'ssh' && connection && !editing || id === 'egress' && results.egress?.state === 'failed' && !editing) ?
               h('div', { className: 'vc-setup-actions' },

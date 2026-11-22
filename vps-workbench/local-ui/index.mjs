@@ -471,6 +471,12 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       }, row.title);
     }
 
+    function vpsSettingsLink(tab, message, label) {
+      return h('section', { className: 'vc-settings-group' },
+        note(message),
+        h(Button, { onClick: () => settingsSurface.navigate('ssh-vps', tab) }, label));
+    }
+
     const settings = h(SettingsDialog, {
       tab: settingsTab, setTab: settingsSurface.setTab, close: settingsSurface.close, busy: registerBusy,
       settingsLabel: '设置', navigateLocation: settingsSurface.navigate, preferences: appearance, updatePreferences: changeAppearance,
@@ -481,11 +487,12 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
           profileSummary(),
           h(Button, { onClick: () => settingsSurface.setTab('connection') }, '编辑本机配置')),
         accounts: accountDetails(),
-        'tool-overrides': h('div', { className: 'vc-settings-group' },
-          note('本机 Codex 使用通用应用偏好。VPS SSH 执行端可单独覆盖。'),
-          h(Button, { onClick: () => settingsSurface.navigate('ssh-vps', 'tool-overrides') }, '打开 VPS 执行端偏好')),
-        agents: note('本机 SDK 支持只读文本会话。Agent 预设、MCP 和提示词模板可在 VPS SSH 的设置中管理。'),
-        memory: note('本机 Codex 历史保存在独立的本机配置中。项目记忆可在 VPS SSH 的设置中管理。'),
+        'tool-overrides': vpsSettingsLink('tool-overrides',
+          '本机 Codex 使用通用应用偏好。VPS SSH 执行端可单独覆盖。', '打开 VPS 执行端偏好'),
+        agents: vpsSettingsLink('agents', 'Agent 预设用于 VPS SSH 的工作流。', '打开 VPS Agent 预设'),
+        mcp: vpsSettingsLink('mcp', '工作台 MCP 服务由支持它的 VPS SSH 执行端使用。', '打开 VPS MCP 服务器'),
+        plugins: vpsSettingsLink('plugins', '提示词模板可插入 VPS SSH 对话草稿，也可用于其工作流。', '打开 VPS 提示词模板'),
+        memory: vpsSettingsLink('memory', '个人自动记忆、项目记忆和手动记忆适用于 VPS SSH。', '打开 VPS 记忆'),
       },
     });
     return h('div', {
@@ -635,6 +642,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
             onChange: (event) => setSettingsProfileId(event.target.value),
           }, profiles.map((item) => h('option', { key: item.id, value: item.id }, item.name)))),
         profileSummary(true),
+        note('工作台在独立的本机存储中保存历史、SDK 线程和回执。已创建的会话继续使用原配置。'),
         settingsProfile && h(Button, { disabled: browsing || accessPending || registerBusy || settingsProfile.id === defaultProfileId,
           onClick: () => void setNewProfile() },
         settingsProfile.id === defaultProfileId ? '新聊天默认配置' : '设为新聊天配置'),

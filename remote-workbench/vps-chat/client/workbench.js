@@ -2224,6 +2224,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             memoryMode: memoryAvailable ? memoryIsolated ? '独立上下文'
               : projectMemorySuppressed ? '项目记忆关闭' : automaticMemory ? automaticMemoryLabel : '记忆' : null,
             hasPluginPrompts: pluginPrompts.length > 0,
+            templateLabel: settingsSurface ? '提示词模板' : undefined,
           },
             h('div', { className: 'vc-compose-buttons' },
               showStop ? h('button', {
@@ -2415,7 +2416,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         } : null,
         toolDefault: unavailableModel ? undefined : defaultModel, followsTool: Boolean(defaultModel && modelSelection === defaultModel),
         access, accessProvider, accessBusy: accessPending || (remoteEnabled && providerSwitchLocked), changeAccess,
-        pluginPrompts, insertPluginPrompt,
+        pluginPrompts, insertPluginPrompt, templateLabel: settingsSurface ? '提示词模板' : undefined,
       })),
       saveConversationPreference || floatingChat ? h('div', { className: 'vc-context-notice', role: 'status' }, contextNotice?.text) : null,
       contextMenus.map((request) => h(ContextMenu, {
@@ -2475,7 +2476,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         } } : null,
         extensionSettings: ExtensionSettings && extensions ? { Component: ExtensionSettings, props: {
           ...extensions, targetId: configuredProvider === 'codex' ? configuration.targetId : '',
-          memoryTargetId: configuration.memoryTargetId, projects,
+          memoryTargetId: configuration.memoryTargetId, connectionName: configuration.name, projects,
           selectedProject: configuration.targetId === scope ? selectedProject : null,
           readMemoryModels: remoteEnabled && configurationReady && configuration.memoryTargetId ? readMemoryModels : undefined,
           mcpTargetId: ['codex', 'antigravity'].includes(configuredProvider) ? configuration.targetId : '',

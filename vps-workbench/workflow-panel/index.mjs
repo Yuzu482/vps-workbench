@@ -108,7 +108,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
               icon(h, provider === 'claude' ? 'claude-sdk' : provider)), h('span', null, providerLabel(provider))),
           h('span', null, model || defaultModel(provider)),
           h('span', { className: 'vc-workflow-preset-memory', 'data-memory': agent?.memory }, agentMemoryLabel(agent)),
-          chips('MCP', servers), chips('插件模板', templates)));
+          chips('MCP', servers), chips('提示词模板', templates)));
       })) : note(onManage ? '还没有预设。可在「管理预设」中新建。' : '还没有可套用的预设。'));
   }
 

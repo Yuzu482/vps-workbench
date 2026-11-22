@@ -280,7 +280,7 @@ export function createComposerControls(React) {
   }
 
   function Toolbar({ panel, open, openMaterials, materialsDisabled, available, mode, report, attached, selection, catalog,
-    wideActions, showModeIcon, accessButton, hasPluginPrompts, memoryMode, historyButton, children }) {
+    wideActions, showModeIcon, accessButton, hasPluginPrompts, templateLabel, memoryMode, historyButton, children }) {
     const tooltipId = React.useId();
     const tooltipRef = React.useRef(null);
     const dismissTimer = React.useRef(0);
@@ -326,7 +326,8 @@ export function createComposerControls(React) {
     const effort = selection ? selection.effort ?? chosen?.defaultEffort : report.effort;
     const modelTitle = modelName && effort ? `${modelName} · ${effortName(effort)}` : modelName;
     const option = (key, description, ...contents) => h('button', {
-        type: 'button', className: 'vc-button vc-composer-option', 'aria-label': panelNames[key],
+        type: 'button', className: 'vc-button vc-composer-option',
+        'aria-label': key === 'plugins' && templateLabel || panelNames[key],
         'aria-haspopup': 'dialog', 'aria-expanded': panel === key, 'data-control': key, 'data-design': mode === 'design',
         'aria-description': description, disabled: !available,
         onClick: (event) => open(key, event.currentTarget), title: description ?? panelNames[key],
@@ -345,7 +346,7 @@ export function createComposerControls(React) {
         memoryMode ? option('memory', memoryMode, menuIcon(h, 'library'),
           h('span', { className: 'vc-option-label' }, memoryMode)) : null,
         hasPluginPrompts ? option('plugins', '插入提示词', menuIcon(h, 'library'),
-          h('span', { className: 'vc-option-label' }, '插件')) : null),
+          h('span', { className: 'vc-option-label' }, templateLabel ?? '插件')) : null),
       h('div', { className: 'vc-composer-end' },
         h('span', {
           className: 'vc-context-indicator', role: 'img', 'data-control': 'context', 'aria-label': '上下文用量',
@@ -535,7 +536,7 @@ export function createComposerControls(React) {
 
   function Panel({ kind, anchor, close, onExpanded, report, attached, mode, designAvailable, canChangeMode, empty, changeMode,
     modelAllowed, catalog, selection, toolDefault, followsTool, chooseModel, retryModels, advanced,
-    access, accessProvider, accessBusy, changeAccess, pluginPrompts, insertPluginPrompt,
+    access, accessProvider, accessBusy, changeAccess, pluginPrompts, insertPluginPrompt, templateLabel,
     memoryIsolated, automaticMemory, projectMemorySuppressed, memoryBusy, memoryStartsNew, changeMemoryMode, openMemorySettings,
     tooltip = false, id, surfaceRef, onPointerEnter, onPointerLeave }) {
     const localRef = React.useRef(null);
@@ -598,7 +599,7 @@ export function createComposerControls(React) {
         focusAnchor();
       };
     }, [anchor, close, onExpanded, ref, tooltip]);
-    const name = tooltip ? '上下文用量' : panelNames[kind];
+    const name = tooltip ? '上下文用量' : kind === 'plugins' && templateLabel || panelNames[kind];
     const closeButton = tooltip ? null : h('button', {
       type: 'button', className: 'vc-button vc-composer-panel-close', 'aria-label': '关闭', title: '关闭',
       onClick: () => ref.current.hidePopover(),
