@@ -39,6 +39,20 @@ test('loopback preview serves the same UI build as the Windows package', async (
   assert.equal((await readPreview('/dsh-vps-chat/api/account-player.mjs')).status, 404);
 });
 
+test('the local agent preview starts with three distinct local profiles and selects Claude', async (t) => {
+  const preview = await startPreview({ localAgents: true, port: 0, watch: false });
+  t.after(() => preview.close());
+  const get = async (path) => (await fetch(preview.origin + path)).json();
+  const [{ profiles }, { preferences }] = await Promise.all([get('/__preview/local-sdk'), get('/__preview/state')]);
+  assert.deepEqual(profiles.map(({ backend }) => backend), ['codex', 'claude-sdk', 'antigravity']);
+  assert.equal(new Set(profiles.map(({ targetId }) => targetId)).size, profiles.length);
+  const claude = profiles.find(({ backend }) => backend === 'claude-sdk');
+  assert.equal(preferences['dsh-vps-chat:desktop-view-location:v1'], 'local-sdk');
+  assert.equal(preferences['dsh-vps-chat:desktop-new-location:v1'], 'local-sdk');
+  assert.equal(preferences['dsh-vps-chat:local-view-profile:v1'], claude.id);
+  assert.equal(preferences['dsh-vps-chat:local-new-profile:v1'], claude.id);
+});
+
 test('preview learns a project decision and reuses it across tools with a clean-session override', async (t) => {
   const preview = await startPreview({ port: 0, watch: false });
   t.after(() => preview.close());

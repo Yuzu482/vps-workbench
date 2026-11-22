@@ -15,10 +15,12 @@ import { readWorkflows } from '../workflow-engine/state.mjs';
 import { decodeWorkflowAttachments } from './workflow-attachments.mjs';
 import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
 import { createPreviewLocalSdk } from '../preview/fixtures/local-sdk.mjs';
+import { localBackends } from '../local-sdk/providers.mjs';
 import { readSetupPreset, setupConnectionKey } from './setup-state.mjs';
 import { runSetupTrial } from './setup-trial.mjs';
 
 const previewPort = 47823;
+const localAgentsPort = 47828;
 const previewPrefix = '/__preview/';
 const chatPrefix = '/dsh-vps-chat/api/';
 const terminalPrefix = '/dsh-terminal-workbench/api/';
@@ -87,7 +89,7 @@ async function buildPreview(instance) {
   return { ...desktop, source, document };
 }
 
-export async function startPreview({ port = previewPort, watch = true, log = () => {} } = {}) {
+export async function startPreview({ localAgents = false, port = localAgents ? localAgentsPort : previewPort, watch = true, log = () => {} } = {}) {
   const instance = randomBytes(8).toString('hex');
   let current = await buildPreview(instance);
   let access = defaultAccess;
@@ -354,8 +356,21 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
     await new Promise((done) => { server.close(done); server.closeAllConnections(); });
   }
 
-  if (watch) {
-    try {
+  try {
+    if (localAgents) {
+      const local = await localSdk();
+      for (const { backend, models: [model] } of local.status().providers) {
+        const saved = await local.request({ op: 'register', backend, name: `${localBackends[backend].label} 本机演示`,
+          model: model.id, effort: model.defaultEffort });
+        if (!saved.ok) throw new Error(`无法登记 ${localBackends[backend].label} 演示配置。`);
+      }
+      const selected = local.status().profiles.find(({ backend }) => backend === 'claude-sdk');
+      fixtures.preferences['dsh-vps-chat:desktop-view-location:v1'] = 'local-sdk';
+      fixtures.preferences['dsh-vps-chat:desktop-new-location:v1'] = 'local-sdk';
+      fixtures.preferences['dsh-vps-chat:local-view-profile:v1'] = selected.id;
+      fixtures.preferences['dsh-vps-chat:local-new-profile:v1'] = selected.id;
+    }
+    if (watch) {
       for (const directory of webSourceDirectories) {
         const watcher = watchDirectory(directory, { recursive: true }, (_event, name) => {
           if (!name || /(?:\.(?:[cm]?js|css|html|png)|package\.json)$/i.test(name)) refresh();
@@ -363,16 +378,16 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
         watcher.on('error', (error) => log('预览文件监听已停止：' + error.message));
         watchers.push(watcher);
       }
-    } catch (error) {
-      await close();
-      throw error;
     }
+  } catch (error) {
+    await close();
+    throw error;
   }
   return { origin, close };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const preview = await startPreview({ log: console.log });
+  const preview = await startPreview({ localAgents: process.argv.includes('--local-agents'), log: console.log });
   console.log(`VPS 工作台 · 界面预览 ${preview.origin}/`);
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void preview.close(); });
 }

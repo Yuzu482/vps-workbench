@@ -46,6 +46,22 @@ Antigravity 使用单独安装的官方 Windows CLI。可信启动器提供 `VPS
 
 原生账号数据和会话回执按执行位置、后端与配置绑定。工具审批只允许本轮读取所选目录中的合规普通文件。拒绝、取消或失去原回执时保留对应状态。真实 Windows 安全边界与账号出口需在接入时单独验证。
 
+### 项目接入与验收流程
+
+从 Git 检出工作台后，在仓库根目录运行以下命令。依赖缓存齐全时，三条 `npm ci` 命令均可追加 `--offline`。
+
+```powershell
+npm ci --ignore-scripts --prefix vps-workbench
+npm ci --ignore-scripts --prefix remote-workbench/vps-chat
+npm ci --ignore-scripts --prefix dsh-terminal-workbench/client/browser-test
+npm run verify:local-agents --prefix vps-workbench
+npm run preview:local-agents --prefix vps-workbench
+```
+
+验证入口检查三种本机执行端的会话绑定、线程恢复、补充与审批，并用浏览器夹具走一遍真实界面操作。预览在 `http://127.0.0.1:47828/` 登记三个演示配置，默认打开本机 Claude。发送「请等待补充并演示审批」可检查补充输入和审批卡。演示数据临时保存，模型回复由离线夹具生成。
+
+Codex 和 Claude 的 SDK 与 Windows CLI 版本由锁文件和打包检查固定。Antigravity ACP 的执行文件及 SHA-256 由可信本机启动器提供，工作台逐次校验。实际账号配置及会话随各自的数据目录复用。API 密钥、登录目录和会话记录保存在各自的执行环境。需要验证 Windows 包时，可按「构建」部分暂存候选和运行桌面回归。
+
 ## VPS 连接
 
 「设置 → 连接 → VPS SSH」提供独立的「保存连接配置」和「测试连接」。预检依次核对 SSH 与主机指纹、预期 VPS 出口、账号与模型目录。「接入向导」复用这些检查，并提供额外 Agent 资源检查。账号操作在 VPS 上打开。需要确认模型服务时，点「试跑模型」来发送一轮独立的诊断对话。试跑消耗所选账号的额度。结果不明时，可用「查询原回执」核对。
