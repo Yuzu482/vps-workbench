@@ -381,6 +381,68 @@ test('P3 live settings survive discarding provider switches and explicit saves r
   await page.getByRole('dialog', { name: 'VPS 接入向导', exact: true }).getByRole('radio', { name: 'Claude API', exact: true }).waitFor();
 });
 
+test('model and interface resets persist independently for the same VPS backend', { timeout: 35_000 }, async (t) => {
+  const { targetId } = createPreviewFixtures().chat({ op: 'preset' }).preset;
+  const model = { id: 'preview-codex-mini', targetId, effort: 'medium' };
+  const prefs = { color: 'dark', accent: 'blue', textSize: 'large', width: 'wide', sendKey: 'ctrl-enter', motion: 'reduce' };
+  const other = { color: 'light' };
+  let profileKey;
+  const page = await openPreview(t, { seed(state) {
+    profileKey = Object.keys(state.preferences).find((key) => key.startsWith('dsh-vps-chat-tools:v1:')) + ':workbench';
+    state.preferences[profileKey] = JSON.stringify({ codex: { ...prefs, model }, claude: other });
+  } });
+  const entry = page.getByRole('button', { name: '设置', exact: true });
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  const models = settings.locator('[data-settings-backend=codex] details');
+  const overrides = settings.locator('details').filter({ hasText: 'Codex 界面偏好' });
+  const modelReset = models.getByRole('button', { name: '恢复默认模型与推理强度' });
+  const prefReset = overrides.getByRole('button', { name: '恢复通用偏好' });
+  async function savedProfiles() {
+    return page.evaluate(({ storage, key }) => JSON.parse(JSON.parse(sessionStorage.getItem(storage)).preferences[key]), {
+      storage: previewStorageKey, key: profileKey,
+    });
+  }
+  async function openModels() {
+    await openSettingsSection(settings, '执行端');
+    await models.locator('summary').click();
+  }
+  async function openOverrides() {
+    await openSettingsSection(settings, '按执行端覆盖');
+    await overrides.locator('summary').click();
+  }
+  await entry.click();
+  await openModels();
+  assert.equal(await models.getByRole('combobox', { name: '主题', exact: true }).count(), 0);
+  await modelReset.press('Enter');
+  await models.getByText('当前配置 · 沿用执行端默认。当前会话可另选模型。').waitFor();
+  assert.deepEqual(await savedProfiles(), { codex: prefs, claude: other });
+  await openOverrides();
+  assert.equal(await overrides.getByRole('combobox', { name: '主题', exact: true }).inputValue(), 'dark');
+  assert.equal(await overrides.getByRole('combobox', { name: '模型', exact: true }).count(), 0);
+  await openModels();
+  await models.getByRole('button', { name: '读取模型目录', exact: true }).click();
+  await models.getByRole('combobox', { name: '模型', exact: true }).selectOption(model.id);
+  const effort = models.getByRole('combobox', { name: '推理强度', exact: true });
+  await effort.selectOption('medium');
+  await openOverrides();
+  await prefReset.click();
+  await overrides.getByText('跟随通用', { exact: true }).waitFor();
+  assert.deepEqual(await savedProfiles(), { codex: { model }, claude: other });
+  await settings.getByRole('button', { name: '关闭设置' }).click();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByText('本地演示 · VPS 已配置', { exact: true }).waitFor();
+  await entry.click();
+  await openModels();
+  await models.getByText('当前配置 · 已保存 ' + model.id).waitFor();
+  await models.getByRole('button', { name: '查看此执行端账号' }).click();
+  const account = settings.getByRole('region', { name: 'Codex', exact: true });
+  assert.equal(await account.evaluate((node) => node === document.activeElement), true);
+  await account.getByRole('button', { name: '查看此执行端模型' }).click();
+  assert.equal(await models.evaluate((node) => node.open), true);
+  await openOverrides();
+  assert.equal(await overrides.getByRole('combobox', { name: '主题', exact: true }).inputValue(), '');
+});
+
 test('P4 keeps base failures blocking and runs the isolated sample despite optional Agent failures', { timeout: 35_000 }, async (t) => {
   const mcpId = 'da78a36e-e0a0-4bcd-89d8-b9a302d66509';
   const modelId = '78cc1579-978b-4a2f-a3a7-7712899cdc10';
@@ -544,6 +606,7 @@ test('local setup checks credentials and runs only the explicitly selected SDK p
   });
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await settings.getByRole('listitem', { name: '本机 SDK', exact: true }).getByText('待检查', { exact: true }).waitFor();
   await settings.getByRole('button', { name: '测试本机配置', exact: true }).click();
   await settings.getByRole('listitem', { name: '本机 SDK', exact: true }).getByText('已通过', { exact: true }).waitFor();
   await settings.getByRole('listitem', { name: '本机账号凭据', exact: true }).getByText('待确认', { exact: true }).waitFor();
@@ -562,6 +625,17 @@ test('local setup checks credentials and runs only the explicitly selected SDK p
   assert.ok(local.filter(({ op }) => op === 'refresh').every(({ profileId, sessionId, turnId, targetId }) =>
     profileId === send.profileId && sessionId === send.sessionId && turnId === send.turnId && targetId === send.targetId));
   assert.deepEqual(ssh, []);
+  await openSettingsSection(settings, '执行端');
+  await settings.getByText('隔离配置', { exact: true }).waitFor();
+  assert.equal(await settings.getByLabel('配置名称', { exact: true }).count(), 0);
+  await settings.getByRole('button', { name: '编辑本机配置' }).click();
+  await settings.getByLabel('配置名称', { exact: true }).waitFor();
+  assert.equal(await settings.getByLabel('配置名称', { exact: true }).count(), 1);
+  await openSettingsSection(settings, '账号');
+  await settings.getByText('VPS_WORKBENCH_LOCAL_CODEX_API_KEY', { exact: true }).waitFor();
+  await settings.getByRole('listitem', { name: '实际模型响应', exact: true }).getByText('已通过', { exact: true }).waitFor();
+  assert.equal(await settings.getByRole('button', { name: '试跑模型' }).count(), 0);
+  assert.equal(await settings.getByRole('button', { name: '测试本机配置' }).count(), 0);
 });
 
 test('settings keep drafts across tabs, guard all exits, and keep instant preferences on discard', { timeout: 35_000 }, async (t) => {
@@ -821,6 +895,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
       assert.equal(await sshFields.count(), 0);
       const priorVpsRequests = requests.length;
       await openSettingsSection(settings, '账号');
+      await settings.getByRole('button', { name: '打开本机连接检查', exact: true }).click();
       await settings.getByRole('button', { name: '测试本机配置', exact: true }).click();
       await settings.getByRole('listitem', { name: '本机 SDK', exact: true }).getByText('已通过', { exact: true }).waitFor();
       assert.equal(requests.length, priorVpsRequests);

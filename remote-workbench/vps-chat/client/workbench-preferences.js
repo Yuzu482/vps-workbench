@@ -65,8 +65,11 @@ export function readToolProfiles(key, tools) {
   return key ? sanitizedProfiles(storageRead(`${key}:workbench`), tools) : {};
 }
 
-export function writeToolProfiles(key, profiles, tools) {
+export function writeToolProfiles(key, profiles, tools, persist) {
   const clean = sanitizedProfiles(profiles, tools);
-  workbenchStorage.setItem(`${key}:workbench`, JSON.stringify(clean));
+  const storageKey = `${key}:workbench`;
+  const value = JSON.stringify(clean);
+  if (persist) return Promise.resolve(persist(storageKey, value)).then(() => clean);
+  workbenchStorage.setItem(storageKey, value);
   return clean;
 }

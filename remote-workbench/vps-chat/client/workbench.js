@@ -405,6 +405,9 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [hostPreferences, setPreferences] = React.useState(readPreferences);
     const preferences = applicationPreferences?.value ?? hostPreferences;
     const [toolProfiles, setToolProfiles] = React.useState({});
+    const toolProfileWrites = React.useRef(Promise.resolve());
+    const activeToolKey = React.useRef(toolPreferences.key);
+    activeToolKey.current = toolPreferences.key;
     const [loadingPreset, setLoadingPreset] = React.useState(true);
     const [scope, setScope] = React.useState('');
     const [memoryTargetId, setMemoryTargetId] = React.useState(null);
@@ -753,7 +756,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       };
     }, [visible, loadingPreset, rpc]);
 
-    const readingConfiguration = Boolean(settingsSurface && settingsTab && !visible && !ready && !savedConfiguration);
+    const settingsRequireTarget = ['connection', 'tools', 'accounts', 'agents', 'mcp', 'memory', 'tool-overrides'].includes(settingsTab);
+    const readingConfiguration = Boolean(settingsSurface && settingsRequireTarget && !visible && !ready && !savedConfiguration);
     React.useEffect(() => {
       if (!readingConfiguration) return undefined;
       const controller = new AbortController();
@@ -1471,13 +1475,17 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       return true;
     }
 
-    function updateTool(id, patch) {
+    async function updateTool(id, patch) {
       const key = configuration.tools.key;
       if (!configurationReady || !key || !toolIds.includes(id)) return false;
-      const next = { ...configuration.profiles, [id]: { ...configuration.profiles[id], ...patch } };
+      const write = toolProfileWrites.current.then(() => {
+        const profiles = readToolProfiles(key, toolIds);
+        return writeToolProfiles(key, { ...profiles, [id]: { ...profiles[id], ...patch } }, toolIds, saveConversationPreference);
+      });
+      toolProfileWrites.current = write.catch(() => {});
       try {
-        const saved = writeToolProfiles(key, next, toolIds);
-        if (key === toolPreferences.key) setToolProfiles(saved);
+        const saved = await write;
+        if (key === activeToolKey.current) setToolProfiles(saved);
         setSavedConfiguration((previous) => previous?.tools.key === key ? { ...previous, profiles: saved } : previous);
       } catch {
         setSettingsError('执行端的独立设置未能保存到本机。');

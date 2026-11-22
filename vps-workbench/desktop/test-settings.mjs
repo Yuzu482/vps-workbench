@@ -8,6 +8,7 @@ const sections = {
   长期记忆: ['数据与记忆'],
   外观: ['应用偏好', '外观'],
   交互: ['应用偏好', '交互'],
+  按执行端覆盖: ['应用偏好', '按执行端覆盖'],
 };
 
 export async function openSettingsSection(dialog, name, legacy = false) {

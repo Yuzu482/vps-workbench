@@ -3,9 +3,13 @@ import { ConnectionResult } from '../desktop/connection-panel.mjs';
 import { TrialActions, trialResult, useConnectionTrial } from '../desktop/connection-trial.mjs';
 import { trialPrompt, trialState } from '../desktop/setup-trial.mjs';
 import { createSettingsDialog } from '../../remote-workbench/vps-chat/client/settings-dialog.js';
+import { workbenchStorage } from '../../remote-workbench/vps-chat/client/workbench-storage.js';
 
 const location = 'local-sdk';
 const backend = 'codex';
+const newProfileKey = 'dsh-vps-chat:local-new-profile:v1';
+const sdkCheckBinding = (profile, status) => JSON.stringify([profile?.id, profile?.targetId,
+  status?.runtimeAvailable, status?.credentialConfigured, status?.models]);
 const pending = new Set(['queued', 'running', 'stopping']);
 const safeRejections = new Set([
   'invalid_request', 'profile_not_found', 'session_conflict', 'browse_only', 'workbench_browse_only',
@@ -114,6 +118,9 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     const [status, setStatus] = React.useState(null);
     const [statusError, setStatusError] = React.useState(false);
     const [statusBusy, setStatusBusy] = React.useState(false);
+    const [checkedBinding, setCheckedBinding] = React.useState(null);
+    const [settingsProfileId, setSettingsProfileId] = React.useState(null);
+    const [defaultProfileId, setDefaultProfileId] = React.useState(() => workbenchStorage.getItem(newProfileKey));
     const statusToken = React.useRef(null);
     const [target, setTarget] = React.useState(() => newTarget());
     const targetRef = React.useRef(target);
@@ -144,12 +151,16 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     const model = models.find(({ id }) => id === modelId) ?? models[0];
     const effort = model?.efforts.includes(effortId) ? effortId : model?.defaultEffort;
     const profile = profiles?.find(({ id }) => id === target.profileId);
+    const defaultProfile = profiles?.find(({ id }) => id === defaultProfileId);
+    const settingsProfile = profiles?.find(({ id }) => id === settingsProfileId) ?? profile ?? defaultProfile ?? profiles?.[0];
+    const binding = sdkCheckBinding(settingsProfile, status);
+    const confirmedStatus = checkedBinding === binding && !statusError ? status : null;
     const record = records.get(target.sessionId);
     const session = record?.session;
     const draft = record?.draft ?? '';
     const browsing = access?.mode !== 'execute';
-    const trialTarget = profile && status?.runtimeAvailable && status.credentialConfigured && !statusError &&
-      { profileId: profile.id, targetId: profile.targetId, model: profile.model, effort: profile.effort };
+    const trialTarget = settingsProfile && status?.runtimeAvailable && status.credentialConfigured && !statusError &&
+      { profileId: settingsProfile.id, targetId: settingsProfile.targetId, model: settingsProfile.model, effort: settingsProfile.effort };
     const trial = useConnectionTrial({ storageKey: 'dsh-vps-chat:setup-trial:local-sdk:v1', savePreference,
       async request(kind, { target: at, sessionId, turnId }) {
         const packet = await native.localSdkRequest(requestBody({ ...at, sessionId },
@@ -162,7 +173,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     });
     const invalidateTrial = trial.invalidate;
     React.useLayoutEffect(() => invalidateTrial(),
-      [invalidateTrial, profile?.id, status?.runtimeAvailable, status?.credentialConfigured]);
+      [invalidateTrial, settingsProfile?.id, status?.runtimeAvailable, status?.credentialConfigured]);
     const bound = Boolean(session || record?.history || record?.attempt);
     const runningTurn = session?.turns.findLast((turn) => pending.has(turn.state));
     const canSend = active && !accessPending && !browsing && profile && !statusError &&
@@ -189,12 +200,12 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       setHistoryOpen(false);
       if (onNewChat) onNewChat();
       else {
-        choose(newTarget(profile ?? lastProfile.current ?? profiles?.[0]));
+        choose(newTarget(defaultProfile ?? profile ?? lastProfile.current ?? profiles?.[0]));
         editor.current?.focus({ preventScroll: true });
       }
     }
 
-    async function loadStatus() {
+    async function loadStatus(check = false) {
       const token = Symbol();
       statusToken.current = token;
       setStatusBusy(true);
@@ -205,6 +216,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
             !Array.isArray(next.profiles) || !Array.isArray(next.models)) throw new Error('Invalid local SDK status');
         setStatus(next);
         setStatusError(false);
+        if (check) setCheckedBinding(sdkCheckBinding(settingsProfile, next));
       } catch {
         if (statusToken.current === token) setStatusError(true);
       } finally {
@@ -212,7 +224,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       }
     }
 
-    const needsStatus = active || Boolean(settingsTab);
+    const needsStatus = active || ['connection', 'tools', 'accounts'].includes(settingsTab);
     React.useEffect(() => {
       if (needsStatus) void loadStatus();
       return () => { statusToken.current = null; };
@@ -226,16 +238,17 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       if (epoch.current === newConversation) return;
       epoch.current = newConversation;
       setHistoryOpen(false);
-      choose(newTarget(profile ?? lastProfile.current ?? profiles?.[0]));
+      choose(newTarget(defaultProfile ?? profile ?? lastProfile.current ?? profiles?.[0]));
       if (active) editor.current?.focus({ preventScroll: true });
     }, [newConversation]);
 
     React.useEffect(() => {
       if (target.profileId || !profiles?.length || targetRef.current !== target) return;
-      const next = { ...target, profileId: profiles[0].id, targetId: profiles[0].targetId };
+      const initial = defaultProfile ?? profiles[0];
+      const next = { ...target, profileId: initial.id, targetId: initial.targetId };
       if (recordsRef.current.has(target.sessionId)) updateRecord(target, (previous) => ({ ...previous, target: next }));
       choose(next);
-    }, [profiles, target]);
+    }, [profiles, defaultProfile, target]);
 
     React.useEffect(() => {
       if (profile) lastProfile.current = profile;
@@ -324,25 +337,9 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       }
     }
 
-    function switchProfile(at, nextProfile) {
-      if (targetRef.current.sessionId !== at.sessionId || at.profileId === nextProfile.id || writes.current.has(at.sessionId)) return;
-      const previous = recordsRef.current.get(at.sessionId);
-      if (previous?.session || previous?.history || previous?.attempt) return;
-      const next = newTarget(nextProfile);
-      if (previous?.draft) {
-        const updated = new Map(recordsRef.current);
-        updated.delete(at.sessionId);
-        updated.set(next.sessionId, { target: next, draft: previous.draft, updatedAt: previous.updatedAt });
-        recordsRef.current = updated;
-        setRecords(updated);
-      }
-      choose(next);
-    }
-
     async function register(event) {
       event.preventDefault();
       if (browsing || accessPending || registering.current || !model || !effort || !name.trim()) return;
-      const at = target;
       registering.current = true;
       setRegisterBusy(true);
       setRegisterError('');
@@ -357,7 +354,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
           const items = new Map(previous.profiles.map((item) => [item.id, item]));
           return { ...previous, profiles: [...items.set(result.profile.id, result.profile).values()] };
         });
-        switchProfile(at, result.profile);
+        setSettingsProfileId(result.profile.id);
         setName('');
       } catch {
         setRegisterError('本机配置未能保存。');
@@ -365,6 +362,15 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
         registering.current = false;
         setRegisterBusy(false);
       }
+    }
+
+    async function setNewProfile() {
+      if (!settingsProfile || browsing || accessPending) return;
+      try {
+        await savePreference(newProfileKey, settingsProfile.id);
+        setDefaultProfileId(settingsProfile.id);
+        setRegisterError('');
+      } catch { setRegisterError('新聊天的本机配置未能保存。'); }
     }
 
     async function send() {
@@ -470,9 +476,14 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       settingsLabel: '设置', navigateLocation: settingsSurface.navigate, preferences: appearance, updatePreferences: changeAppearance,
       restoreFocus: settingsSurface.restoreFocus,
       localPanels: {
-        connection: h(React.Fragment, null, connectionChecks(), profileFields()),
-        tools: profileFields(),
-        accounts: connectionChecks(),
+        connection: h(React.Fragment, null, profileFields(), connectionChecks()),
+        tools: h('div', { className: 'local-profile' },
+          profileSummary(),
+          h(Button, { onClick: () => settingsSurface.setTab('connection') }, '编辑本机配置')),
+        accounts: accountDetails(),
+        'tool-overrides': h('div', { className: 'vc-settings-group' },
+          note('本机 Codex 使用通用应用偏好。VPS SSH 执行端可单独覆盖。'),
+          h(Button, { onClick: () => settingsSurface.navigate('ssh-vps', 'tool-overrides') }, '打开 VPS 执行端偏好')),
         agents: note('本机 SDK 支持只读文本会话。Agent 预设、MCP 和提示词模板可在 VPS SSH 的设置中管理。'),
         memory: note('本机 Codex 历史保存在独立的本机配置中。项目记忆可在 VPS SSH 的设置中管理。'),
       },
@@ -563,23 +574,19 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       'data-vc-color': appearance?.color, 'data-vc-accent': appearance?.accent, 'data-vc-motion': appearance?.motion }));
 
     function connectionChecks() {
+      const checked = confirmedStatus;
       return h(React.Fragment, null,
-        h(Button, { disabled: statusBusy, onClick: () => void loadStatus() }, statusBusy ? '检查中' : '测试本机配置'),
+        h(Button, { disabled: statusBusy, onClick: () => void loadStatus(true) }, statusBusy ? '检查中' : '测试本机配置'),
         h('ol', { className: 'vc-setup-steps local-connection-checks' },
           h(ConnectionResult, { id: 'runtime', label: '本机 SDK',
             detail: '检查 Windows 上的 SDK 运行文件。', result: statusError
-              ? { state: 'failed', detail: '本机 SDK 状态读取失败。请重试。' } : status && {
-                state: status.runtimeAvailable ? 'passed' : 'failed',
-                detail: status.runtimeAvailable ? '已找到本机 Codex SDK 和运行文件。' : '当前安装缺少本机 Codex 运行文件。',
+              ? { state: 'failed', detail: '本机 SDK 状态读取失败。请重试。' } : checked && {
+                state: checked.runtimeAvailable ? 'passed' : 'failed',
+                detail: checked.runtimeAvailable ? '已找到本机 Codex SDK 和运行文件。' : '当前安装缺少本机 Codex 运行文件。',
               } }),
-          h(ConnectionResult, { id: 'account', label: '本机账号凭据',
-            detail: '检查本机进程的凭据配置。', result: status && !statusError ? {
-              state: status.credentialConfigured ? 'confirm' : 'failed',
-              detail: status.credentialConfigured ? '已配置本机 API 密钥，服务权限待试跑确认。' :
-                '请在启动工作台的本机环境中配置 VPS_WORKBENCH_LOCAL_CODEX_API_KEY。',
-            } : null }),
+          credentialCheck(),
           h(ConnectionResult, { id: 'model', label: '本机模型目录',
-            detail: '检查本机 SDK 支持的模型选项。', result: status && !statusError ? {
+            detail: '检查本机 SDK 支持的模型选项。', result: checked ? {
               state: models.length ? 'passed' : 'failed',
               detail: models.length ? `内置目录 · ${models.length} 个模型选项` : '当前本机 SDK 没有可选模型。',
             } : null }),
@@ -588,21 +595,49 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
           h(TrialActions, { trial, target: trialTarget, allowed: Boolean(settingsTab) && !browsing && !accessPending && !statusBusy }))));
     }
 
+    function credentialCheck() {
+      return h(ConnectionResult, { id: 'account', label: '本机账号凭据',
+        detail: '检查本机进程的凭据配置。', result: confirmedStatus && {
+          state: confirmedStatus.credentialConfigured ? 'confirm' : 'failed',
+          detail: confirmedStatus.credentialConfigured ? '已配置本机 API 密钥，服务权限待试跑确认。' :
+            '请在启动工作台的本机环境中配置 API 密钥。',
+        } });
+    }
+
+    function accountDetails() {
+      return h(React.Fragment, null,
+        h('section', { className: 'vc-settings-group', 'aria-label': '凭据来源' },
+          h('h4', null, '凭据来源'),
+          h('p', null, '本机启动环境的 ', h('code', null, 'VPS_WORKBENCH_LOCAL_CODEX_API_KEY')),
+          h('p', { role: 'status' }, !status || statusError ? '凭据配置待读取。' : status.credentialConfigured
+            ? '本机 API 密钥已配置。' : '请在启动工作台的本机环境中设置此变量。'),
+          h(Button, { onClick: () => settingsSurface.setTab('connection') }, '打开本机连接检查')),
+        h('ol', { className: 'vc-setup-steps local-connection-checks' },
+          credentialCheck(),
+          h(ConnectionResult, { id: 'response', label: '实际模型响应', detail: '试跑使用所选本机配置。',
+            result: trialResult(trial, trialTarget) })));
+    }
+
+    function profileSummary(includeDirectory = false) {
+      if (!settingsProfile) return note('尚未登记本机配置。');
+      return h('dl', { className: 'local-config-details' },
+        h('dt', null, '名称'), h('dd', null, settingsProfile.name),
+        includeDirectory && h(React.Fragment, null, h('dt', null, '工作目录'), h('dd', null, settingsProfile.directory)),
+        h('dt', null, '默认模型'), h('dd', null, modelLabel(settingsProfile.model)),
+        h('dt', null, '推理强度'), h('dd', null, settingsProfile.effort));
+    }
+
     function profileFields() {
-      return h('div', { className: 'local-profile' },
-        !bound && profiles?.length > 0 && h('label', null, '对话配置',
-          h('select', { value: profile?.id ?? '',
-            onChange: (event) => {
-              const next = profiles.find(({ id }) => id === event.target.value);
-              if (next) switchProfile(target, next);
-            },
+      return h('section', { className: 'vc-settings-group local-profile', 'aria-label': '本机配置' },
+        h('h4', null, '本机配置'),
+        profiles?.length > 0 && h('label', null, '查看配置',
+          h('select', { 'aria-label': '查看配置', value: settingsProfile?.id ?? '',
+            onChange: (event) => setSettingsProfileId(event.target.value),
           }, profiles.map((item) => h('option', { key: item.id, value: item.id }, item.name)))),
-        bound && note('此对话沿用原配置。新建对话后可选择其他配置。'),
-        profile && h('dl', { className: 'local-config-details' },
-          h('dt', null, '名称'), h('dd', null, profile.name),
-          h('dt', null, '工作目录'), h('dd', null, profile.directory),
-          h('dt', null, '默认模型'), h('dd', null, modelLabel(profile.model)),
-          h('dt', null, '推理强度'), h('dd', null, profile.effort)),
+        profileSummary(true),
+        settingsProfile && h(Button, { disabled: browsing || accessPending || registerBusy || settingsProfile.id === defaultProfileId,
+          onClick: () => void setNewProfile() },
+        settingsProfile.id === defaultProfileId ? '新聊天默认配置' : '设为新聊天配置'),
         h('hr'),
         h('form', { className: 'local-register', onSubmit: (event) => void register(event) },
           h('h3', null, '注册本机配置'),
@@ -615,7 +650,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
             h('label', null, '推理强度', h('select', { value: effort ?? '', disabled: browsing || registerBusy || !model,
               onChange: (event) => setEffortId(event.target.value) },
             model?.efforts.map((item) => h('option', { key: item, value: item }, item))))),
-          registerError && h('div', { role: 'status', className: 'local-alert' }, registerError),
+          registerError && h('div', { role: 'alert', className: 'local-alert' }, registerError),
           h(Button, { type: 'submit', className: 'local-primary',
             disabled: browsing || accessPending || registerBusy || statusBusy || !status || !model || !name.trim() },
           registerBusy ? '正在选择工作目录…' : '选择工作目录并保存')));
