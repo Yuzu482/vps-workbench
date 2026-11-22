@@ -16,6 +16,14 @@ export const settingsCss = `
     padding:12px 19px 12px 22px; border-bottom:1px solid var(--vc-line);
   }
   [data-vps-chat] .vc-settings-header h2 {font-size:17px; letter-spacing:.01em; margin:0; font-weight:680}
+  [data-vps-chat] .vc-settings-unsaved {color:var(--vc-accent); font-size:12px; margin-inline-start:8px; margin-inline-end:auto}
+  [data-vps-chat] .vc-settings-confirm-dialog {
+    width:min(418px,calc(100% - 28px)); padding:17px 18px; border:1px solid var(--vc-line); border-radius:14px;
+    color:var(--vc-ink); background:var(--vc-surface); box-shadow:0 18px 45px #17111651;
+  }
+  [data-vps-chat] .vc-settings-confirm-dialog::backdrop {background:color-mix(in srgb,var(--vc-overlay) 68%,transparent)}
+  [data-vps-chat] .vc-settings-confirm-dialog h2 {font-size:17px; margin:0}
+  [data-vps-chat] .vc-settings-confirm-dialog p {margin:6px 0 14px; overflow-wrap:anywhere}
   [data-vps-chat] .vc-settings-close {
     width:34px; height:34px; display:grid; place-items:center; padding:0; min-height:0;
     color:var(--vc-muted); font:400 22px/1 system-ui,sans-serif; border-radius:9px;

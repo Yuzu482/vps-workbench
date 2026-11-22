@@ -423,6 +423,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [setupOpen, setSetupOpen] = React.useState(false);
     const [accountOpen, setAccountOpen] = React.useState(null);
     const [settingsError, setSettingsError] = React.useState('');
+    const [pinConfirmationRequired, setPinConfirmationRequired] = React.useState(false);
     const [historyOpen, setHistoryOpen] = React.useState(false);
     const [designPane, setDesignPane] = React.useState('split');
     const [playgroundView, setPlaygroundView] = React.useState(null);
@@ -480,7 +481,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const activeTool = showingSubscription ? subscriptionProvider : chatEnabled ? connection.provider : undefined;
     const activePreferences = { ...preferences, ...toolProfiles[activeTool] };
     const providerName = providers[connection?.provider ?? defaultSettings.provider].label;
-    const connectionDiagnostics = useVpsConnectionChecks({ rpc, readList, connection, scope,
+    const connectionDiagnostics = useVpsConnectionChecks({ rpc, readList, connection, scope, enabled: chatEnabled,
       model: toolProfiles[connection?.provider]?.model, remoteEnabled, visible, savePreference: saveConversationPreference });
     const rows = allRows[scope] ?? emptyList;
     const storedConversationOptions = React.useMemo(() => {
@@ -1300,6 +1301,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       signal.throwIfAborted();
       await saveConversationPreference(setupConnectionKey, JSON.stringify({ settings, targetId: list.targetId }));
       signal.throwIfAborted();
+      setPinConfirmationRequired(false);
       setToolPreferences({ ...saved, ids });
       setToolProfiles(readToolProfiles(saved.key, toolIds));
       setSubscriptionOpen(false);
@@ -1332,17 +1334,26 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       prepareSelection(row.id, emptySession(row.id, 'chat'));
     }
 
-    function saveSettings(settings) {
+    function saveSettings(settings, { pinConfirmedAgain = false } = {}) {
       return perform('settings', async (signal) => {
         setSettingsError('');
         try {
           const list = readList(await rpc('list', { settings }, signal));
           signal.throwIfAborted();
+          if (setupConnectionKey && ready && !pinConfirmedAgain) {
+            const previous = readList(await rpc('list', { settings: connection }, signal));
+            signal.throwIfAborted();
+            if (previous.targetId !== scope) {
+              setPinConfirmationRequired(true);
+              throw Object.assign(new Error('SSH 主机指纹已变化。请重新核对并确认后保存。'), { code: 'target_changed' });
+            }
+          }
           const preferences = await readToolPreferences(settings, toolIds);
           signal.throwIfAborted();
           if (setupConnectionKey) {
             await saveConversationPreference(setupConnectionKey, JSON.stringify({ settings, targetId: list.targetId }));
             signal.throwIfAborted();
+            setPinConfirmationRequired(false);
             setToolPreferences({ ...preferences, ids: preferences.ids ?? [settings.provider] });
             setToolProfiles(readToolProfiles(preferences.key, toolIds));
             setSubscriptionOpen(false);
@@ -1370,18 +1381,20 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       });
     }
 
-    function saveTools(ids) {
-      if (!ready || providerSwitchLocked) return;
+    async function saveTools(ids, key) {
+      if (!key || !ready || providerSwitchLocked || key !== toolPreferences.key) return false;
       const next = toolIds.filter((id) => ids.includes(id));
+      setSettingsError('');
       try {
-        workbenchStorage.setItem(toolPreferences.key, JSON.stringify(next));
+        if (saveConversationPreference) await saveConversationPreference(key, JSON.stringify(next));
+        else workbenchStorage.setItem(key, JSON.stringify(next));
       } catch {
         setSettingsError('执行端配置未能保存到本机。');
-        return;
+        return false;
       }
-      setToolPreferences({ ...toolPreferences, ids: next });
+      setToolPreferences((previous) => previous.key === key ? { ...previous, ids: next } : previous);
       if (!next.includes(subscriptionProvider)) setSubscriptionOpen(false);
-      setSettingsOpen(false);
+      return true;
     }
 
     function updatePreferences(patch) {
@@ -2344,11 +2357,12 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         } : undefined,
       }) : null,
       h(SettingsDialog, {
-        scope, settings: connection, ...settingsView, ready, name: connectionName, tools, activeTool, savedTools: toolPreferences.ids,
+        scope, settings: connection, ...settingsView, ready, name: connectionName, tools, activeTool,
+        savedTools: toolPreferences.ids, toolKey: toolPreferences.key,
         setTab: (tab) => { setSettingsError(''); setSettingsOpen(tab); },
         error: settingsError, busy: providerSwitchLocked,
         close: () => setSettingsOpen(false), saveConnection: saveSettings, saveTools,
-        VpsConnectionChecks, connectionDiagnostics,
+        VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired,
         openSetup: SetupGuide ? openSetup : undefined,
         preferences, updatePreferences, profiles: toolProfiles, updateTool, readModels: readSettingsModels,
         modelTools: remoteEnabled ? toolsWithModels : emptyList, openAccount, remoteEnabled,
@@ -2364,7 +2378,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         } } : null,
       }),
       SetupGuide && setupOpen ? h(SetupGuide, {
-        connection, connectionName, tools: chatTools, toolIds: toolPreferences.ids, toolProfiles,
+        connection, connectionName, scope, memoryTargetId, tools: chatTools, toolIds: toolPreferences.ids, toolProfiles,
         trial: connectionDiagnostics?.trial,
         rpc, readList, remoteEnabled, accessPending, applyConnection: applySetupConnection, enableTool: enableSetupTool,
         onEnableExecution: access?.mode === 'browse' ? () => changeAccess({ ...access, mode: 'execute' }) : undefined,

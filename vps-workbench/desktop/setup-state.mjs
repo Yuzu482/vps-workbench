@@ -16,14 +16,14 @@ const accountDetails = {
 };
 
 export async function checkVpsConnection({ rpc, readList, settings, signal, updateStep,
-  expectedTargetId, accountConfirmedFor, prepareAccount, selectModel = () => '' }) {
+  expectedTargetId, expectedMemoryTargetId, accountConfirmedFor, prepareAccount, selectModel = () => '' }) {
   let step = 'ssh';
   try {
     updateStep(step, 'checking', '正在使用已核对的主机指纹连接 VPS…');
     const list = readList(await rpc('list', { settings }, signal));
     signal.throwIfAborted();
     const { targetId } = list;
-    if (expectedTargetId && targetId !== expectedTargetId) {
+    if (expectedTargetId && targetId !== expectedTargetId || expectedMemoryTargetId && list.memoryTargetId !== expectedMemoryTargetId) {
       throw Object.assign(new Error('VPS 设置或主机指纹已变化。请重新核对并保存连接。'), { code: 'target_changed' });
     }
     async function probe(kind, mcpServers = []) {
@@ -54,7 +54,7 @@ export async function checkVpsConnection({ rpc, readList, settings, signal, upda
       return { manualTarget: targetId };
     }
     if (!Object.hasOwn(accountDetails, account)) throw new Error('VPS 暂时无法确认账号状态。');
-    updateStep(step, 'passed', accountDetails[account]);
+    updateStep(step, account === 'signed_in' ? 'passed' : account === 'manual' ? 'confirmed' : 'configured', accountDetails[account]);
 
     step = 'model';
     updateStep(step, 'checking', '正在读取执行端的模型选项…');

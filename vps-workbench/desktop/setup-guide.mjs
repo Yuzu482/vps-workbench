@@ -28,7 +28,7 @@ const initialDetail = {
 };
 const button = (text, onClick, extra) => h('button', { type: 'button', className: 'vc-button vc-settings-outline', onClick, ...extra }, text);
 
-export function SetupGuide({ connection, connectionName, tools, toolIds, toolProfiles, rpc, readList,
+export function SetupGuide({ connection, connectionName, scope, memoryTargetId, tools, toolIds, toolProfiles, rpc, readList,
   remoteEnabled, accessPending, applyConnection, enableTool, onEnableExecution, extensions, agentPresets,
   selectedProject, openAccount, openSettings, onClose, workflow, trial }) {
   const title = React.useId();
@@ -53,7 +53,7 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
     .filter((item) => item.provider === provider);
   const agent = presets.find((item) => item.id === presetId);
   const passedCount = steps.filter(([id]) => results[id]?.state === 'passed').length;
-  const ready = verified?.provider === provider && toolIds.includes(provider) && !editing;
+  const ready = verified?.provider === provider && verified.memoryTargetId === memoryTargetId && toolIds.includes(provider) && !editing;
   const disabled = busy || enabling || accessPending;
 
   React.useLayoutEffect(() => {
@@ -79,6 +79,7 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
   }
 
   function reset() {
+    trial?.invalidate();
     setResults({});
     setVerified(null);
     setManualTarget(null);
@@ -139,6 +140,8 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
     try {
       const settings = editing ? connectionSettings(form, provider) : { ...connection, provider };
       const checked = await checkVpsConnection({ rpc, readList, settings, signal, updateStep,
+        expectedTargetId: !editing && provider === connection?.provider ? scope : undefined,
+        expectedMemoryTargetId: !editing ? memoryTargetId : undefined,
         accountConfirmedFor: confirmedTarget,
         async prepareAccount(list) {
           if (!editing) return toolIds.includes(provider);
@@ -155,10 +158,10 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
         setManualTarget(checked?.manualTarget ?? null);
         return;
       }
-      const { list: { targetId, memoryTargetId }, model: baseModel, models, probe } = checked;
-      setVerified({ provider, targetId, model: baseModel.model,
+      const { list: { targetId, memoryTargetId: verifiedMemoryId }, model: baseModel, models, probe } = checked;
+      setVerified({ provider, targetId, memoryTargetId: verifiedMemoryId, model: baseModel.model,
         trialTarget: vpsTrialTarget(settings, checked, useDefaultModel ? undefined : toolProfiles[provider]?.model) });
-      if (presetId) await checkAgent(models, targetId, memoryTargetId, baseModel, probe, signal);
+      if (presetId) await checkAgent(models, targetId, verifiedMemoryId, baseModel, probe, signal);
     } catch (error) {
       if (!signal.aborted) updateStep('agent', 'failed', error?.message || 'Agent 检查未完成，请重试。', error?.code);
     } finally {
@@ -192,7 +195,11 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
 
   const fixAccount = connection && results.ssh?.state === 'passed' && ['failed', 'confirm', 'waiting'].includes(results.account?.state);
   const enableProvider = fixAccount && results.account.code === 'tool_disabled';
-  const editVps = () => { setForm(connectionForm(connection)); setEditing(true); reset(); };
+  const editVps = () => {
+    setForm({ ...connectionForm(connection), hostKeyConfirmed: false });
+    setEditing(true);
+    reset();
+  };
   const editSettings = (tab) => dismiss(() => openSettings(tab));
   const canRun = ready && remoteEnabled && !disabled && !workflow?.blocked && Boolean(workflow);
   const agentError = results.agent?.detail || agentPresets?.error;
@@ -220,7 +227,7 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
             menuIcon(h, icon), workflowProviders[id].label)))),
         h('section', { className: 'vc-setup-group', 'aria-label': '基础接入检查' },
           h('div', { className: 'vc-setup-overview' }, h('h3', null, '基础接入检查'),
-            h('span', { role: 'status' }, `${passedCount} / ${steps.length} 项通过`)),
+            h('span', { role: 'status' }, ready && passedCount < steps.length ? '基础预检完成' : `${passedCount} / ${steps.length} 项通过`)),
           h('ol', { className: 'vc-setup-steps' }, setupChecks.map(([id, label]) => stepCard(id, label,
             id === 'ssh' && editing ? h('div', { className: 'vc-setup-fields' }, h(ConnectionFields, {
               form, busy: disabled, edit(key, value) { setForm((previous) => editConnectionForm(previous, key, value)); reset(); },

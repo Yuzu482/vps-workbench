@@ -6,7 +6,8 @@ const h = React.createElement;
 export const setupAccountActions = {
   codex: 'codex-login', claude: 'claude-api-key', 'claude-sdk': 'claude-login', antigravity: 'antigravity-login',
 };
-export const checkLabels = { waiting: '待检查', checking: '检查中', passed: '已通过', failed: '失败', confirm: '待确认' };
+export const checkLabels = { waiting: '待检查', checking: '检查中', passed: '已通过', failed: '失败', confirm: '待确认',
+  configured: '密钥已配置', confirmed: '已人工确认' };
 
 export function ConnectionResult({ id, label, detail, result, children }) {
   const state = result?.state ?? 'waiting';
@@ -26,25 +27,32 @@ export function vpsTrialTarget(settings, { list, models, model }, defaultModel) 
   return { settings: ordered, targetId: list.targetId, ...(model.model && { model: model.model }), ...(effort && { effort }) };
 }
 
-export function useVpsConnectionChecks({ rpc, readList, connection, scope, model, remoteEnabled, visible, savePreference }) {
-  const context = JSON.stringify([connection, scope, model]);
+export function useVpsConnectionChecks({ rpc, readList, connection, scope, enabled, model, remoteEnabled, visible, savePreference }) {
+  const context = JSON.stringify([connection, scope, enabled, model]);
   const request = React.useRef(null);
   const [attempt, setAttempt] = React.useState(null);
   const current = attempt?.context === context ? attempt : null;
   const trial = useConnectionTrial({ storageKey: 'dsh-vps-chat:setup-trial:ssh-vps:v1', savePreference,
     async request(kind, { target, sessionId, turnId }) {
       const { settings, targetId, ...model } = target;
-      const reply = await rpc('setup-trial', { kind, settings, targetId, sessionId, turnId,
-        ...(kind === 'start' && model) }, AbortSignal.timeout(115000));
-      return reply.targetId === targetId && reply.sessionId === sessionId && reply.turnId === turnId ? reply.status : 'unknown';
+      try {
+        const reply = await rpc('setup-trial', { kind, settings, targetId, sessionId, turnId,
+          ...(kind === 'start' && model) }, AbortSignal.timeout(115000));
+        return reply.targetId === targetId && reply.sessionId === sessionId && reply.turnId === turnId ? reply.status : 'unknown';
+      } catch (error) {
+        if (kind === 'start' && ['workbench_browse_only', 'invalid_request'].includes(error.code)) return 'failed';
+        throw error;
+      }
     },
   });
 
+  const invalidateTrial = trial.invalidate;
   const clear = React.useCallback(() => {
     request.current?.abort();
     request.current = null;
     setAttempt(null);
-  }, []);
+    invalidateTrial();
+  }, [invalidateTrial]);
   React.useLayoutEffect(() => {
     clear();
   }, [clear, context, visible, remoteEnabled]);
@@ -58,7 +66,8 @@ export function useVpsConnectionChecks({ rpc, readList, connection, scope, model
     setAttempt({ context, checking: true, results: {} });
     try {
       const checked = await checkVpsConnection({ rpc, readList, settings: connection, signal,
-        expectedTargetId: scope, accountConfirmedFor, selectModel: () => model?.targetId === scope ? model.id : '',
+        expectedTargetId: scope, accountConfirmedFor, prepareAccount: () => enabled,
+        selectModel: () => model?.targetId === scope ? model.id : '',
         updateStep(id, state, detail, code) {
           if (signal.aborted) return;
           setAttempt((previous) => ({ ...previous,
@@ -78,7 +87,7 @@ export function useVpsConnectionChecks({ rpc, readList, connection, scope, model
   return { clear, test, current, trial, trialTarget };
 }
 
-export function VpsConnectionChecks({ diagnostics, ready, dirty, busy, remoteEnabled, provider, openAccount, focusField }) {
+export function VpsConnectionChecks({ diagnostics, ready, dirty, busy, remoteEnabled, provider, openAccount, openTools, focusField }) {
   const { current, test, trial, trialTarget } = diagnostics;
   const action = (label, onClick, disabled) => h('button', {
     type: 'button', className: 'vc-button vc-settings-outline', onClick, disabled,
@@ -106,9 +115,12 @@ export function VpsConnectionChecks({ diagnostics, ready, dirty, busy, remoteEna
       } else if (result?.state === 'failed' && id === 'egress') {
         repair = action('核对预期出口', () => focusField('expectedIpv4'), busy);
       } else if (id === 'account' && ['failed', 'confirm'].includes(account?.state)) {
-        repair = h('div', { className: 'vc-setup-actions' },
+        repair = account.code === 'tool_disabled' ? action('启用此执行端', openTools, busy) :
+          h('div', { className: 'vc-setup-actions' },
           action(provider === 'claude' ? '设置 VPS 密钥' : '在 VPS 登录', () => openAccount(setupAccountActions[provider]), !canTest),
           current?.checked?.manualTarget && action('已在 VPS 登录，继续检查', () => void test(current.checked.manualTarget), !canTest));
+      } else if (id === 'model' && result?.state === 'failed') {
+        repair = action('检查模型设置', openTools, busy);
       } else if (id === 'response') {
         repair = h(TrialActions, { trial, target: !dirty && trialTarget, allowed: remoteEnabled && !busy });
       }

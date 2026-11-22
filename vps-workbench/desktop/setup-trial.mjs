@@ -18,11 +18,13 @@ export async function runSetupTrial(body, backend, isAllowed) {
   const session = { settings, targetId, sessionId };
   const receipt = { targetId, sessionId, turnId };
   const reply = (status) => ({ ok: true, ...receipt, status });
-  if (!isAllowed()) return reply('unknown');
+  if (!isAllowed()) return reply(kind === 'start' ? 'failed' : 'unknown');
   if (kind === 'start') {
+    const isolation = ['codex', 'antigravity'].includes(settings.provider) ? { workspaceAccess: 'isolated' } :
+      { workflowFiles: { paths: [], attachments: [] } };
     const packet = await backend.request({ op: 'send', ...session, turnId, prompt: trialPrompt,
       ...(model && { model }), ...(effort && { effort }),
-      workflowFiles: { paths: [], attachments: [] }, memoryIsolation: true }, { current: true });
+      ...isolation, memoryIsolation: true }, { current: true });
     if (packet?.ok === false && ['invalid_request', 'invalid_settings', 'target_changed', 'relay_required'].includes(packet.code))
       return { ...reply('failed'), code: packet.code };
     return reply(trialState(packet, receipt, 'complete'));

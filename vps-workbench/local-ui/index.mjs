@@ -159,6 +159,9 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
           ? trialState(packet, { sessionId, turnId }, 'completed') : 'unknown';
       },
     });
+    const invalidateTrial = trial.invalidate;
+    React.useLayoutEffect(() => invalidateTrial(),
+      [invalidateTrial, profile?.id, status?.runtimeAvailable, status?.credentialConfigured]);
     const bound = Boolean(session || record?.history || record?.attempt);
     const runningTurn = session?.turns.findLast((turn) => pending.has(turn.state));
     const canSend = active && !accessPending && !browsing && profile && !statusError &&

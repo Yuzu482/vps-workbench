@@ -21,7 +21,13 @@ export function useConnectionTrial({ storageKey, savePreference, request }) {
   const last = React.useRef(receipt);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
+  const [fresh, setFresh] = React.useState(false);
+  const generation = React.useRef(0);
   const running = React.useRef(false);
+  const invalidate = React.useCallback(() => {
+    generation.current++;
+    setFresh(false);
+  }, []);
 
   async function save(value) {
     await savePreference(storageKey, JSON.stringify(value));
@@ -34,6 +40,7 @@ export function useConnectionTrial({ storageKey, savePreference, request }) {
     running.current = true;
     setBusy(true);
     setError('');
+    const startedIn = generation.current;
     try {
       if (kind === 'start') {
         const prefix = target.profileId ? 'local-' : '';
@@ -46,6 +53,7 @@ export function useConnectionTrial({ storageKey, savePreference, request }) {
         state = await request('inspect', sent);
       }
       await save({ ...sent, state: states.includes(state) ? state : 'unknown' });
+      if (startedIn === generation.current) setFresh(true);
     } catch {
       setError(outstanding(last.current) ? '试跑结果待确认。请查询原回执。' :
         '诊断记录未能保存。请检查本机存储后重试。');
@@ -55,7 +63,7 @@ export function useConnectionTrial({ storageKey, savePreference, request }) {
     }
   }
 
-  return { receipt, busy, error, start: (target) => act('start', target), inspect: () => act('inspect') };
+  return { receipt, busy, error, fresh, invalidate, start: (target) => act('start', target), inspect: () => act('inspect') };
 }
 
 export function TrialActions({ trial, target, allowed }) {
@@ -76,7 +84,8 @@ export function trialResult(trial, target) {
     ? { state: 'confirm', detail: '上一次试跑待确认。可查询发起试跑时的原回执。' } : null;
   if (trial.busy) return { state: 'checking', detail: '正在检查试跑回执…' };
   switch (trial.receipt.state) {
-    case 'passed': return { state: 'passed', detail: '试跑已收到完整模型回复。' };
+    case 'passed': return trial.fresh ? { state: 'passed', detail: '试跑已收到完整模型回复。' } :
+      { state: 'confirm', detail: '上次试跑已收到回复。可重新试跑以确认当前状态。' };
     case 'failed': return { state: 'failed', detail: '试跑未收到完整回复。请核对账号额度、模型选项和网络。' };
     default: return { state: 'confirm', detail: '尚未收到完整回复。请查询原回执。' };
   }

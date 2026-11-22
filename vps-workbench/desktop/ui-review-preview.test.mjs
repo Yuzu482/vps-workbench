@@ -563,6 +563,124 @@ test('local setup checks credentials and runs only the explicitly selected SDK p
   assert.deepEqual(ssh, []);
 });
 
+test('settings keep drafts across tabs, guard all exits, and keep instant preferences on discard', { timeout: 35_000 }, async (t) => {
+  const page = await openPreview(t);
+  const entry = page.getByRole('button', { name: 'VPS 设置', exact: true });
+  const settings = page.getByRole('dialog', { name: 'VPS 设置', exact: true });
+  const guard = page.getByRole('dialog', { name: '有未保存的设置', exact: true });
+  const tab = (name) => settings.getByRole('navigation').getByRole('button', { name, exact: true });
+  const tool = settings.getByRole('checkbox', { name: 'Claude API', exact: true });
+  const light = settings.getByRole('button', { name: '浅色', exact: true });
+  const close = settings.getByRole('button', { name: '关闭设置', exact: true });
+  await entry.click();
+  await tab('执行端').click();
+  await tool.uncheck();
+  await tab('外观').click();
+  await light.click();
+  await settings.getByText('应用偏好已保存', { exact: true }).waitFor();
+  await settings.getByText('有未保存的设置', { exact: true }).waitFor();
+  const disclosure = settings.locator('summary').filter({ hasText: '强调色' });
+  await disclosure.press('Enter');
+  await settings.getByRole('group', { name: '强调色', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await disclosure.evaluate((node) => node.parentElement.open), false);
+  await page.keyboard.press('Escape');
+  await guard.waitFor();
+  await page.keyboard.press('Escape');
+  await guard.waitFor({ state: 'hidden' });
+  assert.equal(await disclosure.evaluate((node) => node === document.activeElement), true);
+
+  await close.click();
+  await guard.getByRole('button', { name: '继续编辑', exact: true }).click();
+  assert.equal(await close.evaluate((node) => node === document.activeElement), true);
+  await page.mouse.click(2, 4);
+  await guard.waitFor();
+  await guard.getByRole('button', { name: '继续编辑', exact: true }).click();
+  await tab('执行端').click();
+  assert.equal(await tool.isChecked(), false);
+  await settings.getByRole('button', { name: '接入向导', exact: true }).click();
+  await guard.getByRole('button', { name: '放弃修改', exact: true }).click();
+  const guide = page.getByRole('dialog', { name: 'VPS 接入向导', exact: true });
+  await guide.waitFor();
+  await guide.getByRole('button', { name: '关闭接入向导', exact: true }).click();
+  await guide.waitFor({ state: 'hidden' });
+  await entry.click();
+  await tab('执行端').click();
+  assert.equal(await tool.isChecked(), true);
+  await tab('外观').click();
+  assert.equal(await light.getAttribute('aria-pressed'), 'true');
+  await page.keyboard.press('Escape');
+  await settings.waitFor({ state: 'hidden' });
+  assert.equal(await entry.evaluate((node) => node === document.activeElement), true);
+});
+
+test('failed setting saves preserve their draft and a new VPS keeps the former target enablement separate', { timeout: 35_000 }, async (t) => {
+  const page = await openPreview(t);
+  let refuseSave = true;
+  await page.route('**/__preview/connection', (route) => refuseSave ? route.fulfill({ status: 500 }) : route.continue());
+  const entry = page.getByRole('button', { name: 'VPS 设置', exact: true });
+  const settings = page.getByRole('dialog', { name: 'VPS 设置', exact: true });
+  const guard = page.getByRole('dialog', { name: '有未保存的设置', exact: true });
+  const tab = (name) => settings.getByRole('navigation').getByRole('button', { name, exact: true });
+  const field = settings.getByLabel('SSH 私钥文件路径', { exact: true });
+  const tool = settings.getByRole('checkbox', { name: 'Claude API', exact: true });
+  const next = 'C:/Preview/alternate-identity';
+  await entry.click();
+  await tab('连接').click();
+  await field.fill(next);
+  await page.keyboard.press('Escape');
+  await guard.getByRole('button', { name: '保存并继续', exact: true }).click();
+  await guard.getByRole('alert').filter({ hasText: '连接配置未能保存' }).waitFor();
+  await guard.getByRole('button', { name: '继续编辑', exact: true }).click();
+  assert.equal(await field.inputValue(), next);
+  assert.equal(await field.evaluate((node) => node === document.activeElement), true);
+  await tab('执行端').click();
+  await tool.uncheck();
+  await tab('连接').click();
+  await settings.getByRole('button', { name: '保存连接配置', exact: true }).click();
+  await guard.getByText('请先处理原连接的执行端启用变更。', { exact: true }).waitFor();
+  refuseSave = false;
+  await guard.getByRole('button', { name: '保存并继续', exact: true }).click();
+  await settings.getByText('连接配置已保存', { exact: true }).waitFor();
+  await tab('执行端').click();
+  assert.equal(await tool.isChecked(), false);
+  const prefs = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key)).preferences, previewStorageKey);
+  const oldEnabled = Object.entries(prefs).find(([key]) => key.startsWith('dsh-vps-chat-tools:v1:'));
+  assert.deepEqual(JSON.parse(oldEnabled[1]), ['codex', 'claude-sdk', 'antigravity', 'claude-subscription']);
+  assert.equal(JSON.parse(prefs[setupConnectionKey]).settings.identityPath, next);
+});
+
+test('a changed SSH pin requires fresh confirmation in settings and in the wizard', { timeout: 30_000 }, async (t) => {
+  const page = await openPreview(t);
+  await page.getByText('本地演示 · VPS 已配置', { exact: true }).waitFor();
+  const calls = [];
+  await page.route('**/dsh-vps-chat/api/rpc', (route) => {
+    const { op } = route.request().postDataJSON();
+    calls.push(op);
+    return op === 'list' ? route.fulfill({ json: { ok: true, targetId: 'a'.repeat(64),
+      memoryTargetId: 'b'.repeat(64), sessions: [] } }) : route.continue();
+  });
+  const entry = page.getByRole('button', { name: 'VPS 设置', exact: true });
+  const settings = page.getByRole('dialog', { name: 'VPS 设置', exact: true });
+  await entry.click();
+  await settings.getByRole('button', { name: '连接', exact: true }).click();
+  const save = settings.getByRole('button', { name: '保存连接配置', exact: true });
+  await save.click();
+  await settings.getByText('SSH 主机指纹已变化。请重新核对并确认后保存。', { exact: true }).waitFor();
+  assert.equal(await settings.getByRole('checkbox', { name: /已核对/u }).isChecked(), false);
+  assert.equal(await save.isDisabled(), true);
+  await settings.getByRole('button', { name: '接入向导', exact: true }).click();
+  const guide = page.getByRole('dialog', { name: 'VPS 接入向导', exact: true });
+  await guide.getByRole('radio', { name: 'Claude API', exact: true }).check();
+  await guide.getByRole('button', { name: '开始检查', exact: true }).click();
+  await guide.getByRole('listitem', { name: 'SSH 连接与主机指纹', exact: true }).getByRole('alert')
+    .filter({ hasText: 'VPS 设置或主机指纹已变化' }).waitFor();
+  assert.equal(calls.includes('setup-check'), false);
+  await guide.getByRole('button', { name: '编辑连接', exact: true }).click();
+  assert.equal(await guide.getByRole('checkbox', { name: /已核对/u }).isChecked(), false);
+  assert.equal(await guide.getByRole('button', { name: '连接并检查', exact: true }).isDisabled(), true);
+});
+
 for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 }]) {
   test(`P5 keeps workspace, board and resource controls distinct at ${viewport.width}×${viewport.height}`, { timeout: 30_000 }, async (t) => {
     const page = await openPreview(t, { viewport });

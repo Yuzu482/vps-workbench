@@ -29,6 +29,8 @@ export function connectionSettings(form, provider = form.provider) {
   const values = Object.fromEntries(settingFields.map(({ key }) => [key, form[key].trim()]));
   return { ...values, port: Number(values.port), hostKeyConfirmed: form.hostKeyConfirmed, provider };
 }
+const formKey = (form) => JSON.stringify([form.provider, form.hostKeyConfirmed, ...settingFields.map(({ key }) => form[key])]);
+const sameTools = (left, right) => left.length === right.length && left.every((id) => right.includes(id));
 
 const pages = [
   ['connection', '连接', 'server'],
@@ -254,36 +256,167 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
           }, action.label))))));
   }
 
-  function Session({ settings, tab, setTab, ready, name, tools, activeTool, savedTools, error, busy, close,
+  return function SettingsDialog({ settings, tab: openTab, visit, scope, setTab, ready, name, tools, activeTool, savedTools,
+    toolKey, error, busy, close, openSetup,
     saveConnection, saveTools, preferences, updatePreferences, profiles, updateTool, readModels, modelTools, openAccount,
-    remoteEnabled = true, extensionSettings, agentSettings, VpsConnectionChecks, connectionDiagnostics }) {
-    const [form, setForm] = React.useState(() => connectionForm(settings));
-    const [configured, setConfigured] = React.useState(savedTools);
+    remoteEnabled = true, extensionSettings, agentSettings, VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired }) {
+    const dialog = React.useRef(null);
+    const confirmDialog = React.useRef(null);
+    const pointerOutside = React.useRef(false);
+    const [lastTab, setLastTab] = React.useState(false);
+    const tab = openTab || lastTab;
     const scroll = React.useRef(null);
+    const titleId = React.useId();
+    const confirmId = React.useId();
     const panelId = React.useId();
+    const [connectionDraft, setConnectionDraft] = React.useState(null);
+    const [toolsDraft, setToolsDraft] = React.useState(null);
+    const [transition, setTransition] = React.useState(null);
+    const [draftError, setDraftError] = React.useState('');
+    const [preferenceSaved, setPreferenceSaved] = React.useState(false);
+    const [saving, setSaving] = React.useState(false);
+    const write = React.useRef(false);
+    const savedForm = connectionForm(settings);
+    const origin = JSON.stringify([scope, formKey(savedForm)]);
+    const pinChanged = pinConfirmationRequired || connectionDiagnostics?.current?.results.ssh?.code === 'target_changed';
+    const editedForm = connectionDraft?.value ?? savedForm;
+    const form = pinChanged && !connectionDraft?.pinConfirmedAgain ? { ...editedForm, hostKeyConfirmed: false } : editedForm;
+    const configured = toolsDraft?.value ?? savedTools;
+    const locked = busy || saving;
+    const dirty = Boolean(connectionDraft || toolsDraft);
+    const connectionDirty = Boolean(connectionDraft);
     const prefPage = tab === 'appearance' || tab === 'interaction';
     const savePage = tab === 'connection' || tab === 'tools';
     const preferenceKeys = tab === 'appearance' ? ['color', 'accent', 'textSize', 'width'] : ['sendKey', 'motion'];
     const canReset = preferenceKeys.some(key => preferences[key] !== defaultPreferences[key]);
-    const connectionDirty = JSON.stringify(form) !== JSON.stringify(connectionForm(settings));
     const saveAllowed = form.hostKeyConfirmed && settingFields.every(({ key, optional }) => optional || form[key].trim()) &&
       Number.isInteger(Number(form.port)) && Number(form.port) >= 1 && Number(form.port) <= 65535;
 
-    React.useLayoutEffect(() => { scroll.current.scrollTop = 0; }, [tab]);
+    React.useLayoutEffect(() => {
+      const element = dialog.current;
+      if (openTab) {
+        setLastTab(openTab);
+        if (!element.open) {
+          setPreferenceSaved(false);
+          element.showModal();
+          (element.querySelector('.vc-settings-nav [aria-current]') ?? element.querySelector('.vc-settings-close'))
+            ?.focus({ preventScroll: true });
+        }
+      } else if (element.open) {
+        element.close();
+        return afterPopupMotion(element, () => setLastTab(false));
+      }
+    }, [openTab, visit]);
+
+    React.useLayoutEffect(() => {
+      if (!transition) return;
+      confirmDialog.current.showModal();
+      confirmDialog.current.querySelector('[data-continue-editing]').focus({ preventScroll: true });
+    }, [transition]);
+    React.useLayoutEffect(() => { if (scroll.current) scroll.current.scrollTop = 0; }, [tab]);
 
     function edit(key, value) {
+      if (locked) return;
       connectionDiagnostics?.clear();
-      setForm(previous => editConnectionForm(previous, key, value));
+      setDraftError('');
+      setConnectionDraft((previous) => {
+        const next = editConnectionForm(form, key, value);
+        const base = previous?.origin ?? origin;
+        const pinConfirmedAgain = key === 'hostKeyConfirmed' ? value : next.hostKeyConfirmed && previous?.pinConfirmedAgain;
+        return base === origin && formKey(next) === formKey(savedForm) && !pinConfirmedAgain
+          ? null : { value: next, origin: base, pinConfirmedAgain };
+      });
+    }
+
+    function setConfigured(update) {
+      setDraftError('');
+      setToolsDraft((previous) => {
+        const next = update(previous?.value ?? savedTools);
+        const key = previous?.key ?? toolKey;
+        return key === toolKey && sameTools(next, savedTools) ? null : { value: next, key };
+      });
+    }
+
+    async function persistDrafts({ connection = false, tools = false } = {}) {
+      if (locked || write.current) return false;
+      setDraftError('');
+      if (tools && toolsDraft && (!ready || toolsDraft.key !== toolKey)) {
+        setDraftError('执行端草稿属于先前的 VPS 配置。请回到该连接后保存。');
+        return false;
+      }
+      if (connection && connectionDraft && connectionDraft.origin !== origin) {
+        setDraftError('连接已变化，草稿仍属于先前的配置。请返回原连接或先放弃此草稿。');
+        return false;
+      }
+      if (connection && !saveAllowed) {
+        setDraftError('请填写连接信息，并核对 SSH 主机指纹后保存。');
+        return false;
+      }
+      write.current = true;
+      setSaving(true);
+      try {
+        if (tools && toolsDraft) {
+          if (!await saveTools(toolsDraft.value, toolsDraft.key)) return false;
+          setToolsDraft(null);
+        }
+        if (connection) {
+          if (!await saveConnection(connectionSettings(form), { pinConfirmedAgain: connectionDraft?.pinConfirmedAgain })) return false;
+          setConnectionDraft(null);
+        }
+        return true;
+      } finally {
+        write.current = false;
+        setSaving(false);
+      }
+    }
+
+    function requestTransition(proceed, trigger = document.activeElement, onlyTools = false) {
+      if (locked || write.current || transition) return;
+      if (onlyTools ? toolsDraft : dirty) {
+        setDraftError('');
+        setTransition({ proceed, trigger, onlyTools });
+      } else void proceed();
+    }
+
+    function closeTransition(restoreFocus) {
+      confirmDialog.current.close();
+      setTransition(null);
+      if (restoreFocus) transition.trigger?.focus({ preventScroll: true });
+    }
+
+    async function resolveTransition(save) {
+      if (locked || write.current) return;
+      const { proceed, onlyTools } = transition;
+      if (save) {
+        if (!await persistDrafts({ connection: !onlyTools && connectionDirty, tools: Boolean(toolsDraft) })) return;
+      } else {
+        setToolsDraft(null);
+        if (!onlyTools) setConnectionDraft(null);
+      }
+      closeTransition(false);
+      await proceed();
+    }
+
+    function onCancel(event) {
+      if (event.target !== event.currentTarget) return;
+      event.preventDefault();
+      if (locked) return;
+      const focused = document.activeElement?.closest('details[open]');
+      const details = focused && dialog.current.contains(focused) ? focused : scroll.current?.querySelector('details[open]');
+      if (details) {
+        details.open = false;
+        details.querySelector('summary').focus({ preventScroll: true });
+      } else requestTransition(close);
     }
 
     async function submit(event) {
       event.preventDefault();
-      if (busy || !savePage) return;
+      if (locked || !openTab || !savePage) return;
       if (tab === 'tools') {
-        if (ready) saveTools(configured);
-      } else if (saveAllowed) {
-        const next = connectionSettings(form);
-        if (await saveConnection(next)) setForm(connectionForm(next));
+        const saved = await persistDrafts({ tools: true });
+        if (saved && !connectionDirty) close();
+      } else {
+        requestTransition(() => persistDrafts({ connection: true }), event.nativeEvent.submitter, true);
       }
     }
 
@@ -304,12 +437,31 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
       memory: ['长期记忆', '将选定的参考内容用于当前 VPS 和项目的后续 Codex 消息。'],
     }[tab];
     const customPanel = extensionSettings && extensionPages.some(([id]) => id === tab);
-    return h('div', { className: 'vc-settings-layout' },
+    function guardedAccount(action) { requestTransition(() => openAccount(action)); }
+    function changePreferences(patch) {
+      const saved = updatePreferences(patch);
+      setPreferenceSaved(saved);
+      return saved;
+    }
+    return h('dialog', {
+      ref: dialog, className: 'vc-settings vc-workbench-settings vc-popup-motion', 'aria-labelledby': titleId, onCancel,
+      onPointerDown: (event) => { pointerOutside.current = event.target === event.currentTarget; },
+      onClick: (event) => {
+        if (pointerOutside.current && event.target === event.currentTarget) requestTransition(close);
+      },
+    }, tab ? h(React.Fragment, null,
+      h('header', { className: 'vc-settings-header' }, h('h2', { id: titleId }, 'VPS 设置'),
+        dirty && h('span', { className: 'vc-settings-unsaved', role: 'status' }, '有未保存的设置'),
+        openSetup ? h('button', { type: 'button', className: 'vc-button vc-setup-entry', disabled: locked,
+          onClick: (event) => requestTransition(openSetup, event.currentTarget) }, menuIcon(h, 'server'), '接入向导') : null,
+        h('button', { type: 'button', className: 'vc-button vc-settings-close', 'aria-label': '关闭设置', disabled: locked,
+          onClick: (event) => requestTransition(close, event.currentTarget) }, '×')),
+      h('div', { className: 'vc-settings-layout' },
       h('nav', { className: 'vc-settings-nav', 'aria-label': 'VPS 设置分类' },
         (extensionSettings ? [...pages, ...extensionPages] : pages).filter(([id]) => id !== 'agents' || agentSettings)
           .map(([id, label, icon]) => h('button', {
           key: id, type: 'button', className: 'vc-button', 'aria-current': tab === id ? 'page' : undefined,
-          disabled: busy || (id === 'tools' && !ready), onClick: () => setTab(id),
+          disabled: locked || (id === 'tools' && !ready && !toolsDraft), onClick: () => setTab(id),
         }, menuIcon(h, icon), label))),
       h('form', { className: 'vc-settings-form', onSubmit: submit },
         h('div', { className: 'vc-settings-scroll', ref: scroll },
@@ -320,87 +472,68 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
               VpsConnectionChecks && h('p', { className: 'vc-settings-current', role: 'status' },
                 connectionDirty ? '连接配置未保存' : !ready ? '连接尚未保存' :
                   name === '本机保存的 VPS' ? '连接配置已保存' : '已载入 VPS 预设'),
+              pinChanged && !form.hostKeyConfirmed ? h('p', { className: 'vc-feedback', role: 'alert' },
+                '请重新核对 SSH 主机指纹并保存连接。') : null,
               VpsConnectionChecks && h(VpsConnectionChecks, { diagnostics: connectionDiagnostics, ready, dirty: connectionDirty,
-                busy, remoteEnabled, provider: form.provider, openAccount, focusField }),
-              h(ConnectionSettings, { form, edit, busy })) : null,
+                busy: locked, remoteEnabled, provider: form.provider, openAccount: guardedAccount,
+                openTools: () => setTab('tools'), focusField }),
+              h(ConnectionSettings, { form, edit, busy: locked })) : null,
             tab === 'tools' ? h(ToolSettings, {
-              tools, configured, setConfigured, profiles, preferences, updateTool, readModels, modelTools, activeTool, busy,
+              tools, configured, setConfigured, profiles, preferences, updateTool, readModels, modelTools, activeTool, busy: locked,
             }) : null,
             tab === 'agents' && agentSettings ? h(agentSettings.Component, { ...agentSettings.props, busy }) : null,
             tab === 'accounts' ? h(AccountSettings, { available: remoteEnabled && ready && !busy && settings?.hostKeyConfirmed,
-              openAccount, remoteEnabled }) : null,
+              openAccount: guardedAccount, remoteEnabled }) : null,
             tab === 'appearance' ? h(React.Fragment, null,
-              h(PreferenceRows, { rows: appearanceRows.slice(0, 1), values: preferences, change: updatePreferences, disabled: busy }),
-              h(AccentOptions, { value: preferences.accent, change: updatePreferences, disabled: busy }),
-              h(PreferenceRows, { rows: appearanceRows.slice(1), values: preferences, change: updatePreferences, disabled: busy })) : null,
+              h(PreferenceRows, { rows: appearanceRows.slice(0, 1), values: preferences, change: changePreferences, disabled: locked }),
+              h(AccentOptions, { value: preferences.accent, change: changePreferences, disabled: locked }),
+              h(PreferenceRows, { rows: appearanceRows.slice(1), values: preferences, change: changePreferences, disabled: locked })) : null,
             tab === 'interaction' ? h(PreferenceRows, {
-              rows: interactionRows, values: preferences, change: updatePreferences, disabled: busy,
+              rows: interactionRows, values: preferences, change: changePreferences, disabled: locked,
             }) : null,
             customPanel ? h(extensionSettings.Component, { ...extensionSettings.props, section: tab,
               busy: busy || extensionSettings.props.busy }) : null)),
         h('footer', { className: 'vc-settings-footer' },
-          error ? h('div', { className: 'vc-feedback', role: 'alert' }, error) : null,
+          draftError || error ? h('div', { className: 'vc-feedback', role: 'alert' }, draftError || error) : null,
+          prefPage && preferenceSaved ? h('p', { className: 'vc-settings-current', role: 'status' }, '应用偏好已保存') : null,
           h('div', { className: 'vc-dialog-actions' },
             prefPage ? h('button', {
-              type: 'button', className: 'vc-button vc-settings-outline', disabled: busy || !canReset,
-              onClick: () => updatePreferences(Object.fromEntries(preferenceKeys.map(key => [key, defaultPreferences[key]]))),
+              type: 'button', className: 'vc-button vc-settings-outline', disabled: locked || !canReset,
+              onClick: () => changePreferences(Object.fromEntries(preferenceKeys.map(key => [key, defaultPreferences[key]]))),
             }, '恢复默认') : null,
             h('button', {
-              type: 'button', className: `vc-button ${savePage ? 'vc-settings-outline' : 'vc-primary'}`, disabled: busy,
-              onClick() {
-                if (tab === 'tools') setConfigured(savedTools);
-                close();
+              type: 'button', className: `vc-button ${savePage ? 'vc-settings-outline' : 'vc-primary'}`, disabled: locked,
+              onClick(event) {
+                if (tab === 'tools' && toolsDraft) {
+                  setToolsDraft(null);
+                  setDraftError('');
+                  if (!connectionDirty) close();
+                } else requestTransition(close, event.currentTarget);
               },
-            }, tab === 'tools' ? '放弃启用变更' : savePage && !VpsConnectionChecks ? '取消' : '完成'),
+            }, tab === 'tools' && toolsDraft ? '放弃启用变更' : '完成'),
+            tab === 'connection' && connectionDirty ? h('button', {
+              type: 'button', className: 'vc-button vc-settings-outline', disabled: locked,
+              onClick: () => { setConnectionDraft(null); setDraftError(''); },
+            }, '放弃连接变更') : null,
             savePage ? h('button', {
-              type: 'submit', className: 'vc-button vc-primary', disabled: busy || (tab === 'tools' ? !ready : !saveAllowed),
-            }, tab === 'tools' ? '保存启用变更' : VpsConnectionChecks ? '保存连接配置' : busy ? '正在检查设置' : '使用此 VPS') : null))));
-  }
-
-  return function SettingsDialog(props) {
-    const { tab, visit, scope, busy, close, openSetup } = props;
-    const ref = React.useRef(null);
-    const pointerOutside = React.useRef(false);
-    const titleId = React.useId();
-    const [lastTab, setLastTab] = React.useState(false);
-    const shownTab = tab || lastTab;
-
-    React.useLayoutEffect(() => {
-      const dialog = ref.current;
-      if (tab) {
-        setLastTab(tab);
-        if (!dialog.open) {
-          dialog.showModal();
-          (dialog.querySelector('.vc-settings-nav [aria-current]') ?? dialog.querySelector('.vc-settings-close'))
-            ?.focus({ preventScroll: true });
-        }
-      } else if (dialog.open) {
-        dialog.close();
-        return afterPopupMotion(dialog, () => setLastTab(false));
-      }
-    }, [tab, visit]);
-
-    function onCancel(event) {
-      event.preventDefault();
-      if (busy) return;
-      const details = document.activeElement?.closest('details[open]');
-      if (details && ref.current.contains(details)) {
-        details.open = false;
-        details.querySelector('summary').focus({ preventScroll: true });
-      } else close();
-    }
-
-    return h('dialog', {
-      ref, className: 'vc-settings vc-workbench-settings vc-popup-motion', 'aria-labelledby': titleId, onCancel,
-      onPointerDown: (event) => { pointerOutside.current = event.target === event.currentTarget; },
-      onClick: (event) => { if (pointerOutside.current && event.target === event.currentTarget && !busy) close(); },
-    }, shownTab ? h(React.Fragment, null,
-      h('header', { className: 'vc-settings-header' }, h('h2', { id: titleId }, 'VPS 设置'),
-        openSetup ? h('button', { type: 'button', className: 'vc-button vc-setup-entry', disabled: busy, onClick: openSetup },
-          menuIcon(h, 'server'), '接入向导') : null,
-        h('button', {
-          type: 'button', className: 'vc-button vc-settings-close', 'aria-label': '关闭设置', disabled: busy, onClick: close,
-        }, '×')),
-      h(Session, { ...props, key: `${visit}:${scope}`, tab: shownTab })) : null);
+              type: 'submit', className: 'vc-button vc-primary', disabled: locked || (tab === 'tools' ? !ready || !toolsDraft : !saveAllowed),
+            }, tab === 'tools' ? '保存启用变更' : VpsConnectionChecks ? '保存连接配置' : '使用此 VPS') : null)))),
+      transition ? h('dialog', { ref: confirmDialog, className: 'vc-settings-confirm-dialog vc-popup-motion',
+        'aria-labelledby': confirmId, onCancel(event) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!locked) closeTransition(true);
+        } },
+        h('h2', { id: confirmId }, '有未保存的设置'),
+        h('p', null, transition.onlyTools ? '请先处理原连接的执行端启用变更。' :
+          '保存连接配置和执行端启用变更，或放弃这些编辑后继续。'),
+        draftError || error ? h('p', { className: 'vc-feedback', role: 'alert' }, draftError || error) : null,
+        h('div', { className: 'vc-dialog-actions' },
+          h('button', { type: 'button', className: 'vc-button vc-settings-outline', 'data-continue-editing': '',
+            disabled: locked, onClick: () => closeTransition(true) }, '继续编辑'),
+          h('button', { type: 'button', className: 'vc-button vc-settings-outline', disabled: locked,
+            onClick: () => void resolveTransition(false) }, '放弃修改'),
+          h('button', { type: 'button', className: 'vc-button vc-primary', disabled: locked,
+            onClick: () => void resolveTransition(true) }, '保存并继续'))) : null) : null);
   };
 }
