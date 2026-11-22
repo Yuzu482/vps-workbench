@@ -221,6 +221,20 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 .desktop-menu-heading { padding: 4px 8px 2px; color: var(--desktop-muted); font-size: 11px; font-weight: 600; }
 .desktop-title-menu kbd { margin-inline-start: auto; color: var(--desktop-muted); font-family: inherit; font-size: 11px; white-space: nowrap; }
 .desktop-title-menu hr { width: calc(100% - 8px); margin: 5px 4px; border: 0; border-top: 1px solid var(--desktop-line); }
+.desktop-link-dialog {
+  box-sizing:border-box; width:min(440px, calc(100vw - 24px)); padding:18px; border-radius:14px;
+  color:var(--desktop-ink); background:var(--desktop-surface); border:1px solid var(--desktop-line);
+  box-shadow:var(--desktop-shadow);
+}
+.desktop-link-dialog::backdrop { background:#130d0960; }
+.desktop-link-dialog form, .desktop-link-dialog label { display:grid; gap:8px; }
+.desktop-link-dialog input, .desktop-link-dialog button {
+  font:inherit; color:inherit; background:var(--desktop-chrome); border:1px solid var(--desktop-line);
+  border-radius:7px; padding:6px 8px;
+}
+.desktop-link-dialog input { min-width:0; }
+.desktop-link-dialog button:hover { background:var(--desktop-hover); }
+.desktop-link-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; }
 #root > :is([data-vps-chat], [data-local-sdk]) {
   --desktop-actions-height: 62px;
   width: 100%; height: 100%;

@@ -26,6 +26,7 @@ import { readPreferences, readToolProfiles, writePreferences, writeToolProfiles 
 import { workbenchStorage } from './workbench-storage.js';
 import { advancedModelOptionsCss, modelParametersKey, readStoredModelParameters } from './advanced-model-options.js';
 import { readModelParameterFields, validModelParameters } from './model-parameters.js';
+import { conversationLink, maxQuoteLength, quotedPrompt, readQuotedPrompt } from './chat-reference.js';
 
 export function createWorkbench({ React, CodeBlock, writeClipboard, subscriptionRequiresRelay = true, hostThemeLabel,
   parseStreamingMarkdown, stabilizeStreamingRecord, sidebarActions = false, ResourceLibrary, onThemeReveal,
@@ -337,12 +338,15 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       ? (revision ? revision.sources?.length ?? 0 : extractHtmlFences(turn.reply).length) : 0,
     [design, turn.state, turn.reply, revision]);
     const steering = [...(turn.steering ?? [])];
+    const message = readQuotedPrompt(workflowEdit?.prompt ?? turn.prompt);
     for (const note of pendingSteers) {
       if (note.turnId !== turn.id || steering.some((entry) => entry.id.toLowerCase() === note.id)) continue;
       steering.push({ ...note, state: sendingSteer === note.id ? 'submitting' : 'unknown' });
     }
     return h('article', { className: 'vc-turn', 'data-turn-id': turn.id, 'data-turn-state': state, tabIndex: -1 },
-      h('div', { className: 'vc-user vc-text', 'aria-label': '你的消息' }, workflowEdit?.prompt ?? turn.prompt),
+      h('div', { className: 'vc-user vc-text', 'aria-label': '你的消息' },
+        message.quote ? h('div', { className: 'vc-quote-preview', title: message.quote },
+          menuIcon(h, 'quote'), h('span', null, message.quote)) : null, message.prompt),
       steering.length ? h('ol', { className: 'vc-steering', 'aria-label': '本轮补充' },
         steering.map((note) => h('li', { key: note.id, 'data-steer-id': note.id, 'data-state': note.state },
           h('div', { className: 'vc-text' }, note.prompt),
@@ -379,7 +383,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
   function Workbench({ projectCatalog, terminalView, active = true, visible = true, resourcesOpen, setResourcesOpen,
     access, accessPending, changeAccess, extensions, agentPresets, workflowStore, onNewChat, newChatRequest = 0,
-    settingsSurface, applicationPreferences, local }) {
+    settingsSurface, applicationPreferences, local, chatLink, onChatLinkResult }) {
     const workspaceSnapshot = React.useSyncExternalStore(projectCatalog.subscribe, projectCatalog.getSnapshot);
     const SubscriptionTerminal = React.useSyncExternalStore(terminalView.subscribe, terminalView.getSnapshot);
     const [subscriptionOpen, setSubscriptionOpen] = React.useState(false);
@@ -422,6 +426,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const activeToolKey = React.useRef(toolPreferences.key);
     activeToolKey.current = toolPreferences.key;
     const [loadingPreset, setLoadingPreset] = React.useState(true);
+    const [resolvedLocalPreset, setResolvedLocalPreset] = React.useState(null);
     const [scope, setScope] = React.useState('');
     const [memoryTargetId, setMemoryTargetId] = React.useState(null);
     const [antigravityRoute, setAntigravityRoute] = React.useState(null);
@@ -429,6 +434,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [selected, setSelected] = React.useState(null);
     const [view, setView] = React.useState(null);
     const [drafts, setDrafts] = React.useState({});
+    const [draftQuotes, setDraftQuotes] = React.useState({});
     const [supplementDrafts, setSupplementDrafts] = React.useState({});
     const [attempts, setAttempts] = React.useState({});
     const [steerAttempts, setSteerAttempts] = React.useState({});
@@ -488,6 +494,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const action = React.useRef(null);
     const polling = React.useRef(null);
     const submittedDraft = React.useRef(null);
+    const openingLink = React.useRef(null);
     const composing = React.useRef(false);
     const composingSteer = React.useRef(null);
     const compositionEndedAt = React.useRef(-Infinity);
@@ -614,6 +621,9 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const draftId = selected ?? (localSdk ? unboundDraft : selected);
     const draft = drafts[draftId] ?? '';
     const prompt = draft.trim();
+    const quoteKey = steerSessionKey(scope, selected);
+    const draftQuote = draftQuotes[quoteKey];
+    const outgoingText = quotedPrompt(prompt, draftQuote);
     const attempt = attempts[selected];
     const turns = snapshot?.session.turns ?? emptyList;
     const lastTurn = turns.at(-1);
@@ -682,7 +692,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       chatEnabled && !parametersBlocked && !savingModelParameters &&
       (!design || designAvailable) && !attached?.error &&
       (attached?.base ? canBranchDesign : snapshot?.canSend) && !attempt && !working && !pollPaused &&
-      !unconfirmedPrompt && !isActive(lastState) && lastState !== 'unknown' && prompt && draft.length <= maxPromptLength);
+      !unconfirmedPrompt && !isActive(lastState) && lastState !== 'unknown' && prompt &&
+      draft.length <= maxPromptLength && outgoingText.length <= maxPromptLength);
     const shouldPoll = Boolean(visible && remoteEnabled && ready && selected && !working && !attempt && !pollPaused && isActive(lastState));
     const pollInterval = lastTurn?.streaming === true ? streamPollInterval : legacyPollInterval;
     const workflows = useWorkflows({ store: workflowStore, rpc, readList, connection, remoteEnabled,
@@ -781,7 +792,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
               : `无法读取 VPS 预设。请在「${settingsLabel}」中手动配置。`);
           }
         } finally {
-          if (!controller.signal.aborted) setLoadingPreset(false);
+          if (!controller.signal.aborted) {
+            if (localSdk) setResolvedLocalPreset(local?.profile?.id ?? null);
+            setLoadingPreset(false);
+          }
         }
       }
       void loadPreset();
@@ -904,6 +918,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         if (sent.sharedDesign) setDesignReceipt({ targetId: route, sessionId: id, turnId: sent.id });
         clearAttempt(id, sent);
         clearMatchingDraft(route, id, sent.draft);
+        if (sent.quote) setDraftQuotes((previous) =>
+          previous[steerSessionKey(route, id)] === sent.quote ? { ...previous, [steerSessionKey(route, id)]: undefined } : previous);
       }
       const latest = messages.at(-1);
       const submission = submittedDraft.current;
@@ -911,6 +927,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           submission?.id === latest.id && submission.sessionId === id) {
         submittedDraft.current = null;
         setDrafts((previous) => previous[id] ? previous : { ...previous, [id]: submission.draft });
+        if (submission.quote) setDraftQuotes((previous) => previous[steerSessionKey(route, id)] ? previous :
+          { ...previous, [steerSessionKey(route, id)]: submission.quote });
       }
       const key = steerSessionKey(route, id);
       setApprovalAttempts((previous) => {
@@ -1112,11 +1130,11 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       if (!expanded || category === projectId) setProjectFilter(expanded ? null : projectId);
     }
 
-    function draftRow(list, draftMode, projectId) {
+    function draftRow(list, draftMode, projectId, route = scope) {
       return list.find((row) =>
         row.local && row.mode === draftMode && projectFor(row) === projectId && !row.projectMemoryIsolated &&
         !(extensions && conversationIsolated?.(extensions.state, { targetId: scope, sessionId: row.id })) &&
-        !attempts[row.id] && !drafts[row.id]?.trim())
+        !attempts[row.id] && !drafts[row.id]?.trim() && !draftQuotes[steerSessionKey(route, row.id)])
         ?? { id: newIdentifier(), mode: draftMode, title: modeTitle(draftMode), local: true, projectId };
     }
 
@@ -1221,6 +1239,19 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
     function notifyContext(text) { setContextNotice({ text }); }
 
+    function linkFor(sessionId, turnId) {
+      if (!onChatLinkResult || !connection) return null;
+      return conversationLink({ location: localSdk ? 'local-sdk' : 'ssh-vps',
+        provider: connection.provider, targetId: scope, sessionId, turnId });
+    }
+
+    function clipboardItem(id, label, text, icon = 'copy') {
+      return { id, label, icon, async run() {
+        const copied = await writeClipboard(text).catch(() => false);
+        notifyContext(copied ? '已复制' : '复制失败');
+      } };
+    }
+
     function restoreConversationFocus(id) {
       requestAnimationFrame(() => {
         if (!workbench.current || document.activeElement !== document.body) return;
@@ -1256,6 +1287,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       if (!saveConversationPreference || (event.type === 'keydown' && !contextMenuKey(event))) return;
       const { pinned, archived } = conversationOptions?.[row.id] ?? {};
       const saved = !row.local;
+      const link = saved && linkFor(row.id);
       const groups = [
         archived ? [] : [{ id: 'pin', icon: pinned ? 'unpin' : 'pin', label: pinned ? '取消置顶' : '置顶会话',
           disabled: !saved, run: () => void changeConversationOptions(row, { pinned: !pinned }) }],
@@ -1263,6 +1295,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           run: () => setConversationDialog({ kind: 'rename', id: row.id, scope }) },
         { id: 'move', icon: 'folder', label: '移动到项目…', disabled: !projects.size && !projectFor(row),
           run: () => setConversationDialog({ kind: 'move', id: row.id, scope }) }],
+        link ? [clipboardItem('conversation-link', '复制对话链接', link, 'link')] : [],
         [{ id: 'archive', icon: archived ? 'restore' : 'archive', label: archived ? '恢复会话' : '归档会话',
           disabled: !saved, run: () => void changeConversationOptions(row, { archived: !archived },
             archived ? '已恢复会话' : '已归档会话') }],
@@ -1334,19 +1367,28 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
       const selectedText = range && region.contains(range.commonAncestorContainer) && range.intersectsNode(target)
         ? selection.toString() : '';
+      const content = target.closest('.vc-user, .vc-markdown, .vc-steering .vc-text, .vc-answer > .vc-text');
+      const quote = turn && range && content?.contains(range.commonAncestorContainer) ? selectedText.trim().replaceAll('\0', '') : '';
       const code = target.closest('.vc-code-block')?.querySelector('pre code')?.textContent;
-      function copy(id, label, text, icon = 'copy') {
-        return { id, label, icon, async run() {
-          const copied = await writeClipboard(text).catch(() => false);
-          notifyContext(copied ? '已复制' : '复制失败');
-        } };
-      }
       const userMessage = target.closest('.vc-user');
-      const text = userMessage ? turn?.prompt : turn?.reply;
-      const selectionItems = selectedText ? [copy('selection', '复制所选文字', selectedText)] : [];
+      const text = userMessage && turn ? readQuotedPrompt(turn.prompt).prompt : turn?.reply;
+      const link = turn && turns.some(({ id }) => id === turn.id) && linkFor(selected, turn.id);
+      const selectionItems = selectedText ? [clipboardItem('selection', '复制所选文字', selectedText)] : [];
+      if (quote && onChatLinkResult) selectionItems.unshift({ id: 'quote', label: '添加到对话', icon: 'quote',
+        disabled: Boolean(!selected || !chatEnabled || working || attempt || isActive(lastState)),
+        run() {
+          if (quote.length > maxQuoteLength || quotedPrompt(prompt, quote).length > maxPromptLength) {
+            notifyContext('引用过长，请缩短选区或草稿后重试。');
+            return;
+          }
+          setDraftQuotes((previous) => ({ ...previous, [quoteKey]: quote }));
+          requestAnimationFrame(() => editor.current?.focus({ preventScroll: true }));
+        } });
+      if (quote && link) selectionItems.push(clipboardItem('quote-link', '复制选区与消息链接', quote + '\n\n' + link, 'link'));
       const messageItems = [];
-      if (code) messageItems.push(copy('code', '复制代码', code, 'code'));
-      if (text) messageItems.push(copy('message', userMessage ? '复制消息' : '复制回复', text));
+      if (code) messageItems.push(clipboardItem('code', '复制代码', code, 'code'));
+      if (text) messageItems.push(clipboardItem('message', userMessage ? '复制消息' : '复制回复', text));
+      if (link) messageItems.push(clipboardItem('message-link', '复制此轮消息链接', link, 'link'));
       if (selectionItems.length || messageItems.length) {
         openContextMenu(event, event.type === 'keydown' ? target : article ?? region, '消息操作', [selectionItems, messageItems]);
       }
@@ -1426,7 +1468,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
     function activateConnection(settings, { targetId: route, sessions: list, memoryTargetId: memoryRoute }, name = '') {
       const local = (allRows[route] ?? []).filter((row) => row.local && !list.some(({ id }) => id === row.id));
-      const row = draftRow(local, 'chat', category ?? '');
+      const row = draftRow(local, 'chat', category ?? '', route);
       if (localSdk && !scope && drafts[unboundDraft]) {
         setDrafts((previous) => ({ ...previous, [row.id]: previous[unboundDraft], [unboundDraft]: '' }));
       }
@@ -1863,6 +1905,54 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       return true;
     }
 
+    React.useEffect(() => {
+      if (!chatLink || !visible || settingsTab || setupOpen || working || loadingPreset ||
+          (localSdk && !local.profilesReady) || openingLink.current === chatLink) return;
+      const { targetId, provider, sessionId, turnId } = chatLink;
+      const fail = (text) => onChatLinkResult(chatLink, text);
+      if (localSdk) {
+        const profile = local.profiles.find((item) => item.targetId === targetId && (item.backend ?? 'codex') === provider);
+        if (!profile) { fail('找不到链接对应的本机配置。请在保存该会话的工作台打开。'); return; }
+        if (local.profile?.id !== profile.id) { local.openProfile(profile); return; }
+        if (connection?.profileId !== profile.id) {
+          if (resolvedLocalPreset === profile.id) fail('无法读取链接对应的本机配置。');
+          return;
+        }
+      }
+      if (!ready) { fail('请先打开链接对应的已保存连接。'); return; }
+      openingLink.current = chatLink;
+      void perform('history', async (signal) => {
+        try {
+          let settings = connection;
+          let list;
+          if (scope !== targetId || connection.provider !== provider) {
+            if (localSdk || !connection.hostKeyConfirmed || !memoryTargetId ||
+                !configuredTools.some(({ id }) => id === provider)) throw new Error('请先打开链接对应的执行配置。');
+            settings = { ...connection, provider };
+            list = readList(await rpc('configuration', { settings }, signal));
+            if (list.targetId !== targetId || list.memoryTargetId !== memoryTargetId) throw new Error('链接与当前 VPS 配置不匹配。');
+          }
+          const response = await rpc('get', { settings, targetId, sessionId }, signal);
+          signal.throwIfAborted();
+          if ((localSdk || response.targetId !== undefined) && response.targetId !== targetId)
+            throw new Error('无法确认链接的执行配置。');
+          const record = readSession(response, sessionId, response.session?.mode ?? 'chat');
+          if (!record.session.turns.length || (turnId && !record.session.turns.some(({ id }) => id === turnId))) {
+            throw new Error('找不到链接中的已保存会话或消息。');
+          }
+          if (list) activateConnection(settings, list, connectionName);
+          setSubscriptionOpen(false);
+          prepareSelection(sessionId, null);
+          accept(record, targetId, { sent: attempts[sessionId] });
+          if (turnId) revealSource(record.session, { turnId });
+          onChatLinkResult(chatLink);
+        } catch (error) {
+          if (!signal.aborted) fail(error instanceof Error ? error.message : '无法打开该会话链接。');
+        }
+      });
+    }, [chatLink, visible, ready, loadingPreset, resolvedLocalPreset, working, settingsTab, setupOpen,
+      scope, local?.profilesReady, local?.profile?.id, connection?.profileId]);
+
     function send(explicitNewTurn = false) {
       if (!canSend || action.current || modelParameterWrite.current || (supplementDraft && !explicitNewTurn)) return;
       if (submittedDraft.current?.sessionId === selected && submittedDraft.current.draft === draft) return;
@@ -1872,7 +1962,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         }
         if (signal.aborted) return;
         const sent = {
-          id: newIdentifier(), sessionId: selected, prompt, draft, sharedDesign: Boolean(attached?.context || attached?.base),
+          id: newIdentifier(), sessionId: selected, prompt: outgoingText, draft, quote: draftQuote,
+          sharedDesign: Boolean(attached?.context || attached?.base),
         };
         const editingWorkflow = !design && workflows?.editLabel;
         let outgoingPrompt = sent.prompt;
@@ -2248,6 +2339,13 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             type: 'button', className: 'vc-button', onClick: recheck, disabled: Boolean(working),
           }, working === 'recheck' ? '正在查询' : '查询原任务') : null) : null,
         h('form', { className: 'vc-composer', onSubmit: (event) => { event.preventDefault(); submitComposer(); } },
+          draftQuote ? h('div', { className: 'vc-quote-preview', 'aria-label': '已添加引用', title: draftQuote },
+            menuIcon(h, 'quote'), h('span', null, draftQuote),
+            h('button', { type: 'button', className: 'vc-button', 'aria-label': '移除引用',
+              disabled: Boolean(working || attempt), onClick: () => {
+                setDraftQuotes((previous) => ({ ...previous, [quoteKey]: undefined }));
+                editor.current?.focus();
+              } }, '×')) : null,
           h('textarea', {
             ref: editor, 'data-vc-focus-area': 'composer',
             rows: 2, value: draft, maxLength: steerOffered ? maxSteerLength : maxPromptLength,
@@ -2269,6 +2367,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
               compositionEndedAt.current = event.timeStamp;
             },
           }),
+          draftQuote && outgoingText.length > maxPromptLength ? h('small', { role: 'status', className: 'vc-context-note' },
+            '草稿和引用超过 8,192 字符，请缩短后发送。') : null,
           workflows?.editLabel ? h('div', { className: 'vc-context-note' },
             h('span', { className: 'vc-context-attachment' }, `配置 · ${workflows.editLabel}`),
             h('button', { type: 'button', className: 'vc-button', 'aria-label': '取消工作流配置',

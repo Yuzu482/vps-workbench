@@ -111,7 +111,7 @@ function TitleMenu({ kind, label, children, items }) {
 }
 
 export function DesktopChrome({ native, projectCatalog, location, newLocation, locations, openLocation, changeNewLocation,
-  onError, onOpenResources }) {
+  onError, onOpenResources, onOpenChatLink }) {
   const header = React.useRef(null);
   const sidebar = React.useRef(null);
   const sidebarButton = React.useRef(null);
@@ -186,6 +186,7 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
   }
 
   const fileItems = [
+    { key: 'open-chat-link', label: '打开对话链接…', run: onOpenChatLink },
     ...(location === 'local-sdk' ? [] : [
       { key: 'import', label: '导入 DSH 对话数据…', icon: 'import', run: () => run(native.importHistory) },
       { key: 'location-separator', type: 'separator' },

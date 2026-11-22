@@ -10,13 +10,15 @@ import { agentPresetKey, legacyAgentPresetKey } from '../agent-presets/state.mjs
 import { accessPreference, readAccess, validAccess } from './access.mjs';
 import { importWorkbenchSnapshot } from './migrate.mjs';
 import { agyHashVariable, agyPathVariable, canonicalLocalDirectory, claudeKeyVariable, localCredentialVariable,
-  localMemoryJournalKey, openLocalCredentials, readLegacyWorkflowRun, startWorkbenchServer } from './server.mjs';
+  localMemoryJournalKey, openLocalCredentials, parseConversationLink, readLegacyWorkflowRun, startWorkbenchServer } from './server.mjs';
 
 const localApiKey = process.env[localCredentialVariable];
 const localAgentOptions = { claudeKey: process.env[claudeKeyVariable], agyPath: process.env[agyPathVariable], agyHash: process.env[agyHashVariable] };
 for (const name of [localCredentialVariable, claudeKeyVariable, agyPathVariable, agyHashVariable]) delete process.env[name];
 
 const directory = dirname(fileURLToPath(import.meta.url));
+const linkFromArguments = (args) => args.find((arg) => parseConversationLink(arg)) ?? null;
+let pendingChatLink = linkFromArguments(process.argv.slice(1));
 const title = 'VPS 工作台';
 const chromeThemes = {
   light: { color: '#f4eee6', symbolColor: '#423831', borderColor: '#9d8879' },
@@ -185,6 +187,16 @@ async function start() {
     return { preferences: data.preferences(), projects: data.projects(), access: readAccess(data.preference(accessPreference)),
       dataNotices: data.notices(), localComponents: runtime.localComponentsStatus() };
   });
+  ipcMain.handle('workbench:take-chat-link', (event) => {
+    trustedRenderer(event);
+    const link = pendingChatLink;
+    pendingChatLink = null;
+    return link;
+  });
+  ipcMain.handle('workbench:register-chat-links', (event) => {
+    trustedRenderer(event);
+    return process.platform === 'win32' && !process.defaultApp && app.setAsDefaultProtocolClient('vps-workbench');
+  });
   ipcMain.handle('workbench:set-preference', (event, key, value) => {
     trustedRenderer(event);
     if ([accessPreference, extensionPreferenceKey, memoryJournalKey, localMemoryJournalKey, workflowKey, agentPresetKey,
@@ -346,8 +358,11 @@ app.setPath('userData', root);
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, args) => {
+    const link = linkFromArguments(args);
+    if (link) pendingChatLink = link;
     if (!window || window.isDestroyed()) return;
+    if (link) window.webContents.send('workbench:chat-link-ready');
     if (window.isMinimized()) window.restore();
     window.focus();
   });

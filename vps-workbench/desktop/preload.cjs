@@ -30,6 +30,13 @@ contextBridge.exposeInMainWorld('vpsWorkbench', {
     return () => ipcRenderer.removeListener('workbench:local-status', listener);
   },
   writeClipboard: (value) => ipcRenderer.invoke('workbench:write-clipboard', value),
+  takeChatLink: () => ipcRenderer.invoke('workbench:take-chat-link'),
+  registerChatLinks: () => ipcRenderer.invoke('workbench:register-chat-links'),
+  onChatLink(callback) {
+    const listener = () => callback();
+    ipcRenderer.on('workbench:chat-link-ready', listener);
+    return () => ipcRenderer.removeListener('workbench:chat-link-ready', listener);
+  },
   addProject: () => ipcRenderer.invoke('workbench:add-project'),
   removeProject: (id) => ipcRenderer.invoke('workbench:remove-project', id),
   importHistory: () => ipcRenderer.invoke('workbench:import-history'),

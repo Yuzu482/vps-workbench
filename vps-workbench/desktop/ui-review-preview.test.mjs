@@ -10,11 +10,21 @@ import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
 import { designExportMenu } from '../../remote-workbench/vps-chat/client/design-export-menu.js';
 import { setupConnectionKey } from './setup-state.mjs';
 import { extensionPreferenceKey, readExtensions } from '../extensions/state.mjs';
+import { conversationLink, parseConversationLink, readQuotedPrompt } from '../../remote-workbench/vps-chat/client/chat-reference.js';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('../../dsh-terminal-workbench/client/browser-test/node_modules/playwright-core');
 const previewStorageKey = 'vps-workbench-preview-state';
 const workbenchPreferenceKey = 'dsh-vps-chat:workbench:v1';
+
+async function openCopiedLink(page, value) {
+  await page.getByRole('button', { name: '文件', exact: true }).click();
+  await page.getByRole('menuitem', { name: '打开对话链接…', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '打开对话链接', exact: true });
+  await dialog.getByLabel('对话链接', { exact: true }).fill(value);
+  await dialog.getByRole('button', { name: '打开', exact: true }).click();
+  return dialog;
+}
 
 async function openPreview(t, { viewport = { width: 1280, height: 720 }, seed, previewOptions } = {}) {
   const preview = await startPreview({ ...previewOptions, port: 0, watch: false });
@@ -41,6 +51,99 @@ async function openPreview(t, { viewport = { width: 1280, height: 720 }, seed, p
   await page.goto(preview.origin);
   return page;
 }
+
+test('a selected excerpt attaches to one draft and copied VPS links open the existing conversation or turn', { timeout: 40_000 }, async (t) => {
+  const page = await openPreview(t);
+  await page.evaluate(() => {
+    window.vpsWorkbench.writeClipboard = async (text) => { window.copiedChatLink = text; return true; };
+  });
+  const sends = [];
+  await page.route('**/dsh-vps-chat/api/rpc', (route) => {
+    const packet = route.request().postDataJSON();
+    if (packet.op === 'send') sends.push(packet);
+    return route.continue();
+  });
+  const source = page.getByRole('button', { name: '读书会 · 开场流程', exact: true });
+  await page.getByRole('button', { name: '周末读书会', exact: false }).first().click();
+  await source.click();
+  const messages = page.getByRole('region', { name: '对话消息', exact: true });
+  const paragraph = messages.getByText(/先留五分钟签到/).first();
+  await paragraph.waitFor();
+  const excerpt = '先留五分钟签到';
+  async function selectExcerpt() {
+    await paragraph.evaluate((element, text) => {
+      const selection = getSelection();
+      const range = document.createRange();
+      const start = element.firstChild.textContent.indexOf(text);
+      range.setStart(element.firstChild, start);
+      range.setEnd(element.firstChild, start + text.length);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }, excerpt);
+    await paragraph.dispatchEvent('contextmenu', { button: 2, clientX: 520, clientY: 240 });
+  }
+  await selectExcerpt();
+  await page.getByRole('menuitem', { name: '复制选区与消息链接', exact: true }).click();
+  const combination = await page.evaluate(() => window.copiedChatLink);
+  const [copiedExcerpt, turnLink] = combination.split('\n\n');
+  assert.equal(copiedExcerpt, excerpt);
+  assert.equal(parseConversationLink(turnLink).location, 'ssh-vps');
+  assert.ok(parseConversationLink(turnLink).turnId);
+  await source.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '复制对话链接', exact: true }).click();
+  const chatLink = await page.evaluate(() => window.copiedChatLink);
+  const { turnId: copiedTurnId, ...conversation } = parseConversationLink(turnLink);
+  assert.deepEqual(parseConversationLink(chatLink), conversation);
+  await selectExcerpt();
+  await page.getByRole('menuitem', { name: '添加到对话', exact: true }).click();
+  const quote = page.locator('.vc-composer .vc-quote-preview');
+  await quote.getByText(excerpt, { exact: true }).waitFor();
+  assert.equal(await page.getByRole('textbox', { name: '消息', exact: true }).inputValue(), '');
+  assert.equal(sends.length, 0);
+  await quote.getByRole('button', { name: '移除引用', exact: true }).click();
+  await quote.waitFor({ state: 'hidden' });
+  await selectExcerpt();
+  await page.getByRole('menuitem', { name: '添加到对话', exact: true }).click();
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('根据这段资料写一条提醒。');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await quote.waitFor({ state: 'hidden' });
+  assert.deepEqual(sends.map(({ prompt }) => readQuotedPrompt(prompt)),
+    [{ prompt: '根据这段资料写一条提醒。', quote: excerpt }]);
+  await page.getByRole('button', { name: '新聊天', exact: true }).click();
+  await openCopiedLink(page, chatLink);
+  await paragraph.waitFor();
+  await openCopiedLink(page, turnLink);
+  await page.waitForFunction((id) => document.activeElement?.dataset.turnId === id, copiedTurnId);
+  const invalid = await openCopiedLink(page, turnLink + '?secret=example');
+  await invalid.getByRole('alert').getByText('请输入有效的 VPS Workbench 对话链接。').waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(sends.length, 1);
+});
+
+test('a local link selects its registered profile from VPS history and cannot open on a mismatched target', { timeout: 35_000 }, async (t) => {
+  const page = await openPreview(t, { previewOptions: { localAgents: true }, seed({ preferences }) {
+    preferences['dsh-vps-chat:desktop-view-location:v1'] = 'ssh-vps';
+  } });
+  const link = await page.evaluate(async () => {
+    const native = window.vpsWorkbench;
+    const { profiles } = await native.localSdkStatus();
+    const profile = profiles.find(({ backend }) => backend === 'codex');
+    const sessionId = crypto.randomUUID();
+    const turnId = crypto.randomUUID();
+    const result = await native.localSdkRequest({ location: 'local-sdk', backend: profile.backend, profileId: profile.id,
+      targetId: profile.targetId, sessionId: 'local-' + sessionId, turnId, prompt: '来自本机历史的引用', op: 'send' });
+    if (!result.ok) throw new Error(result.code);
+    return { location: 'local-sdk', provider: profile.backend, targetId: profile.targetId, sessionId, turnId };
+  });
+  await openCopiedLink(page, conversationLink(link));
+  const local = page.locator('[data-local-sdk]');
+  const message = local.getByRole('region', { name: '对话消息', exact: true }).getByText('来自本机历史的引用', { exact: true });
+  await message.waitFor();
+  await page.waitForFunction((id) => document.activeElement?.dataset.turnId === id, link.turnId);
+  await openCopiedLink(page, conversationLink({ ...link, targetId: 'f'.repeat(64) }));
+  await page.getByRole('alert').getByText(/找不到链接对应的本机配置/).waitFor();
+  await message.waitFor();
+});
 
 async function openVpsSetup(page) {
   const settings = page.getByRole('button', { name: '设置', exact: true });

@@ -12,6 +12,8 @@ import { localCredentialVariable, localModels } from './codex-runtime.mjs';
 import { agyHashVariable, agyPathVariable, claudeKeyVariable } from './local-agent-runtime.mjs';
 import { openAppData } from './data.mjs';
 import { startPreview } from './preview-server.mjs';
+import { componentWelcomeKey } from '../local-ui/components.mjs';
+import { conversationLink } from '../../remote-workbench/vps-chat/client/chat-reference.js';
 
 const require = createRequire(import.meta.url);
 const { chromium, _electron } = require('../../dsh-terminal-workbench/client/browser-test/node_modules/playwright-core');
@@ -215,6 +217,71 @@ test('staged Windows app loads the pinned native files and restores local record
     await desktop?.close();
     desktop = undefined;
   }
+});
+
+test('packaged Windows opens a saved message from both launch and second-instance links', { timeout: 40_000 }, async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'workbench-chat-link-test-')));
+  const dataRoot = join(root, 'data');
+  const appData = join(root, 'appdata');
+  let desktop;
+  t.after(async () => { await desktop?.close(); await rm(root, { recursive: true, force: true }); });
+  await mkdir(appData);
+  const data = await openAppData(dataRoot);
+  await data.setPreference(locationKey, 'local-sdk');
+  await data.setPreference(defaultKey, 'ssh-vps');
+  await data.setPreference(componentWelcomeKey, 'seen');
+  await data.flush();
+  const store = await openLocalSdk({ root: join(dataRoot, 'local-sdk'), models: localModels,
+    canExecute: () => true, credentialConfigured: () => true,
+    createThread() {
+      return { async runStreamed() { return { events: (async function* () {
+        yield { type: 'thread.started', thread_id: randomUUID() };
+        yield { type: 'item.completed', item: { type: 'agent_message', id: 'answer', text: '离线回复' } };
+        yield { type: 'turn.completed' };
+      })() }; } };
+    },
+  });
+  const links = [];
+  try {
+    const { profile } = await store.registerProfile({ directory: root, name: '链接夹具',
+      model: localModels[0].id, effort: localModels[0].defaultEffort });
+    for (const text of ['冷启动消息', '已打开工作台的消息']) {
+      const sessionId = randomUUID();
+      const turnId = randomUUID();
+      const route = { location: 'local-sdk', backend: 'codex', profileId: profile.id, targetId: profile.targetId,
+        sessionId: 'local-' + sessionId, turnId };
+      assert.equal((await store.request({ ...route, op: 'send', prompt: text })).ok, true);
+      let receipt;
+      for (let i = 0; i < 50; i++) {
+        receipt = await store.request({ ...route, op: 'refresh' });
+        if (receipt.session.turns[0].state === 'completed') break;
+        await wait(20);
+      }
+      assert.equal(receipt.session.turns[0].state, 'completed');
+      links.push({ turnId, uri: conversationLink({ ...route, provider: 'codex', sessionId }) });
+    }
+  } finally { await store.close(); }
+  const env = { ...process.env, APPDATA: appData, LOCALAPPDATA: appData, VPS_WORKBENCH_DATA_DIR: dataRoot,
+    [localCredentialVariable]: '', [claudeKeyVariable]: '', [agyPathVariable]: '', [agyHashVariable]: '' };
+  desktop = await _electron.launch({ executablePath: executable, args: [links[0].uri], cwd: root, env, timeout: 15_000 });
+  const page = await desktop.firstWindow({ timeout: 10_000 });
+  assert.equal(await desktop.evaluate((_electron, uri) => process.argv.includes(uri), links[0].uri), true);
+  const region = page.getByRole('region', { name: '对话消息', exact: true });
+  try { await region.getByText('冷启动消息', { exact: true }).waitFor({ timeout: 9000 }); }
+  catch (error) {
+    const diagnostic = await page.evaluate(async () => ({
+      status: document.getElementById('local-status')?.textContent,
+      dialog: document.querySelector('dialog:modal')?.getAttribute('aria-label'),
+      profiles: (await window.vpsWorkbench?.localSdkStatus?.())?.profiles?.length,
+      title: document.querySelector('[data-local-sdk] .vc-header')?.textContent,
+    }));
+    assert.fail(JSON.stringify(diagnostic) + '\n' + error.message);
+  }
+  const second = spawnSync(executable, [links[1].uri], { cwd: root, env, windowsHide: true, stdio: 'ignore', timeout: 8000 });
+  assert.equal(second.status, 0, second.error?.message);
+  await region.getByText('已打开工作台的消息', { exact: true }).waitFor({ timeout: 9000 });
+  await page.waitForFunction((id) => document.activeElement?.dataset.turnId === id, links[1].turnId);
+  assert.equal(await page.getByLabel('新建位置', { exact: true }).inputValue(), 'ssh-vps');
 });
 
 test('the staged Windows Codex sandbox reads a fixture and refuses a write', { timeout: 25_000 }, async (t) => {

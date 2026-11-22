@@ -21,6 +21,7 @@ const controlPaths = {
   redo: 'm16 5 5 5-5 5m5-5H10a6 6 0 0 0-6 6v2',
   cut: 'M7 10a3 3 0 1 1 0-6 3 3 0 0 1 0 6Zm0 10a3 3 0 1 1 0-6 3 3 0 0 1 0 6Zm2-5L20 4M9 9l11 11',
   copy: 'M8 8h12v12H8zM4 16V4h12',
+  quote: 'M10 6H5L3 12v5h6v-6H6m15-5h-5l-2 6v5h6v-6h-3',
   paste: 'M9 5H5v16h14V5h-4M9 3h6v5H9zM8 12h8m-8 4h5',
   'select-all': 'M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M8 9h8m-8 3h8m-8 3h6',
   code: 'm8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18',

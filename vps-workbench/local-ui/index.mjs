@@ -424,7 +424,7 @@ export function createLocalWorkspace(React, Workbench) {
     };
 
     return h(Workbench, { ...props, active, visible: active, settingsSurface, access, accessPending, newChatRequest,
-      local: { request, profile, profiles, openProfile, settingsProfile: inspector,
+      local: { request, profile, profiles, profilesReady: Boolean(status || statusError), openProfile, settingsProfile: inspector,
         routeForTarget: (targetId) => routeFor(profiles.find((profile) => profile.targetId === targetId)),
         profileForBackend: (backend) => backendOf(profile) === backend ? profile : profiles.find((item) => backendOf(item) === backend),
         runtimeStatus, runtimeReady, registerBusy, panels: localPanels,

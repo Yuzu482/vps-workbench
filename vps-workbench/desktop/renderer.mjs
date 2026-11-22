@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { createWorkbench } from '../../remote-workbench/vps-chat/client/workbench.js';
 import { menuIcon } from '../../remote-workbench/vps-chat/client/menu-icons.js';
+import { parseConversationLink } from '../../remote-workbench/vps-chat/client/chat-reference.js';
 import { readPreferences, workbenchPreferenceKey } from '../../remote-workbench/vps-chat/client/workbench-preferences.js';
 import { setWorkbenchStorage } from '../../remote-workbench/vps-chat/client/workbench-storage.js';
 import { createResourceLibrary } from '../resource-library/index.mjs';
@@ -47,6 +48,30 @@ function showLocalStatus(message) {
 }
 
 function reportChromeError() { showLocalStatus('未能完成工作台操作'); }
+
+function ConversationLinkDialog({ onOpen, onClose }) {
+  const dialog = React.useRef(null);
+  const [error, setError] = React.useState('');
+  React.useLayoutEffect(() => { dialog.current.showModal(); }, []);
+  return h('dialog', { ref: dialog, className: 'desktop-link-dialog', 'aria-label': '打开对话链接', onClose },
+    h('form', { onSubmit(event) {
+      event.preventDefault();
+      const link = parseConversationLink(new FormData(event.currentTarget).get('link'));
+      if (!link) { setError('请输入有效的 VPS Workbench 对话链接。'); return; }
+      dialog.current.close();
+      onOpen(link);
+    } },
+    h('label', null, '对话链接', h('input', { name: 'link', maxLength: 256, required: true, autoFocus: true,
+      placeholder: 'vps-workbench://…', onChange: () => setError('') })),
+    error ? h('p', { role: 'alert' }, error) : null,
+    h('div', { className: 'desktop-link-actions' },
+      native.registerChatLinks ? h('button', { type: 'button', onClick: async () => {
+        try { setError(await native.registerChatLinks() ? '已关联 Windows 对话链接。' : 'Windows 未能关联此程序。'); }
+        catch { setError('Windows 未能关联此程序。'); }
+      } }, '关联 Windows 链接') : null,
+      h('button', { type: 'button', onClick: () => dialog.current.close() }, '取消'),
+      h('button', { type: 'submit' }, '打开'))));
+}
 
 async function saveWorkflowAttachments(files) {
   if (!Array.isArray(files) || !files.length || files.length > maxWorkflowAttachments ||
@@ -173,6 +198,28 @@ try {
     const appearanceDraft = React.useRef(appearance);
     const appearanceWrites = React.useRef(Promise.resolve());
     const [resourcesOpen, setResourcesOpen] = React.useState(false);
+    const [chatLinkDialog, setChatLinkDialog] = React.useState(false);
+    const [chatLink, setChatLink] = React.useState(null);
+    const openChatLink = React.useCallback((link) => {
+      setVisited((previous) => previous.has(link.location) ? previous : new Set([...previous, link.location]));
+      setLocation(link.location);
+      setChatLink(link);
+      void saveLocalPreference(viewLocationKey, link.location).catch(reportChromeError);
+    }, []);
+    const onChatLinkResult = React.useCallback((link, error) => {
+      setChatLink((previous) => previous === link ? null : previous);
+      if (error) showLocalStatus(error);
+    }, []);
+    React.useEffect(() => {
+      if (!native.takeChatLink) return undefined;
+      const read = async () => {
+        const link = parseConversationLink(await native.takeChatLink());
+        if (link) openChatLink(link);
+      };
+      const unsubscribe = native.onChatLink?.(() => void read().catch(reportChromeError));
+      void read().catch(reportChromeError);
+      return unsubscribe;
+    }, [openChatLink]);
     const [access, setAccess] = React.useState(initialAccess);
     const [extensions, setExtensions] = React.useState(startingExtensions);
     const [agentItems, setAgentItems] = React.useState(initialAgentPresets);
@@ -292,6 +339,7 @@ try {
     return h(React.Fragment, null,
       h(DesktopChrome, { native, projectCatalog, location, newLocation, locations, openLocation, changeNewLocation,
         onError: reportChromeError,
+        onOpenChatLink: () => setChatLinkDialog(true),
         onOpenResources: () => setResourcesOpen(true) }),
       h('div', { className: 'desktop-location-bar' },
         h('div', { role: 'group', 'aria-label': '打开会话历史', className: 'desktop-location-tabs' },
@@ -301,6 +349,7 @@ try {
           h('select', { 'aria-label': '新建位置', value: newLocation, onChange: (event) => changeNewLocation(event.target.value) },
             locations.map(([id, label]) => h('option', { key: id, value: id }, label))))),
       visited.has('ssh-vps') ? h(Workbench, { projectCatalog, terminalView, resourcesOpen, setResourcesOpen,
+        chatLink: chatLink?.location === 'ssh-vps' ? chatLink : null, onChatLinkResult,
         access, accessPending, changeAccess, visible: sshVisible, active: sshVisible, newChatRequest: sshNew,
         settingsSurface: settingsSurface('ssh-vps'),
         applicationPreferences: { value: appearance, change: changeAppearance },
@@ -310,6 +359,7 @@ try {
         workflowStore: { items: workflowItems, change: changeWorkflows, initialRun: initialWorkflowRun,
           saveRun: saveWorkflowRun, saveAttachments: saveWorkflowAttachments, mixedRequest: native.mixedWorkflow, error: workflowError } }) : null,
       visited.has('local-sdk') ? h(LocalWorkspace, { native, active: !sshVisible, access, accessPending, changeAccess,
+        chatLink: chatLink?.location === 'local-sdk' ? chatLink : null, onChatLinkResult,
         projectCatalog, terminalView: noTerminal, resourcesOpen, setResourcesOpen,
         newChatRequest: localNew, onNewChat: startChat,
         settingsSurface: settingsSurface('local-sdk'),
@@ -320,6 +370,7 @@ try {
         workflowStore: { items: workflowItems, change: changeWorkflows, initialRun: initialLocalRun,
           saveRun: saveLocalRun, saveAttachments: saveWorkflowAttachments, mixedRequest: native.mixedWorkflow,
           error: workflowError || localRunError } }) : null,
+      chatLinkDialog ? h(ConversationLinkDialog, { onOpen: openChatLink, onClose: () => setChatLinkDialog(false) }) : null,
       h('div', { ref: settingsLayer, className: 'desktop-settings-surface' }));
   }
   root.render(h(DesktopApp));

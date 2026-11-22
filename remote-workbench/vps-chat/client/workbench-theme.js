@@ -425,6 +425,15 @@ export function workbenchCss(separatorWidth) {
     [data-vps-chat] .vc-context-note {
       display:flex; align-items:center; flex-wrap:wrap; gap:5px; margin:0 4px; color:var(--vc-muted); font-size:12px;
     }
+    [data-vps-chat] .vc-quote-preview {
+      display:flex; align-items:center; gap:7px; min-width:0; padding:4px 7px;
+      border-inline-start:2px solid var(--vc-accent); border-radius:5px;
+      margin-block:4px; font-size:.85em;
+    }
+    [data-vps-chat] .vc-quote-preview > span:last-of-type {
+      min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+    }
+    [data-vps-chat] .vc-quote-preview > button { margin-inline-start:auto; flex:none; }
     [data-vps-chat] .vc-context-attachment {
       padding:3px 7px; border:1px solid var(--vc-line); border-radius:6px; color:var(--vc-accent);
       background:var(--vc-tint); overflow-wrap:anywhere;

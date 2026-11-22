@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+export { parseConversationLink } from '../../remote-workbench/vps-chat/client/chat-reference.js';
 import { join } from 'node:path';
 import { createBridge, createHost, prefix } from '../../remote-workbench/vps-chat/host/index.js';
 import { accountSocketPath, createWorkbenchRouteReader } from '../../remote-workbench/vps-chat/host/account-view.js';
