@@ -329,7 +329,7 @@ async function sidebarButton(page, name) {
   return button;
 }
 
-test('mixed workflow preview approves an exact edge and runs local drafting with VPS blind review', { timeout: 35_000 }, async (t) => {
+test('mixed workflow simulates scoped handoffs offline and shows original stage details and artifacts', { timeout: 40_000 }, async (t) => {
   const page = await openPreview(t, { viewport: { width: 420, height: 640 }, previewOptions: { localAgents: true }, seed({ preferences }) {
     preferences['dsh-vps-chat:desktop-view-location:v1'] = 'ssh-vps';
   } });
@@ -360,12 +360,27 @@ test('mixed workflow preview approves an exact edge and runs local drafting with
   await panel.getByRole('button', { name: '运行', exact: true }).click();
   const brief = panel.getByRole('group', { name: '运行简报', exact: true });
   const launch = brief.getByRole('button', { name: '开始运行', exact: true });
+  const simulate = brief.getByRole('button', { name: '模拟运行', exact: true });
   await brief.getByLabel('运行任务', { exact: true }).fill('准备活动说明。');
   await brief.getByLabel('验收标准', { exact: true }).fill('标明免费报名。');
   await brief.getByLabel('「混合盲审」的证据', { exact: true }).fill('原始资料写明免费报名。');
   assert.equal(await launch.isDisabled(), true);
+  assert.equal(await simulate.isDisabled(), true);
   await brief.getByRole('checkbox', { name: '结论', exact: true }).check();
   await brief.getByRole('checkbox', { name: '确认传递所选字段', exact: true }).check();
+  await simulate.press('Enter');
+  const simulation = brief.getByRole('region', { name: '模拟运行结果', exact: true });
+  await simulation.getByText('查看阶段详情 · 混合盲审', { exact: true }).click();
+  const blindPreview = simulation.locator('details[open]');
+  await blindPreview.getByText(/用户授权的独立证据/).waitFor();
+  assert.doesNotMatch(await blindPreview.innerText(), /模拟阶段 1 的结论/u);
+  await simulation.getByText('查看阶段详情 · 混合汇总', { exact: true }).click();
+  const summaryPreview = simulation.locator('details').filter({ hasText: '查看阶段详情 · 混合汇总' });
+  assert.match(await summaryPreview.innerText(), /模拟阶段 1 的结论/u);
+  assert.doesNotMatch(await summaryPreview.innerText(), /模拟阶段 1 的证据|原始资料写明免费报名/u);
+  assert.equal((await page.evaluate(() => window.vpsWorkbench.mixedWorkflow({ op: 'status' }))).run, null);
+  await brief.getByLabel('约束（可选）', { exact: true }).fill('保留来源编号。');
+  await simulation.waitFor({ state: 'hidden' });
   await launch.scrollIntoViewIfNeeded();
   await assertWithinViewport(launch);
   await launch.press('Enter');
@@ -374,6 +389,17 @@ test('mixed workflow preview approves an exact edge and runs local drafting with
   assert.equal(status.run.phase, 'complete');
   assert.deepEqual(status.run.mixed.transfers, [{ from: 'draft', to: 'summary', fields: ['conclusion'] }]);
   assert.match(status.run.rows[0].reply, /本机完成初稿/u);
+  const summaryRow = panel.getByRole('list', { name: '运行阶段', exact: true }).locator(':scope > li')
+    .filter({ hasText: '第 3 阶段 · 混合汇总' });
+  await summaryRow.getByText('查看阶段详情 · 混合汇总', { exact: true }).click();
+  await summaryRow.getByText('结论 · 本机完成初稿。', { exact: true }).waitFor();
+  await summaryRow.getByText(status.run.rows[2].turnId, { exact: true }).waitFor();
+  const artifactList = await page.evaluate((runId) => window.vpsWorkbench.mixedWorkflow({
+    op: 'artifacts', query: { runId, stageIndex: 2 },
+  }), status.run.id);
+  assert.equal(artifactList.ok, true, JSON.stringify(artifactList));
+  await summaryRow.getByRole('button', { name: '查看产物', exact: true }).click();
+  await summaryRow.getByRole('button', { name: artifactList.files[0].path, exact: true }).waitFor();
 });
 
 async function openDesign(page) {

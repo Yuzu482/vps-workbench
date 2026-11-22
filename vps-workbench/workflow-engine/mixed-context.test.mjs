@@ -3,6 +3,7 @@ import test from 'node:test';
 import { applyWorkflowChange, createWorkflowEditPrompt, mixedWorkflowRunKey, preserveWorkflowAgents,
   readWorkflowProposal, readWorkflows, validateWorkflowDraft, workflowRunKey, localWorkflowRunKey } from './state.mjs';
 import { createWorkflowRunner, readWorkflowRun, validateMixedInput, workflowStagePrompt } from './runner.mjs';
+import { simulateMixedWorkflow } from './mixed-preview.mjs';
 
 const workId = 'ab4a55d8-bbbd-4c5f-91be-ac93a4a4173b';
 const local = { location: 'local-sdk', configId: 'fa70cd1d-a8c0-4c62-8fdc-86ec87d8af0a', context: 'independent' };
@@ -40,6 +41,26 @@ function harness(rpc, initialRun = null) {
 
 const receipt = (payload, state, reply, turnId = payload.turnId, extras = {}) => ({
   session: { id: payload.sessionId, turns: [{ id: turnId, state, reply, ...extras }] },
+});
+
+test('offline simulation applies the real prompt rules without binding receipts or mutation', () => {
+  const workflow = { ...pair, stages: [pair.stages[0], stage('blind', blind), pair.stages[1]],
+    edges: [edge('source', 'blind'), edge('source', 'next'), edge('blind', 'next')] };
+  const input = { revision: 1, task: '写出活动说明。', criteria: '保留报名条件。', constraints: '',
+    evidence: [evidence], transfers: [transfer('source', 'next', ['conclusion'])] };
+  const before = structuredClone({ workflow, input });
+  const { run, prompts } = simulateMixedWorkflow(workflow, input);
+  assert.deepEqual({ workflow, input }, before);
+  assert.ok(run.rows.every((row) => !Object.hasOwn(row, 'turnId')));
+  assert.ok(prompts.every((text) => text.includes(input.task)));
+  assert.match(prompts[1], /盲审专用的用户证据/u);
+  assert.doesNotMatch(prompts[1], /模拟阶段 1 的结论|\/attachments/u);
+  assert.match(prompts[2], /模拟阶段 1 的结论/u);
+  assert.match(prompts[2], /模拟阶段 2 的结论/u);
+  assert.doesNotMatch(prompts[2], /模拟阶段 1 的证据|盲审专用的用户证据/u);
+  assert.throws(() => simulateMixedWorkflow(workflow, { ...input, transfers: [] }), /确认跨配置/u);
+  assert.throws(() => simulateMixedWorkflow(workflow, { ...input,
+    evidence: [{ ...evidence, text: '资料保存在 /home/private 文件中。' }] }), /敏感内容/u);
 });
 
 test('execution metadata roundtrips and stays out of model proposals and references', () => {

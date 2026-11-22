@@ -227,10 +227,16 @@ button.vc-workflow-port:not(:disabled):hover::before,
 }
 .vc-workflow-details {display:grid; grid-template-columns:auto minmax(0,1fr); gap:5px 12px}
 .vc-workflow-details dt {color:var(--vc-muted)}
+.vc-workflow-details dd {min-width:0; margin:0; overflow-wrap:anywhere}
 .vc-workflow-independent-modules .vc-agent-memory {display:none}
 .vc-workflow-mixed-routes {gap:6px}
 .vc-workflow-mixed-section, .vc-workflow-mixed-routes > li {display:grid; gap:5px; min-width:0}
 .vc-workflow-mixed-section {border-top:1px solid var(--vc-line); padding-top:8px}
+.vc-workflow-stage-details {min-width:0}
+.vc-workflow-stage-details > summary {cursor:pointer; padding:5px 0}
+.vc-workflow-stage-detail-body {display:grid; min-width:0; gap:6px; padding:4px 0 6px}
+.vc-workflow-stage-detail-body h4 {margin:0}
+.vc-workflow-stage-detail-body li {min-width:0; overflow-wrap:anywhere}
 .vc-workflow-transfer-options {display:flex; flex-wrap:wrap; gap:6px 10px}
 .vc-workflow-transfer-options label, .vc-workflow-transfer-confirm {display:flex; align-items:baseline; gap:5px; min-width:0}
 .vc-workflow-transfer-options input, .vc-workflow-transfer-confirm input {margin:0; accent-color:var(--vc-accent)}

@@ -148,7 +148,7 @@ export async function startPreview({ localAgents = false, localComponents = fals
   const localPacket = (body, options) => localSdk().then((sdk) => sdk.request({ op: 'workbench', location: 'local-sdk',
     backend: 'codex', payload: body }, options));
   function dispatchMixed(body, options) {
-    if (body.op === 'workflow-artifacts' && body.settings.location === 'ssh-vps') return readWorkflowArtifacts(body,
+    if (body.op === 'workflow-artifacts' && body.settings.location !== 'local-sdk') return readWorkflowArtifacts(body,
       { readRun: options.workflowRun, backend: { request: previewArtifacts }, isAllowed: options.isLive });
     return body.settings.location === 'local-sdk' ? localPacket(body, options) : chat.request(body, options);
   }

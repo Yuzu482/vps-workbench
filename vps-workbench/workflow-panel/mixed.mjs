@@ -1,6 +1,8 @@
+import { mixedHandoffValues, mixedIncoming, mixedTransferLabels as transferFields } from '../workflow-engine/mixed-context.mjs';
+import { simulateMixedWorkflow } from '../workflow-engine/mixed-preview.mjs';
+
 export const executionLocations = Object.freeze({ 'local-sdk': '本机 SDK', 'ssh-vps': 'VPS SSH' });
 export const executionContexts = Object.freeze({ independent: '独立上下文', blind: '盲审' });
-const transferFields = Object.freeze({ conclusion: '结论', evidence: '证据', pending: '待处理事项' });
 
 export function targetForStage(stage, targets) {
   const execution = stage?.execution;
@@ -26,13 +28,13 @@ export function getMixedStartReason(workflow, targets) {
 
 function runEdges({ stages, edges }) {
   const byId = new Map(stages.map((stage) => [stage.id, stage]));
-  return edges.flatMap(({ from, to }) => {
+  return edges.map(({ from, to }) => {
     const source = byId.get(from);
     const destination = byId.get(to);
     const blind = destination.execution?.context === 'blind';
     const cross = source.execution && destination.execution &&
       (source.execution.location !== destination.execution.location || source.execution.configId !== destination.execution.configId);
-    return blind || cross ? [{ key: JSON.stringify([from, to]), source, destination, blind }] : [];
+    return { key: JSON.stringify([from, to]), source, destination, blind, needsApproval: !blind && cross };
   });
 }
 
@@ -41,8 +43,56 @@ function routeLabel(stage, targets) {
   return location ? `${executionLocations[location]} · ${targetForStage(stage, targets)?.label ?? '配置不可用'}` : '待设置';
 }
 
+function stageFiles(h, stage, note) {
+  const { paths = [], attachments = [] } = stage.fileAccess ?? {};
+  return paths.length || attachments.length ? h('ul', { 'aria-label': '只读授权文件' },
+    paths.map((path) => h('li', { key: 'path:' + path }, path)),
+    attachments.map(({ name, digest }) => h('li', { key: 'attachment:' + digest + name }, `附件 · ${name}`)))
+    : note('此阶段没有显式授权文件。');
+}
+
+export function createMixedStageDetails(React, { note }) {
+  const h = React.createElement;
+  return function MixedStageDetails({ run, index, simulatedPrompt }) {
+    const stage = run.workflow.stages[index];
+    const row = run.rows[index];
+    const evidence = run.mixed.evidence.find(({ stageId }) => stageId === stage.id);
+    const links = mixedIncoming(run, index);
+    const simulated = simulatedPrompt !== undefined;
+    return h('details', { className: 'vc-workflow-stage-details vc-details-motion' },
+      h('summary', null, `查看阶段详情 · ${stageName(stage)}`),
+      h('div', { className: 'vc-workflow-stage-detail-body' },
+        h('h4', null, '授权资料'),
+        stageFiles(h, stage, note),
+        evidence && h('div', null, h('strong', null, `盲审证据 · ${evidence.id}`),
+          h('pre', { className: 'vc-workflow-text', tabIndex: 0 }, evidence.text)),
+        h('h4', null, '上游交接'),
+        !simulated && links.some(({ kind }) => kind === 'fields') && note('显示已校验的获准字段。模型输入可能按长度预算截断。'),
+        links.length ? h('ul', { className: 'vc-workflow-list' }, links.map((edge) => {
+          const { source, parent, kind, fields } = edge;
+          const upstream = run.rows[parent];
+          let values = [];
+          let issue;
+          if (!simulated && upstream.state === 'complete' && kind === 'fields') {
+            try { values = mixedHandoffValues(edge, upstream.reply); }
+            catch (error) { issue = error.message; }
+          }
+          const range = kind === 'wait' ? '仅等待完成' : kind === 'reply' ? '同配置回复' : fields.map((field) => transferFields[field]).join('、');
+          return h('li', { key: source.id }, h('strong', null, stageName(source) + ' · ' + range),
+            issue ? note(issue) : values.map(([field, value]) => note(transferFields[field] + ' · ' + (value || '空'))));
+        })) : note('没有上游阶段。'),
+        simulated ? h(React.Fragment, null,
+          h('h4', null, '模拟模型输入'),
+          h('pre', { className: 'vc-workflow-text', tabIndex: 0 }, simulatedPrompt))
+          : h('dl', { className: 'vc-workflow-details' },
+            h('dt', null, '会话 ID'), h('dd', null, h('code', null, row.sessionId)),
+            h('dt', null, '轮次 ID'), h('dd', null, h('code', null, row.turnId)))));
+  };
+}
+
 export function createMixedRunBrief(React, { button, field, note, actions, providerLabel, defaultModel }) {
   const h = React.createElement;
+  const MixedStageDetails = createMixedStageDetails(React, { note });
 
   return function MixedRunBrief({ workflow, targets, disabled, startReason, onStart }) {
     const [task, setTask] = React.useState('');
@@ -50,21 +100,38 @@ export function createMixedRunBrief(React, { button, field, note, actions, provi
     const [constraints, setConstraints] = React.useState('');
     const [evidenceText, setEvidenceText] = React.useState(() => new Map());
     const [approvals, setApprovals] = React.useState({});
+    const [simulation, setSimulation] = React.useState(null);
     const blindStages = workflow.stages.filter(({ execution }) => execution?.context === 'blind');
     const edges = runEdges(workflow);
-    const requiredApprovals = edges.filter(({ blind }) => !blind);
-    const canLaunch = !disabled && !startReason && task.trim() && criteria.trim() &&
+    const requiredApprovals = edges.filter(({ needsApproval }) => needsApproval);
+    const ready = task.trim() && criteria.trim() &&
       blindStages.every(({ id }) => evidenceText.get(id)?.trim()) &&
       requiredApprovals.every(({ key }) => approvals[key]?.confirmed);
+    const canLaunch = !disabled && !startReason && ready;
+    const canSimulate = !disabled && !getMixedStartReason(workflow, targets) && ready;
+
+    function briefInput() {
+      return { workflowId: workflow.id, revision: workflow.revision, task: task.trim(), criteria: criteria.trim(),
+        constraints: constraints.trim(), evidence: blindStages.map(({ id }) => ({
+          id: `evidence-${id}`, stageId: id, text: evidenceText.get(id)?.trim() ?? '',
+        })), transfers: requiredApprovals.flatMap(({ key, source, destination }) => approvals[key]?.confirmed ? [{
+          from: source.id, to: destination.id, fields: approvals[key].fields,
+        }] : []) };
+    }
+
+    const currentInput = briefInput();
+    const simulationKey = JSON.stringify([currentInput, canSimulate ? '' : 'unavailable']);
+    const result = simulation?.key === simulationKey ? simulation : null;
+
+    function simulate() {
+      if (!canSimulate) return;
+      try { setSimulation({ key: simulationKey, value: simulateMixedWorkflow(workflow, currentInput) }); }
+      catch (error) { setSimulation({ key: simulationKey, error: error.message }); }
+    }
 
     async function startRun() {
       if (!canLaunch) return;
-      const result = await onStart({ workflowId: workflow.id, revision: workflow.revision, task: task.trim(), criteria: criteria.trim(),
-        constraints: constraints.trim(), evidence: blindStages.map(({ id }) => ({
-          id: `evidence-${id}`, stageId: id, text: evidenceText.get(id).trim(),
-        })), transfers: requiredApprovals.map(({ key, source, destination }) => ({
-          from: source.id, to: destination.id, fields: approvals[key].fields,
-        })) });
+      const result = await onStart(currentInput);
       if (result?.ok === true) setApprovals({});
     }
 
@@ -92,7 +159,8 @@ export function createMixedRunBrief(React, { button, field, note, actions, provi
           return h('li', { key: stage.id },
             h('strong', null, `第 ${index + 1} 阶段 · ${stageName(stage)}`),
             note(stage.execution ? [label, providerLabel(stage.provider), stage.model || defaultModel(stage.provider),
-              executionContexts[stage.execution.context]].join(' · ') : label));
+              executionContexts[stage.execution.context]].join(' · ') : label),
+            stageFiles(h, stage, note));
         })),
       blindStages.length > 0 && h('section', { className: 'vc-workflow-mixed-section', 'aria-label': '盲审证据' },
         h('h4', null, '盲审证据'),
@@ -102,14 +170,14 @@ export function createMixedRunBrief(React, { button, field, note, actions, provi
       edges.length > 0 && h('section', { className: 'vc-workflow-mixed-section', 'aria-label': '阶段间传递' },
         h('h4', null, '阶段间传递'),
         requiredApprovals.length > 0 && note('逐条确认传递范围。未选字段的连线仅等待上游完成。'),
-        edges.map(({ key, source, destination, blind }) => {
+        edges.map(({ key, source, destination, blind, needsApproval }) => {
           const approval = approvals[key];
           const edgeStage = (stage) => `第 ${workflow.stages.indexOf(stage) + 1} 阶段 · ${stageName(stage)}`;
           const name = `${edgeStage(source)} → ${edgeStage(destination)}`;
           return h('fieldset', { key, className: 'vc-workflow-files' },
             h('legend', null, name),
             note(`${routeLabel(source, targets)} → ${routeLabel(destination, targets)}`),
-            blind ? note('盲审连线仅等待上游完成。') : h(React.Fragment, null,
+            blind ? note('盲审连线仅等待上游完成。') : !needsApproval ? note('接收同一配置的上游回复。') : h(React.Fragment, null,
               h('div', { className: 'vc-workflow-transfer-options' }, Object.entries(transferFields).map(([value, label]) =>
                 h('label', { key: value }, h('input', { type: 'checkbox', checked: approval?.fields.includes(value) ?? false,
                   onChange: (event) => changeField(key, value, event.target.checked) }), label))),
@@ -120,7 +188,14 @@ export function createMixedRunBrief(React, { button, field, note, actions, provi
                   setApprovals((previous) => ({ ...previous, [key]: { fields: previous[key]?.fields ?? [], confirmed } }));
                 } }), `确认${approval?.fields.length ? '传递所选字段' : '仅等待上游完成'}`)));
         })),
-      actions(button('开始运行', startRun, { primary: true, disabled: !canLaunch })),
+      actions(button('模拟运行', simulate, { disabled: !canSimulate }),
+        button('开始运行', startRun, { primary: true, disabled: !canLaunch })),
+      result?.error && note(result.error, 'alert'),
+      result?.value && h('section', { className: 'vc-workflow-mixed-section', 'aria-label': '模拟运行结果' },
+        h('h4', null, '模拟运行结果'),
+        note('使用本地示例交接推演。文件只列授权清单，实际模型目录、模板内容和产物在正式运行时核对。'),
+        result.value.run.workflow.stages.map(({ id }, index) => h(MixedStageDetails, { key: id, run: result.value.run,
+          index, simulatedPrompt: result.value.prompts[index] }))),
       startReason && note(startReason));
   };
 }

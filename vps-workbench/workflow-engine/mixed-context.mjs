@@ -1,6 +1,7 @@
 import { exactFields, maxWorkflowChatLength, workflowText } from './state.mjs';
 
-const transferFields = ['conclusion', 'evidence', 'pending'];
+export const mixedTransferLabels = Object.freeze({ conclusion: '结论', evidence: '证据', pending: '待处理事项' });
+const transferFields = Object.keys(mixedTransferLabels);
 const evidenceId = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 const routePin = /^[a-f0-9]{64}$/u;
 const credentialFormat = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{12,}|(?:gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_-]{12,}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{30,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b/u;
@@ -99,6 +100,34 @@ function readTransfer(reply, source) {
   }
 }
 
+export function mixedIncoming(run, index, parentIndices) {
+  const stage = run.workflow.stages[index];
+  const stages = run.workflow.stages;
+  const parents = parentIndices ?? run.workflow.edges.filter(({ to }) => to === stage.id)
+    .map(({ from }) => stages.findIndex(({ id }) => id === from));
+  return parents.map((parent) => {
+    const source = stages[parent];
+    if (stage.execution.context === 'blind') return { parent, source, kind: 'wait' };
+    if (!crossesConfiguration(source, stage)) return { parent, source, kind: 'reply' };
+    const approved = run.mixed.transfers.find(({ from, to }) => from === source.id && to === stage.id);
+    if (!approved) throw new Error('缺少跨配置连线传递确认。');
+    return approved.fields.length ? { parent, source, kind: 'fields', fields: approved.fields } : { parent, source, kind: 'wait' };
+  });
+}
+
+export function mixedHandoffValues(edge, reply) {
+  const { kind, source } = edge;
+  if (kind === 'fields') {
+    const result = readTransfer(reply, source);
+    return edge.fields.map((field) => [field, result[field]]);
+  }
+  if (kind === 'reply') {
+    const label = '同一配置的前置步骤回复（' + source.id + '）';
+    return [['reply', safeText(reply, label).replaceAll('\0', '\uFFFD')]];
+  }
+  return [];
+}
+
 export function mixedStagePrompt(run, index, parentIndices, pluginInstructions, scoped) {
   const stage = run.workflow.stages[index];
   const blind = stage.execution.context === 'blind';
@@ -128,22 +157,15 @@ export function mixedStagePrompt(run, index, parentIndices, pluginInstructions, 
     const text = value ? '> ' + value.replace(/(\r\n|\r(?!\n)|[\n\u2028\u2029])(?=[\s\S])/gu, '$&> ') : '';
     references.push({ index: parts.push(label) - 1, text });
   };
-  if (!blind) {
-    for (const parent of parentIndices) {
-      const source = run.workflow.stages[parent];
-      const { reply } = run.rows[parent];
-      if (crossesConfiguration(source, stage)) {
-        const approved = transfers.find(({ from, to }) => from === source.id && to === stage.id);
-        if (!approved) throw new Error('缺少跨配置连线传递确认。');
-        if (!approved.fields.length) continue;
-        const result = readTransfer(reply, source);
-        parts.push('跨配置交接（' + source.id + '，仅含已确认字段）');
-        for (const field of approved.fields) addReference(source.id + ' · ' + field, result[field]);
-      } else {
-        const label = '同一配置的前置步骤回复（' + source.id + '）';
-        const checked = safeText(reply, label).replaceAll('\0', '\uFFFD');
-        addReference(label, checked);
-      }
+  for (const edge of mixedIncoming(run, index, parentIndices)) {
+    const { kind, source, parent } = edge;
+    if (kind === 'wait') continue;
+    const values = mixedHandoffValues(edge, run.rows[parent].reply);
+    if (kind === 'fields') {
+      parts.push('跨配置交接（' + source.id + '，仅含已确认字段）');
+      for (const [field, value] of values) addReference(source.id + ' · ' + field, value);
+    } else {
+      addReference('同一配置的前置步骤回复（' + source.id + '）', values[0][1]);
     }
   }
   const referenceLabel = '\n（引用资料）\n';

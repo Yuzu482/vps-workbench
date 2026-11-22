@@ -3,7 +3,7 @@ import { createAgentModulesEditor } from '../agent-presets/settings.mjs';
 import { resolveAgentPreset } from '../agent-presets/state.mjs';
 import { createRunArtifacts } from './run-artifacts.mjs';
 import { createStageFileAccessEditor } from './file-access.mjs';
-import { createMixedRunBrief, executionContexts, executionLocations, getMixedStartReason, targetForStage } from './mixed.mjs';
+import { createMixedRunBrief, createMixedStageDetails, executionContexts, executionLocations, getMixedStartReason, targetForStage } from './mixed.mjs';
 import { linearWorkflowEdges, validateWorkflowDraft, validateWorkflowEdges, workflowProviders } from '../workflow-engine/state.mjs';
 import { createStageGraph } from './stage-graph.mjs';
 import { workflowPanelStyles } from './styles.mjs';
@@ -79,6 +79,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
   const actions = (...children) => h('div', { className: 'vc-workflow-actions' }, ...children);
   const RunArtifacts = createRunArtifacts(React, { button, note, alert });
   const MixedRunBrief = createMixedRunBrief(React, { button, field, note, actions, providerLabel, defaultModel });
+  const MixedStageDetails = createMixedStageDetails(React, { note });
 
   function PresetGallery({ stage, choices, moduleCatalog, onApply, onManage }) {
     const galleryId = React.useId();
@@ -267,6 +268,8 @@ export function createWorkflowPanel(React, { icon } = {}) {
         note(`记忆项目 · ${run.projectId === null ? personalMemoryLabel : projects.get(run.projectId) ?? '已移除的项目'}`),
       run.task && h('div', { className: 'vc-workflow-text', 'aria-label': '最近运行的任务', tabIndex: 0 }, run.task),
       run.mixed && h('dl', { className: 'vc-workflow-details' },
+        h('dt', null, '运行 ID'), h('dd', null, h('code', null, run.id)),
+        h('dt', null, '工作流版本'), h('dd', null, run.mixed.revision),
         h('dt', null, '验收标准'), h('dd', null, run.mixed.criteria),
         run.mixed.constraints && h(React.Fragment, null, h('dt', null, '约束'), h('dd', null, run.mixed.constraints))),
       run.message && note(run.message, 'status'),
@@ -291,7 +294,8 @@ export function createWorkflowPanel(React, { icon } = {}) {
             note(`${providerLabel(stage.provider)} · ${stage.model || defaultModel(stage.provider)}`),
             stage.execution && note(`${executionLocations[stage.execution.location]} · ${target?.label ?? '原配置'} · ${executionContexts[stage.execution.context]}`),
             stage.agent && note(agentSummary(run.mixed ? { ...stage.agent, memory: 'isolated' } : stage.agent)),
-            [4, 5].includes(run.version) && row?.turnId && h('div', { className: 'vc-workflow-output-path', role: 'group',
+            run.mixed && h(MixedStageDetails, { run, index }),
+            run.version === 4 && row?.turnId && h('div', { className: 'vc-workflow-output-path', role: 'group',
               'aria-label': `第 ${index + 1} 阶段输出目录`, tabIndex: 0 },
               h('span', { className: 'vc-workflow-note' }, '输出目录'),
               h('code', null, `~/.remote-ssh-chat/workflow-outputs/${row.turnId}`)),
