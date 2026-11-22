@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Rootless, fail-closed isolation for an explicit non-interactive Codex task.
-
-The sandbox receives a temporary HOME, one selected workspace, the existing
-remote auth file, and an HTTPS CONNECT gateway to a short provider allowlist.
-It does not protect information deliberately included in those visible files,
-credentials, prompts, provider account metadata, or against a hostile kernel.
-"""
+"""Run a remote agent in the Linux Workbench sandbox."""
 import base64
 import fcntl
 import hashlib
@@ -329,6 +323,14 @@ def runtime_companions(executable):
     return result
 
 
+def certificate_bindings():
+    # Project the Fedora/RHEL CA bundle without mounting all of /etc/pki.
+    bundle = "/etc/pki/tls/certs/ca-bundle.crt"
+    if not os.path.isfile(bundle):
+        return []
+    return ["--ro-bind", bundle, bundle, "--ro-bind", bundle, "/etc/pki/tls/cert.pem"]
+
+
 def sandbox_command(executable, work, auth, gate_dir, argv, chat_home=None, uploads=None, provider="codex", prompt=None, images=None, native_home=None, subscription=False, shared_config=None, overlays=None, workspace_target="/workspace", runner_script=None, native_session_id=None, codex_stdio=False, read_only_workspace=False, claude_stdin=False):
     if workspace_target != "/workspace" and not re.fullmatch(r"/workspaces/[0-9a-f]{64}", workspace_target):
         raise ValueError("invalid isolated workspace target")
@@ -360,6 +362,7 @@ def sandbox_command(executable, work, auth, gate_dir, argv, chat_home=None, uplo
                "--ro-bind", os.path.join(gate_dir, "hosts"), "/etc/hosts",
                "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/home",
                "--dir", "/home/codex", "--dir", "/home/codex/.codex", "--dir", "/home/codex/.claude"]
+    command += certificate_bindings()
     if subscription:
         if provider != "claude" or native_home is None or chat_home is None or auth is not None:
             raise ValueError("invalid subscription mounts")

@@ -167,6 +167,8 @@ Antigravity 聊天生成时可以补充指令。针对已挂载只读工作区�
 
 发布输出在 `dist/VPS-Workbench-<版本>-win-x64`。DSH 插件由原来的 remote-workbench/vps-chat/Build.ps1 单独打包。运行 npm test 检查独立本机状态、导入、接口授权、订阅终端回执与界面预览。运行 npm run test:desktop 验证打包窗口和工作台交互。
 
+VPS 后端独立打包。运行 `python vps-workbench/vps-package/build.py --revision <Git提交哈希>`，产物位于 `vps-workbench/dist/vps-backend/`。同一归档适用于满足运行条件的 Linux x86‑64 与 ARM64。分别检查宿主和安装选中的执行端，步骤见 [VPS 后端安装说明](vps-package/README.md)。
+
 验收暂存包时，将 `VPS_WORKBENCH_TEST_EXE` 指向暂存目录中的可执行文件再运行桌面测试。测试使用隔离的数据目录、模拟回复与只读沙箱探针。启用前记录当前版本的可执行文件和数据目录，等任务完成或确认可按原回执查询后，保留旧版本目录和数据的本机备份。需要回滚时，先关闭候选版并另外保留启用后产生的记录，再从旧版目录启动；需要恢复旧数据快照时，可先将其复制到单独目录并通过 `VPS_WORKBENCH_DATA_DIR` 启动旧版核对。
 
 ## Git 与历史版本

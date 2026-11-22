@@ -40,7 +40,8 @@ def sdk_runtime(home):
             raise ValueError("unsafe SDK package file")
     with (directory / "package.json").open("rb") as stream:
         manifest = json.loads(stream.read(65537))
-    if manifest.get("name") != "@anthropic-ai/claude-agent-sdk" or manifest.get("version") != SDK_VERSION:
+    if (not isinstance(manifest, dict) or manifest.get("name") != "@anthropic-ai/claude-agent-sdk" or
+            manifest.get("version") != SDK_VERSION):
         raise ValueError("unexpected SDK package version")
     return node, directory
 
