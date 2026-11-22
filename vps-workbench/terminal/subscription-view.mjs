@@ -1,7 +1,25 @@
 // Renderer ported from dsh-terminal-workbench 0.2.0-dev.14.
 import { Terminal, xtermCss } from './vendor/xterm.mjs';
+import { readOutputPage, UnconfirmedTerminalWrite, writeTerminalBytes } from './subscription-output.mjs';
 
 const API = '/dsh-terminal-workbench/api/';
+const initialSize = { columns: 80, rows: 24 };
+const pollingStates = new Set(['starting', 'ready', 'closing', 'reconnecting']);
+const finalStates = new Set(['detached', 'closed']);
+const pollInterval = 250;
+
+function measureTerminal(term, mount) {
+  const screen = term.element.querySelector('.xterm-screen')?.getBoundingClientRect();
+  const viewport = term.element.querySelector('.xterm-viewport');
+  if (!screen?.width || !screen.height || !viewport || !mount.clientWidth || !mount.clientHeight) return null;
+  const overlay = term.element.querySelector('.xterm-scrollable-element > .scrollbar.vertical');
+  const scrollbar = Math.max(viewport.offsetWidth - viewport.clientWidth, overlay?.offsetWidth ?? 0);
+  // Use the rendered cell size so zoom, DPR and the terminal font are already accounted for.
+  return {
+    columns: Math.max(2, Math.min(500, Math.floor((mount.clientWidth - scrollbar) / (screen.width / term.cols)))),
+    rows: Math.max(1, Math.min(300, Math.floor(mount.clientHeight / (screen.height / term.rows)))),
+  };
+}
 
 function nonce() {
       if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -12,11 +30,6 @@ function nonce() {
     }
 function toBase64(bytes) {
       let s=''; for (const b of bytes) s+=String.fromCharCode(b); return btoa(s);
-    }
-function fromBase64(value) {
-      if (typeof value !== 'string' || value.length > 5464 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) throw new Error('终端数据格式无效');
-      const s=atob(value); if (s.length > 4096) throw new Error('终端数据过大');
-      return Uint8Array.from(s,c=>c.charCodeAt(0));
     }
 const windowsTerminalKeys = {
   ArrowLeft: [37, 75, 0],
@@ -155,15 +168,22 @@ const browseRejected = (error) => error?.code === 'workbench_browse_only';
 
 const subscriptionCss = `
   [data-ntw][data-subscription=true] {height:100%}
+  [data-ntw][data-subscription=true][data-session=true] > .vc-scroll {overflow:hidden}
+  [data-ntw][data-subscription=true][data-session=true] > .vc-scroll > .vc-body {
+    display:flex; flex-direction:column; height:100%; min-height:0; padding-block:8px;
+  }
   [data-ntw][data-subscription=true] .ntw-session-actions {
     display:flex; flex-wrap:wrap; align-items:center; gap:4px; min-width:0;
   }
   [data-ntw][data-subscription=true] .vc-welcome .ntw-session-actions {justify-content:center; gap:8px}
   [data-ntw][data-subscription=true] .vc-welcome p {overflow-wrap:anywhere}
   [data-ntw][data-subscription=true] .ntw-screen {
-    overflow:auto; padding:12px; border-radius:12px; background:#181a1b;
+    flex:1; min-width:0; min-height:0; overflow:hidden; padding:8px;
+    border-radius:12px; background:#181a1b;
   }
+  [data-ntw][data-subscription=true] .ntw-terminal {height:100%; min-height:0}
   [data-ntw][data-subscription=true] .vc-activity {margin-top:12px}
+  [data-ntw][data-subscription=true][data-session=true] .vc-activity {margin-top:6px; max-height:35%; overflow:auto}
   [data-ntw][data-subscription=true] .vc-activity[open] summary {margin-bottom:6px}
   [data-ntw][data-subscription=true] .vc-activity select {max-width:100%}
 `;
@@ -185,7 +205,8 @@ function SubscriptionTerminal({active=true, subscriptionPreset, activation=0, re
   const [hasSelection,setHasSelection]=React.useState(false), [subscriptionNotice,setSubscriptionNotice]=React.useState('');
   const [records,setRecords]=React.useState([]), [selected,setSelected]=React.useState(''), [remoteStatus,setRemoteStatus]=React.useState(null);
   const [reviewed,setReviewed]=React.useState(false);
-  const token=React.useRef(''), terminal=React.useRef(null), container=React.useRef(null), cursor=React.useRef(0), live=React.useRef(true);
+  const token=React.useRef(''), terminal=React.useRef(null), container=React.useRef(null), live=React.useRef(true);
+  const stream=React.useRef(null), desiredSize=React.useRef(null);
   const editor=React.useRef(null);
   const blocked=React.useRef(true), outputBusy=React.useRef(false), direct=React.useRef(null), queue=React.useRef(null), current=React.useRef(null);
   const inputPending=React.useRef(false), inputUnconfirmed=React.useRef(false);
@@ -213,7 +234,7 @@ function SubscriptionTerminal({active=true, subscriptionPreset, activation=0, re
     releaseView();
     if(!subscriptionPreset||boundPreset===subscriptionPreset)return;
     if(differentTarget){
-      direct.current?.discard();terminal.current?.reset();
+      direct.current?.discard();terminal.current?.reset();stream.current=null;
       composerIme.current={active:false,endedAt:-Infinity};
       setHasSelection(false);setSubscriptionNotice('');
       setDraft('');setComposing(false);setPendingIme(null);
@@ -237,14 +258,23 @@ function SubscriptionTerminal({active=true, subscriptionPreset, activation=0, re
       },
       onDrop:()=>{if(live.current)setMessage('连接状态变化，排队输入未发送。');}});
     queue.current=q;
-    const term=new Terminal({cols:80,rows:24,disableStdin:true,cursorBlink:true,scrollback:1000,theme:{background:'#181a1b',foreground:'#eee8df'}});
+    const term=new Terminal({cols:initialSize.columns,rows:initialSize.rows,disableStdin:true,cursorBlink:true,
+      scrollback:1000,theme:{background:'#181a1b',foreground:'#eee8df'}});
     terminal.current=term;term.open(container.current);
+    const mount=container.current;
+    const observer=new ResizeObserver(()=>{
+      const size=measureTerminal(term,mount);
+      desiredSize.current=size;
+      if(size&&current.current.sessionId&&finalStates.has(current.current.state)) term.resize(size.columns,size.rows);
+    });
+    observer.observe(mount);
+    observer.observe(term.element.querySelector('.xterm-screen'));
     const selection=term.onSelectionChange(()=>setHasSelection(term.hasSelection()));
     direct.current=createDirectTerminalInput(term,{canInput:()=>available(current.current.sessionId),
       onInput:value=>q.enqueue(new TextEncoder().encode(value),current.current.sessionId),
       onPending:value=>{if(live.current)setPendingIme(value);},onNotice:value=>{if(live.current)setMessage(value);}});
     return ()=>{
-      live.current=false;releaseView();selection?.dispose();direct.current?.dispose();
+      live.current=false;observer.disconnect();releaseView();selection?.dispose();direct.current?.dispose();
       direct.current=null;q.dispose();queue.current=null;terminal.current=null;term.dispose();
     };
   },[]);
@@ -268,6 +298,21 @@ function SubscriptionTerminal({active=true, subscriptionPreset, activation=0, re
     const {settings,targetId,requireRelay}=boundPreset;
     return {settings,targetId,requireRelay,mode};
   }
+  function selectStream(id, acknowledged, fresh=false){
+    const previous=stream.current;
+    if(previous?.id===id){
+      // The bridge may not yet have received the next poll carrying our processed cursor.
+      if(acknowledged>previous.after)throw new Error();
+      previous.closing=false;
+      previous.requestedSize=null;
+      return;
+    }
+    const term=terminal.current;
+    term?.reset();
+    term?.resize(initialSize.columns,initialSize.rows);
+    stream.current={id,after:acknowledged,applying:null,writeUncertain:false,closing:false,
+      requestedSize:fresh?initialSize:null};
+  }
   async function start(mode){
     if(!remoteEnabled||!verified||busy||!['idle','closed'].includes(state)||!claimView())return;
     const requestedView=presentation.current;
@@ -281,7 +326,7 @@ function SubscriptionTerminal({active=true, subscriptionPreset, activation=0, re
       const value=await rpc('native-subscription-start',subscriptionRequest(mode));
       if(!value||typeof value.sessionId!=='string'||!['starting','ready','detached'].includes(value.state))throw new Error();
       if(!live.current)return;inputUnconfirmed.current=false;
-      cursor.current=0;setSessionId(value.sessionId);setSelected(value.sessionId);setState(value.state);
+      selectStream(value.sessionId,0,true);setSessionId(value.sessionId);setSelected(value.sessionId);setState(value.state);
       if(value.state==='detached')setMessage('启动结果未确认，请查询原回执；不会自动重试。');
     }catch(failure){if(live.current){
       const preflightRejected=!submitted||failure.code==='subscription_preflight_rejected'||browseRejected(failure);
@@ -301,12 +346,12 @@ function SubscriptionTerminal({active=true, subscriptionPreset, activation=0, re
       if(!live.current||presentation.current!==requestedView)return;
       if(!value||!Number.isSafeInteger(value.acknowledged)||value.acknowledged<0||typeof value.gap!=='boolean')throw new Error();
       if(!value.sessionId){
-        setState('idle');setSessionId(null);setSelected('');
+        stream.current=null;setState('idle');setSessionId(null);setSelected('');
         setMessage(value.otherTerminal?'当前连接不属于这个 Claude 订阅预设。请到原终端处理。':'当前没有可查询的终端。');
         return;
       }
       if(!['starting','ready','closing','detached','closed'].includes(value.state))throw new Error();
-      cursor.current=value.acknowledged;blocked.current=true;inputUnconfirmed.current=false;
+      selectStream(value.sessionId,value.acknowledged);blocked.current=true;inputUnconfirmed.current=false;
       setSessionId(value.sessionId);setSelected(value.sessionId);setState(value.state);
       if(value.gap)setMessage('终端输出不完整；请查询原回执。');
       else if(value.state==='detached')setMessage('SSH 已断开；请先查询原回执并核对操作。');
@@ -316,44 +361,96 @@ function SubscriptionTerminal({active=true, subscriptionPreset, activation=0, re
       setMessage('无法查询当前连接，请稍后重试只读查询。');
     }finally{if(live.current)setBusy(false);}
   }
+  const shouldPoll=remoteEnabled&&pollingStates.has(state);
   React.useEffect(()=>{
-    if(!remoteEnabled||!sessionId||!token.current||!['starting','ready','closing','reconnecting'].includes(state))return;
+    const output=stream.current,term=terminal.current;
+    if(!shouldPoll||!sessionId||output?.id!==sessionId||!term||!token.current)return;
     let cancelled=false,timer;
+    const ownsView=()=>live.current&&stream.current===output&&terminal.current===term;
+    const running=()=>!cancelled&&ownsView()&&current.current.remoteEnabled&&!inputUnconfirmed.current;
+    const releaseOutput=()=>{
+      if(ownsView()&&outputBusy.current){outputBusy.current=false;setRendering(false);}
+    };
+
+    async function renderPage(steps){
+      for(const step of steps){
+        if(!running())return;
+        if(step.type==='output')await writeTerminalBytes(term,step.data);
+        else blocked.current=true;
+        // A write issued before cancellation still counts when the same terminal processed it.
+        if(!ownsView())return;
+        output.after=step.sequence;
+      }
+    }
+
+    async function fitReadySession(){
+      if(!current.current.active||output.closing||!desiredSize.current)return;
+      const size=desiredSize.current;
+      if(size.columns===output.requestedSize?.columns&&size.rows===output.requestedSize?.rows)return;
+      output.requestedSize=size;
+      // The existing resize request acknowledges the local pipe write. OpenSSH delivers the
+      // dimensions asynchronously. Apply the grid at the boundary of a drained output page.
+      const reply=await rpc('native-resize',{sessionId,...size});
+      if(ownsView()&&!output.closing){
+        if(reply?.sessionId!==sessionId)throw new Error();
+        if(reply.state==='ready')term.resize(size.columns,size.rows);
+      }
+    }
+
+    async function applyPage(batch){
+      if(batch.steps.length){
+        outputBusy.current=true;setRendering(true);
+        await renderPage(batch.steps);
+      }
+      if(running()&&output.after===batch.lastSequence&&batch.state==='ready')await fitReadySession();
+    }
+
     async function poll(){
       try{
-        let value;try{value=await rpc('native-poll',{sessionId,after:cursor.current});}
-        catch(e){if(!(e instanceof TransportError)||cancelled||!live.current)throw e;blocked.current=true;
-          value=await rpc('native-poll',{sessionId,after:cursor.current});}
-        if(cancelled||!live.current||inputUnconfirmed.current)return;
-        if(!value||value.sessionId!==sessionId||value.gap||!Array.isArray(value.events)||value.events.length>64||
-          !Number.isSafeInteger(value.lastSequence)||value.lastSequence<cursor.current)throw new Error();
-        outputBusy.current=true;setRendering(true);
-        try{for(const event of value.events){
-          if(!Number.isSafeInteger(event.sequence)||event.sequence!==cursor.current+1||event.sequence>value.lastSequence)throw new Error();
-          if(event.type==='output'){
-            const bytes=fromBase64(event.data),term=terminal.current;if(!term)throw new Error();
-            await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(new Error()),5000);
-              try{term.write(bytes,()=>{clearTimeout(timeout);resolve();});}catch(e){clearTimeout(timeout);reject(e);}});
-            if(cancelled||!live.current)return;
-          }else if(event.type==='disconnect')blocked.current=true;
-          else if(event.type==='exit')blocked.current=true;
-          else throw new Error();
-          cursor.current=event.sequence;
-        }}finally{outputBusy.current=false;if(!cancelled&&live.current)setRendering(false);}
-        if(inputUnconfirmed.current)return;
-        if(!['starting','ready','closing','detached','closed'].includes(value.state)||(!value.events.length&&cursor.current<value.lastSequence))throw new Error();
-        const draining=cursor.current<value.lastSequence;
-        if(value.state==='ready'&&!draining)blocked.current=false;
-        if(['detached','closed'].includes(value.state))blocked.current=true;
+        if(output.applying)await output.applying;
+        if(!running())return;
+        if(output.writeUncertain)throw new UnconfirmedTerminalWrite();
+        let value;
+        try{value=await rpc('native-poll',{sessionId,after:output.after});}
+        catch(e){
+          if(!(e instanceof TransportError)||!running())throw e;
+          blocked.current=true;
+          value=await rpc('native-poll',{sessionId,after:output.after});
+        }
+        if(!running())return;
+        const batch=readOutputPage(value,sessionId,output.after);
+        output.applying=applyPage(batch);
+        try{await output.applying;}
+        catch(error){
+          if(error instanceof UnconfirmedTerminalWrite)output.writeUncertain=true;
+          throw error;
+        }finally{
+          output.applying=null;
+          if(!running())releaseOutput();
+        }
+        if(!running())return;
+        const draining=output.after<batch.lastSequence;
+        if(!draining)releaseOutput();
+        const done=finalStates.has(batch.state);
+        const finalAck=done&&batch.steps.length>0;
+        if(batch.state==='ready'&&!draining&&!output.closing)blocked.current=false;
+        if(done)blocked.current=true;
         if(blocked.current)queue.current?.discard();else queue.current?.kick();
-        setState(draining&&['detached','closed'].includes(value.state)?'closing':value.state);
-        if(!draining&&value.state==='detached')setMessage('SSH 连接已断开或关闭；请查询原回执，再核对上次操作。');
-        if(draining||['starting','ready','closing'].includes(value.state))timer=setTimeout(poll,250);
-      }catch(e){if(!cancelled&&live.current&&!browseRejected(e)){blocked.current=true;queue.current?.discard();setState(e instanceof TransportError?'disconnected':'uncertain');
-        setMessage('终端输出或连接状态未确认，请先查询原连接与回执；不会重发输入。');}}
+        const next=(draining||finalAck)&&done||output.closing&&!done?'closing':batch.state;
+        setState(next);
+        if(!draining&&!finalAck&&batch.state==='detached')setMessage('SSH 连接已断开或关闭；请查询原回执，再核对上次操作。');
+        if(draining||finalAck||!done)timer=setTimeout(poll,draining||finalAck?0:pollInterval);
+      }catch(e){
+        releaseOutput();
+        if(running()&&!browseRejected(e)){
+          blocked.current=true;queue.current?.discard();setState(e instanceof TransportError?'disconnected':'uncertain');
+          setMessage('终端输出或连接状态未确认，请先查询原连接与回执；不会重发输入。');
+        }
+      }
     }
-    poll();return()=>{cancelled=true;clearTimeout(timer);};
-  },[sessionId,state,remoteEnabled]);
+    void poll();
+    return()=>{cancelled=true;clearTimeout(timer);if(!output.applying)releaseOutput();};
+  },[sessionId,shouldPoll]);
   React.useEffect(()=>{queue.current?.kick();},[state,sessionId,busy,rendering,active,remoteEnabled]);
 
   async function list(){
@@ -388,8 +485,11 @@ function SubscriptionTerminal({active=true, subscriptionPreset, activation=0, re
     catch{setMessage('尚不能确认原连接状态；没有启动新会话。');}finally{if(live.current)setBusy(false);}
   }
   async function close(){
-    if(!remoteEnabled||!sessionId||busy||!['starting','ready'].includes(state))return;blocked.current=true;queue.current?.discard();setBusy(true);setState('closing');
+    if(!remoteEnabled||!sessionId||busy||!['starting','ready'].includes(state))return;
+    if(stream.current?.id===sessionId)stream.current.closing=true;
+    blocked.current=true;queue.current?.discard();setBusy(true);setState('closing');
     try{await rpc('native-close',{sessionId});}catch(error){
+      if(browseRejected(error)&&stream.current?.id===sessionId)stream.current.closing=false;
       setState(browseRejected(error)?state:'disconnected');
       setMessage(browseRejected(error)?'仅浏览模式已拦截关闭请求。':'关闭结果待确认，请查询原连接。');
     }finally{if(live.current)setBusy(false);}
@@ -477,7 +577,8 @@ function SubscriptionTerminal({active=true, subscriptionPreset, activation=0, re
       h('button',{key:'new',type:'button',className:'vc-button vc-primary',onClick:()=>start('new'),disabled:!remoteEnabled||locked||!verified},'新对话'),
       h('button',{key:'resume',type:'button',className:'vc-button vc-example',onClick:()=>start('picker'),disabled:!remoteEnabled||locked||!verified},'继续会话'),
     ];
-    return h('div',{'data-ntw':'','data-subscription':true,className:'vc-conversation',role:'region','aria-label':'Claude Code 订阅终端'},
+    return h('div',{'data-ntw':'','data-subscription':true,'data-session':Boolean(sessionId),
+      className:'vc-conversation',role:'region','aria-label':'Claude Code 订阅终端'},
       h('style',null,xtermCss+subscriptionCss),
       h('div',{className:'vc-scroll',tabIndex:-1},
         h('div',{className:'vc-body'},
@@ -486,7 +587,8 @@ function SubscriptionTerminal({active=true, subscriptionPreset, activation=0, re
             h('p',null,boundPreset.name||boundPreset.settings.host,' · ',boundPreset.settings.workspace),
             h('div',{className:'ntw-session-actions'},sessionActions),
             !verified?h('p',null,'请先在 VPS 设置中核对 SSH 主机指纹。'):null):null,
-          h('div',{className:'ntw-screen',hidden:!sessionId,ref:container,'aria-label':'远端终端输出'}),
+          h('div',{className:'ntw-screen',hidden:!sessionId,'aria-label':'远端终端输出'},
+            h('div',{className:'ntw-terminal',ref:container})),
           h('details',{className:'vc-activity',key:sessionId||'history'},
             h('summary',null,sessionId?'会话连接与回执':'本机终端回执'),
             sessionId?h('div',{className:'ntw-session-actions'},checkReceipt,

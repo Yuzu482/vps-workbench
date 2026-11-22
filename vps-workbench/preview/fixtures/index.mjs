@@ -408,6 +408,12 @@ export function createPreviewFixtures() {
       }
       return terminalOk({ state: 'closed' });
     }
+    if (op === 'native-resize') {
+      const { columns, rows } = packet;
+      if (session.state !== 'ready' || !Number.isInteger(columns) || columns < 1 || columns > 500 ||
+          !Number.isInteger(rows) || rows < 1 || rows > 300) return invalidRequest();
+      return terminalOk({ sessionId, state: session.state, lastSequence: session.lastSequence });
+    }
     if (op !== 'native-input' || session.state !== 'ready' || typeof packet.data !== 'string' ||
         packet.data.length > 5464 || !base64Pattern.test(packet.data)) return invalidRequest();
     const bytes = Buffer.from(packet.data, 'base64');

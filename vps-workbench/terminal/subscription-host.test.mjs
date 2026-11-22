@@ -138,6 +138,11 @@ test('isolated relay launch, original receipt, and explicit reconciliation', asy
   assert.equal(poll.body.result.events[0].type, 'output');
   assert.equal((await f.rpc('native-input', { sessionId, data: 'b2sN' })).status, 200);
   assert.deepEqual(f.frames[1], { type: 'input', data: 'b2sN' });
+  const resized = await f.rpc('native-resize', { sessionId, columns: 42, rows: 12 });
+  assert.deepEqual(resized.body.result, { state: 'ready', sessionId, lastSequence: poll.body.result.lastSequence });
+  assert.deepEqual(f.frames[2], { type: 'resize', columns: 42, rows: 12 });
+  assert.equal((await f.rpc('native-resize', { sessionId: randomUUID(), columns: 40, rows: 12 })).status, 409);
+  assert.equal(f.frames.length, 3);
   assert.equal((await f.rpc('native-close', { sessionId })).body.result.state, 'detached');
   assert.equal((await f.rpc('native-acknowledge', { operationId: sessionId, reviewed: true })).status, 409);
   assert.equal((await f.rpc('native-status', { operationId: sessionId })).body.result.state, 'finished');
