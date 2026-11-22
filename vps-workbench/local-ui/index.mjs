@@ -4,6 +4,7 @@ import { trialPrompt, trialState } from '../desktop/setup-trial.mjs';
 import { effortName } from '../../remote-workbench/vps-chat/client/model-catalog.js';
 import { workbenchStorage } from '../../remote-workbench/vps-chat/client/workbench-storage.js';
 import { localBackends } from '../local-sdk/providers.mjs';
+import { componentMessages, createComponentPanel, useComponentInstall } from './components.mjs';
 
 const location = 'local-sdk';
 const defaultBackend = 'codex';
@@ -19,8 +20,10 @@ export function createLocalWorkspace(React, Workbench) {
   const h = React.createElement;
   const button = (label, props, style = 'vc-settings-outline') =>
     h('button', { type: 'button', className: 'vc-button ' + style, ...props }, label);
+  const ComponentPanel = createComponentPanel(React, button);
 
-  return function LocalWorkspace({ native, active, settingsSurface, access, accessPending, newChatRequest, savePreference, ...props }) {
+  return function LocalWorkspace({ native, active, settingsSurface, access, accessPending, newChatRequest, savePreference,
+    componentSetup, ...props }) {
     const [status, setStatus] = React.useState(null);
     const [statusError, setStatusError] = React.useState(false);
     const [checking, setChecking] = React.useState(false);
@@ -34,6 +37,9 @@ export function createLocalWorkspace(React, Workbench) {
     const [registerBackend, setRegisterBackend] = React.useState(defaultBackend);
     const [modelId, setModelId] = React.useState('');
     const [effortId, setEffortId] = React.useState('');
+    const [componentStatus, setComponentStatus] = React.useState(componentSetup.initial);
+    const [accountFeedback, setAccountFeedback] = React.useState(null);
+    const [accountBusy, setAccountBusy] = React.useState(false);
     const loading = React.useRef(null);
     const registering = React.useRef(false);
     const newRequest = React.useRef(0);
@@ -121,6 +127,17 @@ export function createLocalWorkspace(React, Workbench) {
     React.useEffect(() => {
       if ((active || inspecting) && !status && !loading.current) void loadStatus();
     }, [active, inspecting]);
+    React.useEffect(() => {
+      setAccountFeedback(null);
+    }, [inspector?.id]);
+
+    async function refreshComponents(backend) {
+      const [updated] = await Promise.all([loadStatus(), native.localComponentsStatus().then(setComponentStatus)]);
+      const configured = updated?.profiles.find((item) => item.backend === backend);
+      if (configured) setInspectId(configured.id);
+    }
+    const componentInstallation = useComponentInstall(React, { native, status: componentStatus, browsing: browsing || accessPending,
+      onContinue: componentSetup.continue, onInstalled: refreshComponents });
 
     React.useLayoutEffect(() => {
       if (!active || !defaultProfile || newRequest.current === newChatRequest) return;
@@ -146,6 +163,7 @@ export function createLocalWorkspace(React, Workbench) {
         }
         setStatus((previous) => ({ ...previous, profiles: [...previous.profiles.filter(({ id }) => id !== result.profile.id), result.profile] }));
         setInspectId(result.profile.id);
+        if (componentStatus) void native.localComponentsStatus().then(setComponentStatus).catch(() => {});
         setName('');
         setChecked(null);
       } catch {
@@ -178,7 +196,7 @@ export function createLocalWorkspace(React, Workbench) {
     const credentialResult = verified ? {
       state: mayTry(inspectedRuntime) ? 'confirm' : 'failed',
       detail: login ? '使用此配置的本机 Google 登录目录，登录状态以试跑结果为准。' : inspectedRuntime?.credentialConfigured
-        ? '已配置本机 API 密钥，服务权限待试跑确认。' : '在启动工作台的本机环境中配置密钥。',
+        ? '已配置本机 API 密钥，服务权限待试跑确认。' : '在「模型与账号」中配置本机密钥。',
     } : null;
     function credentials() {
       return h(ConnectionResult, { id: 'account', label: '本机账号凭据', detail: '检查本机进程的凭据配置。', result: credentialResult });
@@ -194,8 +212,32 @@ export function createLocalWorkspace(React, Workbench) {
         h('dt', null, '推理强度'), h('dd', null, inspector.effort === 'default' ? '账号默认' : effortName(inspector.effort)));
     }
 
+    async function changeAccount(event) {
+      event?.preventDefault();
+      if (browsing || accessPending || accountBusy || !inspector || !inspectedRuntime?.runtimeAvailable) return;
+      const input = event?.currentTarget.elements.namedItem('local-api-key');
+      setAccountBusy(true);
+      setAccountFeedback(null);
+      try {
+        const result = login ? await native.loginLocalAntigravity(inspector.id) :
+          await native.saveLocalCredential(backendOf(inspector), input.value.trim());
+        if (!result.ok) {
+          setAccountFeedback({ ok: false, message: componentMessages[result.code] ?? '账号设置未能完成。' });
+          return;
+        }
+        if (input) input.value = '';
+        setChecked(null);
+        invalidateTrial();
+        await loadStatus();
+        setAccountFeedback({ ok: true, message: login ? '请在 Antigravity 登录窗口完成 Google 登录。然后可回到工作台主动试跑。' :
+          '本机密钥已保存。可在连接设置主动试跑。' });
+      } catch { setAccountFeedback({ ok: false, message: '账号设置未能完成。' }); }
+      finally { setAccountBusy(false); }
+    }
+
     const localPanels = {
       connection: h(React.Fragment, null,
+        h(ComponentPanel, { native, status: componentStatus, welcome: componentSetup.welcome, installation: componentInstallation }),
         inspector && h('section', { className: 'vc-settings-group', 'aria-label': '本机配置' },
           h('h4', null, '本机配置'),
           h('label', { className: 'vc-field' }, '查看配置',
@@ -254,11 +296,26 @@ export function createLocalWorkspace(React, Workbench) {
       accounts: h(React.Fragment, null,
         h('section', { className: 'vc-settings-group', 'aria-label': '凭据来源' },
           h('h4', null, '凭据来源'),
-          login ? h(React.Fragment, null, h('p', null, '在此配置的本机登录目录运行官方 agy acp --login。'),
+          profiles.length > 1 ? h('label', { className: 'vc-field' }, '查看本机账号配置',
+            h('select', { value: inspector?.id, disabled: accountBusy, onChange: (event) => setInspectId(event.target.value) },
+              profiles.map(({ id, name }) => h('option', { key: id, value: id }, name)))) : null,
+          login ? h(React.Fragment, null,
+            native.loginLocalAntigravity && inspector && inspectedRuntime?.runtimeAvailable ?
+              button(accountBusy ? '正在打开登录…' : '在本机登录 Antigravity', {
+                disabled: browsing || accessPending || accountBusy, onClick: () => void changeAccount(),
+              }) : h('p', null, '在此配置的本机登录目录运行官方 agy acp --login。'),
             h('code', null, inspector?.accountDirectory ?? '请先登记配置。'),
             h('p', { role: 'status' }, '本机 Google 登录待试跑确认。')) : h(React.Fragment, null,
-            h('p', null, '本机启动环境的 ', h('code', null, credentialVariable)),
-            h('p', { role: 'status' }, inspectedRuntime?.credentialConfigured ? '本机 API 密钥已配置。' : '在启动工作台的本机环境中设置此变量。')),
+            native.saveLocalCredential && inspector && inspectedRuntime?.runtimeAvailable &&
+              h('form', { key: inspector.id, onSubmit: changeAccount },
+                h('p', null, '此密钥供该执行端的所有本机配置使用。保存后替换此执行端的应用内密钥。'),
+                h('label', { className: 'vc-field' }, labelFor(inspector) + ' 本机 API 密钥',
+                  h('input', { name: 'local-api-key', type: 'password', autoComplete: 'off', spellCheck: false,
+                    required: true, maxLength: 520, disabled: browsing || accessPending || accountBusy })),
+                button(accountBusy ? '正在保存…' : '保存本机密钥', { type: 'submit', disabled: browsing || accessPending || accountBusy })),
+            h('p', null, '也可由可信启动器提供 ', h('code', null, credentialVariable), '。'),
+            h('p', { role: 'status' }, inspectedRuntime?.credentialConfigured ? '本机 API 密钥已配置。' : '本机 API 密钥尚未配置。')),
+          accountFeedback && h('p', { role: accountFeedback.ok ? 'status' : 'alert' }, accountFeedback.message),
           button('打开本机连接检查', { onClick: () => settingsSurface.setTab('connection') })),
         h('ol', { className: 'vc-setup-steps' }, credentials(),
           h(ConnectionResult, { id: 'response', label: '实际模型响应', detail: '试跑使用所选本机配置。',

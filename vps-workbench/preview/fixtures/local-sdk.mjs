@@ -8,7 +8,7 @@ import { openLocalSdk } from '../../local-sdk/service.mjs';
 import { createLocalWorkbench } from '../../local-sdk/workbench.mjs';
 import { localBackends, providerDefaultModels, usesLocalControls } from '../../local-sdk/providers.mjs';
 
-export async function createPreviewLocalSdk(access, options) {
+export async function createPreviewLocalSdk(access, { runtimeAvailable = () => true, ...options } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'vps-workbench-preview-sdk-'));
   const directory = join(root, '示例工作目录');
   await mkdir(directory);
@@ -16,7 +16,7 @@ export async function createPreviewLocalSdk(access, options) {
   for (const backend of Object.keys(localBackends)) {
     const service = await openLocalSdk({
     root: join(root, backend), backend, models: backend === 'codex' ? localModels : providerDefaultModels,
-    credentialConfigured: () => true, canExecute: () => access().mode === 'execute',
+    credentialConfigured: () => runtimeAvailable(backend), canExecute: () => access().mode === 'execute',
     createThread(_profile, priorThreadId, { interaction } = {}) {
       const id = priorThreadId ?? randomUUID();
       return { async runStreamed(input, { signal }) {
@@ -58,13 +58,13 @@ export async function createPreviewLocalSdk(access, options) {
       } };
     },
     });
-    const workbench = createLocalWorkbench({ service, runtimeAvailable: true, backend, access, pollInterval: 100, ...options });
+    const workbench = createLocalWorkbench({ service, runtimeAvailable: () => runtimeAvailable(backend), backend, access, pollInterval: 100, ...options });
     backends.set(backend, { service, workbench });
   }
   function status() {
     const providers = [...backends.values()].map(({ service }) => {
       const current = service.status();
-      return { ...current, runtimeAvailable: true, credentialSource: current.backend === 'antigravity' ? 'agy-local-login' :
+      return { ...current, runtimeAvailable: runtimeAvailable(current.backend), credentialSource: current.backend === 'antigravity' ? 'agy-local-login' :
         current.backend === 'claude-sdk' ? 'claude-api-key' : 'codex-api-key',
       profiles: current.profiles.map((profile) => ({ ...profile, backend: current.backend })) };
     });

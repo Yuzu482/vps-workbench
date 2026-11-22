@@ -518,12 +518,12 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
     }
 
     const header = {
-      connection: localPanels ? ['本机 SDK 连接', '本机 Codex 进程使用 Windows 网络。'] :
+      connection: localPanels ? ['本机 SDK 连接', '本机执行端使用 Windows 的网络和凭据。'] :
         ['VPS 连接', ready ? name || '当前连接' : '填写服务器与 SSH 验证信息以连接 VPS。'],
-      tools: localPanels ? ['Codex 模型', '默认模型随本机配置保存。历史会话继续使用原配置。'] :
+      tools: localPanels ? ['本机模型', '默认模型随本机配置保存。历史会话继续使用原配置。'] :
         ['执行端', '保存启用变更后，所选执行端会出现在当前 VPS 的切换菜单。独立设置实时保存。'],
       agents: ['Agent 预设', '保存常用的执行端、模型和角色指令，供工作流各阶段选用。'],
-      accounts: localPanels ? ['本机 Codex 账号', '查看本机凭据与模型服务状态。'] :
+      accounts: localPanels ? ['本机账号', '查看本机凭据与模型服务状态。'] :
         ['账号管理', '官方页面和执行端登录都在当前 VPS 的操作窗口中打开。'],
       appearance: ['外观', '应用偏好 · 执行端的独立设置优先生效。'],
       interaction: ['交互', '应用偏好 · 输入与动画设置。执行端的独立设置优先生效。'],

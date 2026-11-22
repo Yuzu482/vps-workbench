@@ -26,6 +26,7 @@ import { SetupGuide } from './setup-guide.mjs';
 import { setupConnectionKey } from './setup-state.mjs';
 import { VpsConnectionChecks, useVpsConnectionChecks } from './connection-panel.mjs';
 import { createLocalWorkspace } from '../local-ui/index.mjs';
+import { componentWelcomeKey } from '../local-ui/components.mjs';
 
 const h = React.createElement;
 const native = window.vpsWorkbench;
@@ -95,9 +96,11 @@ function createCatalog(initial) {
 
 const root = createRoot(document.getElementById('root'));
 try {
-  const { preferences, projects, access: initialAccess, dataNotices = [] } = await native.bootstrap();
+  const { preferences, projects, access: initialAccess, dataNotices = [], localComponents = null } = await native.bootstrap();
   if (dataNotices.length) showLocalStatus(dataNotices.join(' '));
   const values = new Map(Object.entries(preferences));
+  const showComponentWelcome = localComponents?.mode === 'on-demand' && localComponents.supported &&
+    localComponents.items.every(({ ready }) => !ready) && !values.get(componentWelcomeKey);
   function persist(key, value) {
     void native.setPreference(key, value).catch(() => showLocalStatus('本机设置保存失败'));
   }
@@ -159,10 +162,11 @@ try {
   function DesktopApp() {
     const [newLocation, setNewLocation] = React.useState(() => readLocation(values.get(newLocationKey)));
     const [location, setLocation] = React.useState(() => readLocation(values.get(viewLocationKey)));
-    const [visited, setVisited] = React.useState(() => new Set([location]));
+    const [visited, setVisited] = React.useState(() => new Set(showComponentWelcome ? [location, 'local-sdk'] : [location]));
     const [localNew, setLocalNew] = React.useState(0);
     const [sshNew, setSshNew] = React.useState(0);
-    const [settings, setSettings] = React.useState(null);
+    const [settings, setSettings] = React.useState(() => showComponentWelcome ? { location: 'local-sdk', tab: 'connection' } : null);
+    const [componentWelcome, setComponentWelcome] = React.useState(showComponentWelcome);
     const settingsLayer = React.useRef(null);
     const settingsTrigger = React.useRef(null);
     const [appearance, setAppearance] = React.useState(readPreferences);
@@ -199,7 +203,7 @@ try {
         setTab(tab) { setSettings((previous) => previous?.location === target ? { ...previous, tab } : previous); },
         close() { setSettings(null); },
         restoreFocus() {
-          const trigger = settingsTrigger.current;
+          const trigger = settingsTrigger.current ?? document.querySelector('.desktop-location-tabs button[aria-pressed="true"]');
           if (!settings && !document.querySelector('dialog:modal') && trigger?.isConnected) {
             trigger.focus({ preventScroll: true });
           }
@@ -210,6 +214,14 @@ try {
             settingsLayer.current);
         },
       };
+    }
+    async function completeComponentWelcome(accounts) {
+      if (componentWelcome) {
+        await saveLocalPreference(componentWelcomeKey, 'seen');
+        setComponentWelcome(false);
+      }
+      if (accounts) navigateSettings('local-sdk', 'accounts');
+      else setSettings(null);
     }
     async function changeAppearance(patch) {
       const next = { ...appearanceDraft.current, ...patch };
@@ -301,6 +313,7 @@ try {
         projectCatalog, terminalView: noTerminal, resourcesOpen, setResourcesOpen,
         newChatRequest: localNew, onNewChat: startChat,
         settingsSurface: settingsSurface('local-sdk'),
+        componentSetup: { initial: localComponents, welcome: componentWelcome, continue: completeComponentWelcome },
         applicationPreferences: { value: appearance, change: changeAppearance }, savePreference: saveLocalPreference,
         extensions: { state: extensions, change: changeExtensions, busy: extensionsBusy },
         agentPresets: { items: agentItems, change: changeAgentPresets, error: agentPresetError },

@@ -3,7 +3,8 @@ param(
     [string]$OutputDirectory,
     [string]$ElectronZip,
     [string]$CompatibilityArchive,
-    [string]$SubscriptionArchive
+    [string]$SubscriptionArchive,
+    [switch]$OnDemandRuntimes
 )
 
 $ErrorActionPreference = 'Stop'
@@ -85,7 +86,8 @@ try {
     Copy-Item -LiteralPath (Join-Path $project 'workflow-engine/state.mjs') -Destination (Join-Path $app 'workflow-engine')
     New-Item -ItemType Directory -Path (Join-Path $app 'agent-presets') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $project 'agent-presets/state.mjs') -Destination (Join-Path $app 'agent-presets')
-    [ordered]@{name = $application.name; version = $application.version; private = $true; type = 'module'; main = 'desktop/main.mjs'} |
+    $componentMode = if ($OnDemandRuntimes) { 'on-demand' } else { 'bundled' }
+    [ordered]@{name = $application.name; version = $application.version; private = $true; type = 'module'; main = 'desktop/main.mjs'; componentMode = $componentMode} |
         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $app 'package.json') -Encoding utf8NoBOM
     foreach ($file in @('main.mjs', 'preload.cjs', 'data.mjs', 'migrate.mjs', 'access.mjs', 'workflow-attachments.mjs')) {
         Copy-Item -LiteralPath (Join-Path $project "desktop/$file") -Destination $desktop
@@ -116,7 +118,9 @@ try {
     & dotnet publish (Join-Path $windows 'Proxy/Proxy.csproj') -c Release -o (Join-Path $helper 'relay') --self-contained false --artifacts-path (Join-Path $scratch 'dotnet-relay') --nologo -v minimal -m:1
     if ($LASTEXITCODE -ne 0) { throw 'The Windows relay component could not be built' }
     Copy-Item -LiteralPath (Join-Path $windows 'RemoteTaskStatus.py') -Destination $helper -Force
-    & node (Join-Path $project 'desktop/bundle.mjs') $app
+    $bundleArguments = @((Join-Path $project 'desktop/bundle.mjs'), $app)
+    if ($OnDemandRuntimes) { $bundleArguments += '--on-demand-runtimes' }
+    & node @bundleArguments
     if ($LASTEXITCODE -ne 0) { throw 'The standalone UI or server could not be built' }
 
     $licenses = Join-Path $dist 'third-party-notices'
@@ -125,6 +129,11 @@ try {
     foreach ($package in @('react', 'react-dom', 'scheduler')) {
         Copy-Item -LiteralPath (Join-Path $project "node_modules/$package/LICENSE") -Destination (Join-Path $licenses "$package.txt")
     }
+    foreach ($package in @('tar', '@isaacs/fs-minipass', 'chownr', 'minipass', 'minizlib', 'yallist')) {
+        $notice = Get-ChildItem -LiteralPath (Join-Path $project "node_modules/$package") -Filter 'LICENSE*' -File | Select-Object -First 1
+        if (!$notice) { throw "Missing license for $package" }
+        Copy-Item -LiteralPath $notice.FullName -Destination (Join-Path $licenses "$($package.Replace('/', '-')).txt")
+    }
     Copy-Item -LiteralPath (Join-Path $project 'README.md') -Destination (Join-Path $dist '使用说明.md')
     $requiredFiles = @('desktop/server.mjs', 'desktop/web/renderer.js', 'desktop/web/markdown-worker.js', 'desktop/RemoteClaudeAccount.py', 'client/account-player.mjs',
         'desktop/icon.png', 'desktop/web/app-icon.png', 'desktop/web/workbench.css', 'desktop/web/index.html', 'desktop/web/revision.json',
@@ -132,11 +141,17 @@ try {
         'helper/RemoteWorkflowArtifacts.py',
         'helper/DshVpsChatBridge.exe', 'helper/relay/RemoteSsh.Proxy.exe', 'helper/compat/DshVpsChatBridge.exe',
         'helper/compat/sdk/dsh-claude-sdk-worker.mjs', 'helper/compat/antigravity/RemoteDshAntigravity.py',
-        'helper/terminal/DshSshBridge.exe', 'helper/terminal/helpers/remote_interactive.py',
+        'helper/terminal/DshSshBridge.exe', 'helper/terminal/helpers/remote_interactive.py')
+    $bundledFiles = @(
         'node_modules/@openai/codex-sdk/dist/index.js', 'node_modules/@openai/codex-sdk/LICENSE',
         'helper/local-codex/bin/codex.exe', 'helper/local-codex/LICENSE',
         'node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs', 'node_modules/@anthropic-ai/claude-agent-sdk/LICENSE.md',
         'helper/local-claude/claude.exe', 'helper/local-claude/LICENSE.md')
+    if ($OnDemandRuntimes) {
+        foreach ($file in $bundledFiles) {
+            if (Test-Path -LiteralPath (Join-Path $app $file)) { throw "Unexpected bundled component $file" }
+        }
+    } else { $requiredFiles += $bundledFiles }
     foreach ($path in @('helper','helper/compat','helper/compat/sdk','helper/compat/antigravity')) {
         $requiredFiles += @('DshVpsChatBridge.exe','DshVpsChatBridge.dll','DshVpsChatBridge.deps.json',
             'DshVpsChatBridge.runtimeconfig.json','RemoteSsh.Core.dll') | ForEach-Object { "$path/$_" }

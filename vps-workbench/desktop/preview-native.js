@@ -45,7 +45,7 @@
       state.projects = defaults.projects;
       if (defaults.preferences[extensionKey] === undefined) delete state.preferences[extensionKey];
       else state.preferences[extensionKey] = defaults.preferences[extensionKey];
-      return { ...state, access: defaults.access };
+      return { ...state, access: defaults.access, localComponents: defaults.localComponents };
     },
     async setAccess(access) {
       const response = await fetch('/__preview/access', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -66,6 +66,19 @@
     },
     registerLocalSdkProfile(config) {
       return this.localSdkRequest({ ...config, op: 'register' });
+    },
+    async localComponentsStatus() {
+      const response = await fetch('/__preview/local-components');
+      return response.ok ? response.json() : null;
+    },
+    async installLocalComponents(ids) {
+      const response = await fetch('/__preview/local-components', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'install', ids }) });
+      return response.json();
+    },
+    async cancelLocalComponents() {
+      await fetch('/__preview/local-components', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'cancel' }) });
     },
     async setPreference(name, value) {
       if (name === 'dsh-vps-chat:setup-connection:v1') {

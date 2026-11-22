@@ -16,8 +16,8 @@ const { chromium } = require('../../dsh-terminal-workbench/client/browser-test/n
 const previewStorageKey = 'vps-workbench-preview-state';
 const workbenchPreferenceKey = 'dsh-vps-chat:workbench:v1';
 
-async function openPreview(t, { viewport = { width: 1280, height: 720 }, seed } = {}) {
-  const preview = await startPreview({ port: 0, watch: false });
+async function openPreview(t, { viewport = { width: 1280, height: 720 }, seed, previewOptions } = {}) {
+  const preview = await startPreview({ ...previewOptions, port: 0, watch: false });
   t.after(() => preview.close());
   const browser = await chromium.launch({ channel: 'msedge', args: ['--disable-background-networking', '--no-proxy-server'] });
   t.after(() => browser.close());
@@ -41,6 +41,76 @@ async function openPreview(t, { viewport = { width: 1280, height: 720 }, seed } 
   await page.goto(preview.origin);
   return page;
 }
+
+test('optional components install a chosen subset, show per-component failure and retry in a narrow window', { timeout: 30_000 }, async (t) => {
+  const page = await openPreview(t, { viewport: { width: 365, height: 480 },
+    previewOptions: { localComponents: true, componentFailure: 'claude-sdk' } });
+  const panel = page.getByRole('region', { name: '可选本机组件' });
+  const install = panel.getByRole('button', { name: '安装所选组件' });
+  const codex = panel.getByRole('checkbox', { name: 'Codex', exact: true });
+  const claude = panel.getByRole('checkbox', { name: 'Claude Agent SDK', exact: true });
+  const agy = panel.getByRole('checkbox', { name: 'Antigravity ACP', exact: true });
+  const submitted = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().endsWith('/__preview/local-components')) {
+      const payload = request.postDataJSON();
+      if (payload.op === 'install') submitted.push(payload.ids);
+    }
+  });
+  await panel.waitFor();
+  assert.equal(await install.isDisabled(), true);
+  await codex.press('Space');
+  await claude.check();
+  await install.press('Enter');
+  await panel.getByText('已就绪', { exact: true }).waitFor();
+  await panel.getByRole('alert').getByText('下载中断。请检查本机网络后重试。', { exact: true }).waitFor();
+  assert.equal(await codex.isDisabled(), true);
+  assert.equal(await claude.isChecked(), true);
+  assert.equal(await agy.isChecked(), false);
+  await install.click();
+  await panel.getByText('已就绪', { exact: true }).nth(1).waitFor();
+  assert.deepEqual(submitted, [['codex', 'claude-sdk'], ['claude-sdk']]);
+  assert.equal(await agy.isDisabled(), false);
+  await panel.getByRole('button', { name: '前往模型与账号' }).click();
+  await page.getByRole('heading', { name: '本机账号', exact: true }).waitFor();
+  assert.equal(await page.getByLabel('查看本机账号配置').locator('option').count(), 2);
+  await page.keyboard.press('Escape');
+  await page.getByRole('dialog', { name: '设置' }).waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('.desktop-location-tabs button[aria-pressed=true]').innerText(), 'VPS SSH');
+  assert.equal(await page.getByLabel('新建位置').inputValue(), 'ssh-vps');
+  await page.reload();
+  await page.locator('.desktop-location-tabs button[aria-pressed=true]').waitFor();
+  assert.equal(await panel.isVisible(), false);
+});
+
+test('VPS-only continuation saves the choice and skips all component downloads', { timeout: 20_000 }, async (t) => {
+  const page = await openPreview(t, { previewOptions: { localComponents: true } });
+  const panel = page.getByRole('region', { name: '可选本机组件' });
+  const requests = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().endsWith('/__preview/local-components')) requests.push(request.postDataJSON());
+  });
+  await panel.getByRole('button', { name: '暂只使用 VPS SSH' }).click();
+  await panel.waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('.desktop-location-tabs button[aria-pressed=true]').innerText(), 'VPS SSH');
+  await page.reload();
+  await page.locator('.desktop-location-tabs button[aria-pressed=true]').waitFor();
+  assert.equal(await panel.isVisible(), false);
+  assert.deepEqual(requests, []);
+});
+
+test('leaving and reopening component settings retains the in-progress installation and cancellation', { timeout: 20_000 }, async (t) => {
+  const page = await openPreview(t, { previewOptions: { localComponents: true, componentDelay: 5000 } });
+  const dialog = page.getByRole('dialog', { name: '设置' });
+  const panel = dialog.getByRole('region', { name: '可选本机组件' });
+  await panel.getByRole('checkbox', { name: 'Antigravity ACP' }).check();
+  await panel.getByRole('button', { name: '安装所选组件' }).click();
+  await dialog.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '应用偏好' }).click();
+  await dialog.getByRole('navigation', { name: '设置分类' }).getByRole('button', { name: '连接' }).click();
+  await panel.getByRole('button', { name: '取消安装' }).click();
+  await panel.getByText('安装已取消，可以重试。', { exact: true }).waitFor();
+  assert.equal(await panel.getByRole('checkbox', { name: 'Antigravity ACP' }).isChecked(), true);
+});
 
 async function readSavedWorkflows(page) {
   const raw = await page.evaluate(({ storage, key }) => JSON.parse(sessionStorage.getItem(storage)).preferences[key],

@@ -1,5 +1,7 @@
 import { lstat, mkdir, mkdtemp, readdir, realpath, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve, win32 } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { validLocalApiKey } from '../local-sdk/providers.mjs';
 
 export const localCredentialVariable = 'VPS_WORKBENCH_LOCAL_CODEX_API_KEY';
 export const localModels = Object.freeze([
@@ -96,11 +98,12 @@ export function localMcpOverride(servers) {
       ', startup_timeout_sec = 5, tool_timeout_sec = 30 }').join(', ') + ' }';
 }
 
-export async function openCodexRuntime({ runtimeRoot, stateRoot, apiKey, environment = process.env,
-  loadSdk = () => import('@openai/codex-sdk'), isWindowsX64 = process.platform === 'win32' && process.arch === 'x64' }) {
+export async function openCodexRuntime({ runtimeRoot, stateRoot, apiKey, sdkEntry, environment = process.env,
+  loadSdk = () => sdkEntry ? import(pathToFileURL(sdkEntry).href) : import('@openai/codex-sdk'),
+  isWindowsX64 = process.platform === 'win32' && process.arch === 'x64' }) {
   const vendor = join(runtimeRoot, 'local-codex');
   const binary = join(vendor, 'bin', 'codex.exe');
-  const credentialConfigured = typeof apiKey === 'string' && /^sk-[a-z0-9_-]{10,512}$/i.test(apiKey);
+  const credentialConfigured = validLocalApiKey('codex', apiKey);
   const staged = isWindowsX64 && (await stat(binary).catch(() => null))?.isFile() === true;
   const sdk = staged ? await loadSdk().catch(() => null) : null;
   const Codex = sdk?.Codex;

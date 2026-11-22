@@ -1,6 +1,6 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, safeStorage, shell } from 'electron';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
-import { lstat, mkdir } from 'node:fs/promises';
+import { lstat, mkdir, readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { memoryJournalKey, openAppData } from './data.mjs';
@@ -10,7 +10,7 @@ import { agentPresetKey, legacyAgentPresetKey } from '../agent-presets/state.mjs
 import { accessPreference, readAccess, validAccess } from './access.mjs';
 import { importWorkbenchSnapshot } from './migrate.mjs';
 import { agyHashVariable, agyPathVariable, canonicalLocalDirectory, claudeKeyVariable, localCredentialVariable,
-  localMemoryJournalKey, startWorkbenchServer } from './server.mjs';
+  localMemoryJournalKey, openLocalCredentials, startWorkbenchServer } from './server.mjs';
 
 const localApiKey = process.env[localCredentialVariable];
 const localAgentOptions = { claudeKey: process.env[claudeKeyVariable], agyPath: process.env[agyPathVariable], agyHash: process.env[agyHashVariable] };
@@ -119,10 +119,13 @@ async function start() {
   data = await openAppData(root, { onBackupFailure: () => publishStatus('本机数据已保存，备份暂时无法更新。') });
   const pythonPath = process.env.VPS_WORKBENCH_PYTHON;
   if (pythonPath && !isAbsolute(pythonPath)) throw new Error('python_must_be_absolute');
+  const { componentMode } = JSON.parse(await readFile(join(directory, '../package.json'), 'utf8'));
   runtime = await startWorkbenchServer({
     webRoot: join(directory, 'web'), workbenchRoot, terminalRoot,
     runtimeRoot: join(directory, '../helper'), pythonPath, access: () => readAccess(data.preference(accessPreference)),
     localStateRoot: join(root, 'local-sdk'), localApiKey, localAgentOptions,
+    componentRoot: join(root, 'components'), componentMode,
+    localCredentials: openLocalCredentials({ root: join(root, 'local-credentials'), encryption: safeStorage }),
     data, onMemoryChanged: (state) => {
       if (window && !window.isDestroyed()) window.webContents.send('workbench:extensions-changed', state);
     },
@@ -178,7 +181,7 @@ async function start() {
   ipcMain.handle('workbench:bootstrap', (event) => {
     trustedRenderer(event);
     return { preferences: data.preferences(), projects: data.projects(), access: readAccess(data.preference(accessPreference)),
-      dataNotices: data.notices() };
+      dataNotices: data.notices(), localComponents: runtime.localComponentsStatus() };
   });
   ipcMain.handle('workbench:set-preference', (event, key, value) => {
     trustedRenderer(event);
@@ -219,6 +222,26 @@ async function start() {
   ipcMain.handle('workbench:local-sdk-status', (event) => {
     trustedRenderer(event);
     return runtime.localStatus();
+  });
+  ipcMain.handle('workbench:local-components-status', (event) => {
+    trustedRenderer(event);
+    return runtime.localComponentsStatus();
+  });
+  ipcMain.handle('workbench:local-components-install', (event, ids) => {
+    trustedRenderer(event);
+    return runtime.installLocalComponents(ids);
+  });
+  ipcMain.handle('workbench:local-components-cancel', (event) => {
+    trustedRenderer(event);
+    runtime.cancelLocalComponents();
+  });
+  ipcMain.handle('workbench:local-credential-save', (event, backend, key) => {
+    trustedRenderer(event);
+    return runtime.saveLocalCredential(backend, key);
+  });
+  ipcMain.handle('workbench:local-antigravity-login', (event, profileId) => {
+    trustedRenderer(event);
+    return runtime.loginLocalAntigravity(profileId);
   });
   ipcMain.handle('workbench:local-sdk-request', (event, body) => {
     trustedRenderer(event);

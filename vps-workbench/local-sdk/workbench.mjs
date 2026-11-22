@@ -332,7 +332,7 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data, 
         { readRun, backend: { request: artifact } });
       if (['send', 'stop', 'steer', 'approval'].includes(body.op) && !allowed()) return denied;
       if (body.op !== 'send') return memory && !['steer', 'approval'].includes(body.op) ? memory.request(body) : dispatch(body);
-      if (!runtimeAvailable) return unavailable();
+      if (!(typeof runtimeAvailable === 'function' ? runtimeAvailable() : runtimeAvailable)) return unavailable();
       if (!service.status().credentialConfigured) return authRequired();
       const profile = profileFor(body.settings);
       if (!profile || profile.targetId !== body.targetId) return missing;

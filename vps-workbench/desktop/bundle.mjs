@@ -9,12 +9,12 @@ import { stageClaude } from './stage-claude.mjs';
 const directory = dirname(fileURLToPath(import.meta.url));
 const dependencies = resolve(directory, '../node_modules');
 const resources = resolve(process.argv[2]);
+const onDemand = process.argv.includes('--on-demand-runtimes');
 const desktop = join(resources, 'desktop');
 await mkdir(join(resources, 'client'), { recursive: true });
 await mkdir(desktop, { recursive: true });
 await Promise.all([
-  stageCodex(dependencies, resources),
-  stageClaude(dependencies, resources),
+  ...(!onDemand ? [stageCodex(dependencies, resources), stageClaude(dependencies, resources)] : []),
   writeWebAssets(join(desktop, 'web')),
   build({ ...browserBuildOptions, entryPoints: [join(dependencies, '@novnc/novnc/core/rfb.js')],
     outfile: join(resources, 'client', 'account-player.mjs') }),

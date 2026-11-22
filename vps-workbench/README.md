@@ -28,7 +28,7 @@ Antigravity 的周期表随可用宽高等比缩放。转场中调整窗口大�
 
 标题栏下方的两个位置按钮用于打开各自的历史。「新建位置」决定下一次从侧栏点新建对话时使用哪个位置。紧凑设计画布可从「文件」菜单访问这些操作。设置里的位置按钮只切换配置页。已存在的会话沿用创建时的配置，VPS 会话的 SSH 指纹和中继要求继续生效。
 
-在「设置 → 连接 → 本机 SDK → 本机配置」登记 Windows 上的只读工作目录、模型和推理档位，并可指定新聊天默认配置。包内官方 Codex SDK 和 CLI 0.166.0 以启动时环境变量 `VPS_WORKBENCH_LOCAL_CODEX_API_KEY` 接收本机 OpenAI API 密钥。通过可信本机启动器注入有权使用的密钥，避免写入命令行、源码或长期 Shell 配置。模型与账号页显示所选配置、凭据来源和检查状态。连接页的「测试本机配置」核对本机运行文件、凭据配置和内置模型目录，「试跑模型」使用已选配置检查实际响应。
+在「设置 → 连接 → 本机 SDK → 本机配置」登记 Windows 上的只读工作目录、模型和推理档位，并可指定新聊天默认配置。Codex 使用官方 SDK 和 CLI 0.166.0。在「模型与账号」保存有权使用的本机 OpenAI API 密钥，也可通过可信启动器注入 `VPS_WORKBENCH_LOCAL_CODEX_API_KEY`。连接页的「测试本机配置」核对本机运行文件、凭据配置和内置模型目录，「试跑模型」使用已选配置检查实际响应。
 
 本机 Codex 请求使用官方 OpenAI API 端点和 Windows 网络。子进程使用私有 Codex 状态、受限环境与 Windows 只读沙箱。系统级管理策略继续适用。本机配置、SDK 原生线程与回执在工作台数据目录的 `local-sdk/` 中，凭据只在本机进程中传递。SSH 连接与导入继续使用原有会话目录。
 
@@ -40,9 +40,9 @@ Antigravity 的周期表随可用宽高等比缩放。转场中调整窗口大�
 
 在「设置 → 连接 → 本机 SDK → 注册本机配置」选择执行端和只读工作目录。登记后可从侧栏执行端菜单切换。Claude 和 Antigravity 使用账号默认模型，聊天、补充指令和工具审批复用工作台界面。设计画布、工作流和自动记忆继续使用本机 Codex 配置。
 
-Claude 使用包内的官方 TypeScript Agent SDK 0.3.296 和对应 Windows x64 CLI。由可信启动器提供 `VPS_WORKBENCH_LOCAL_CLAUDE_API_KEY`，密钥只传给本机 Claude 进程。补充使用 SDK 流式输入。SDK 若把补充交给后续响应，回执会显示「已在后续响应生效」。 [Claude SDK 流式输入](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode)
+Claude 使用官方 TypeScript Agent SDK 0.3.296 和对应 Windows x64 CLI。在「模型与账号」输入本机 Anthropic API 密钥，或由可信启动器提供 `VPS_WORKBENCH_LOCAL_CLAUDE_API_KEY`。补充使用 SDK 流式输入。SDK 若把补充交给后续响应，回执会显示「已在后续响应生效」。 [Claude SDK 流式输入](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode)
 
-Antigravity 使用单独安装的官方 Windows CLI。可信启动器提供 `VPS_WORKBENCH_LOCAL_AGY_EXE` 与该文件的 `VPS_WORKBENCH_LOCAL_AGY_SHA256`。在本机终端将 `HOME` 和 `USERPROFILE` 都指向「账号」页显示的本机登录目录，使用同一 CLI 执行 `agy acp --login`。连接检查显示运行文件状态，真实登录和模型接入以用户触发的试跑为准。 [Antigravity CLI 接入](https://antigravity.google/docs/ide/extensions/acp/)
+Antigravity 使用官方 Windows CLI，可由工作台按需安装。也可通过可信启动器提供 `VPS_WORKBENCH_LOCAL_AGY_EXE` 和对应的 `VPS_WORKBENCH_LOCAL_AGY_SHA256`。在「模型与账号」选择配置并点击「在本机登录 Antigravity」。连接检查显示运行文件状态，服务接入以用户主动触发的试跑为准。 [Antigravity CLI 接入](https://antigravity.google/docs/ide/extensions/acp/)
 
 原生账号数据和会话回执按执行位置、后端与配置绑定。工具审批只允许本轮读取所选目录中的合规普通文件。拒绝、取消或失去原回执时保留对应状态。真实 Windows 安全边界与账号出口需在接入时单独验证。
 
@@ -148,6 +148,18 @@ Antigravity 聊天生成时可以补充指令。针对已挂载只读工作区�
 浏览器预览与 Windows 桌面版共用前端构建。修改前端源文件后，预览会自动刷新。修改预览服务或模拟接口后，重启预览进程以载入新的接口。确认改动后运行 `npm run sync:desktop`，它会先构建并核对界面资源，再正常关闭和重新打开本机版本。发布保存在 `%LOCALAPPDATA%\VPS Workbench\Releases`，同版本的旧安装目录会保留为备份。桌面版继续使用原有数据目录。
 
 预览的 `/__preview/revision` 和桌面包的 `resources/app/desktop/web/revision.json` 记录同一个界面指纹。需要先验收完整安装包时，可用 `pwsh -File ./Sync-Local.ps1 -StageOnly` 构建，再用 `-StagedDirectory` 安装该次验收的产物。安装时可传 `-ExpectedWebRevision` 来核对指定的预览版本。
+
+## 发布版的可选本机组件
+
+给新用户准备 Windows x64 便携包时，在 `Build.ps1` 或 `Sync-Local.ps1 -StageOnly` 加上 `-OnDemandRuntimes`。运行解压后的 `VPS Workbench.exe`，首次启动可勾选 Codex、Claude Agent SDK、Antigravity ACP，再点击「安装所选组件」。也可以选择「暂只使用 VPS SSH」，日后从「设置 → 连接 → 本机 SDK」添加。
+
+工作台从固定的 npm 包和 Google 下载地址获取对应版本，校验 SHA-512，随后在自己数据目录中安装组件，并为每个新执行端建立一份只读本机配置。运行时文件在数据目录的 `components` 下，分别按执行端和版本保存。已有配置及历史按原身份继续使用。产品包自身保留 SSH 桥和原来的 VPS 连接入口。
+
+安装后在「模型与账号」连接账号。Codex 和 Claude Agent SDK 使用各自的本机 API 密钥。同一执行端的所有本机配置使用该执行端的密钥。应用内填写的密钥通过 Windows 的系统加密保存在 `local-credentials`，可信启动器仍可注入原来的环境变量。Antigravity 通过每个本机配置的官方 CLI 登录窗口连接 Google 账号。登录和模型试跑都由用户主动发起。 [Claude Agent SDK 认证](https://code.claude.com/docs/en/agent-sdk/overview) [Antigravity ACP 安装和登录](https://antigravity.google/docs/cli/acp)
+
+运行 `npm run preview:components` 可在 `http://127.0.0.1:47829/` 验收首次安装和跳过流程。该预览使用模拟安装和账号。
+
+更新本机 SDK 版本时，同时更新锁定归档、对应的暂存布局和 `desktop/component-catalog.mjs` 中的目录摘要。离线包回归使用锁定的四份 npm 归档。在 `VPS_WORKBENCH_TEST_EXE` 指定按需安装版，在 `VPS_WORKBENCH_TEST_COMPONENT_ARCHIVES` 指定归档目录，然后运行 `npm run test:desktop:components`。
 
 ## 构建
 

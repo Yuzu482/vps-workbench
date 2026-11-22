@@ -3,10 +3,11 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { lstat, readFile, realpath, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, win32 } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { canonicalLocalDirectory, ensurePrivateDirectory } from './codex-runtime.mjs';
 import { antigravityThread } from '../local-sdk/antigravity.mjs';
 import { claudeThread } from '../local-sdk/claude.mjs';
-import { providerDefaultModels } from '../local-sdk/providers.mjs';
+import { providerDefaultModels, validLocalApiKey } from '../local-sdk/providers.mjs';
 
 export const claudeKeyVariable = 'VPS_WORKBENCH_LOCAL_CLAUDE_API_KEY';
 export const agyPathVariable = 'VPS_WORKBENCH_LOCAL_AGY_EXE';
@@ -63,8 +64,23 @@ async function configureAntigravity(account) {
   }
 }
 
-export async function openLocalAgentRuntime({ backend, runtimeRoot, stateRoot, claudeKey, agyPath, agyHash,
-  environment = process.env, loadClaude = () => import('@anthropic-ai/claude-agent-sdk'),
+async function openAntigravityLogin(binary, directory, env) {
+  const command = 'Start-Process -FilePath $env:WORKBENCH_AGY -WorkingDirectory $env:WORKBENCH_LOGIN_DIRECTORY ' +
+    '-ArgumentList @("acp", "--login", "--disable-telemetry") -ErrorAction Stop';
+  const powershell = win32.join(env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  await new Promise((resolve, reject) => {
+    const child = spawn(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], {
+      cwd: directory, env: { ...env, WORKBENCH_AGY: binary, WORKBENCH_LOGIN_DIRECTORY: directory },
+      windowsHide: true, stdio: 'ignore',
+    });
+    child.once('error', reject);
+    child.once('exit', (code) => code === 0 ? resolve() : reject(failure('credential_unavailable')));
+  });
+}
+
+export async function openLocalAgentRuntime({ backend, runtimeRoot, stateRoot, claudeKey, agyPath, agyHash, sdkEntry,
+  environment = process.env, loadClaude = () => sdkEntry ? import(pathToFileURL(sdkEntry).href) : import('@anthropic-ai/claude-agent-sdk'),
+  launchLogin = openAntigravityLogin,
   isWindowsX64 = process.platform === 'win32' && process.arch === 'x64' }) {
   const claude = backend === 'claude-sdk';
   const binary = claude ? join(runtimeRoot, 'local-claude', 'claude.exe') : agyPath;
@@ -72,11 +88,19 @@ export async function openLocalAgentRuntime({ backend, runtimeRoot, stateRoot, c
   const sdk = claude && isWindowsX64 && await isFile(binary) ? await loadClaude().catch(() => null) : null;
   const runtimeAvailable = isWindowsX64 && (claude ? typeof sdk?.query === 'function' :
     binaryPath(binary) && await digestMatches(binary, agyHash));
-  const configured = claude ? typeof claudeKey === 'string' && /^sk-ant-[a-zA-Z0-9_-]{10,512}$/u.test(claudeKey) : runtimeAvailable;
+  const configured = claude ? validLocalApiKey(backend, claudeKey) : runtimeAvailable;
   return {
     runtimeAvailable, credentialConfigured: () => Boolean(configured), models: providerDefaultModels,
     credentialSource: claude ? 'claude-api-key' : 'agy-local-login',
     accountDirectory: (profileId) => join(stateRoot, 'accounts', profileId),
+    ...(!claude && runtimeAvailable && { async login(profile, canExecute) {
+      const { account, cache, temp } = await profileDirectories(stateRoot, profile);
+      if (!await digestMatches(binary, agyHash)) throw failure('invalid_environment');
+      await configureAntigravity(account);
+      if (!canExecute()) return { ok: false, code: 'browse_only' };
+      await launchLogin(binary, account, localAgentEnvironment(environment, account, cache, binary, temp));
+      return { ok: true };
+    } }),
     async createThread(profile, nativeId, { interaction, turnId, workspace, bindSession } = {}) {
       if (!runtimeAvailable) throw failure('invalid_environment');
       if (!configured) throw failure('auth_required');

@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
 import { buildWebAssets, webSourceDirectories } from './web-assets.mjs';
 import { accessDenied, defaultAccess, permitsChat, permitsTerminal, validAccess } from './access.mjs';
@@ -18,9 +19,12 @@ import { createPreviewLocalSdk } from '../preview/fixtures/local-sdk.mjs';
 import { localBackends } from '../local-sdk/providers.mjs';
 import { readSetupPreset, setupConnectionKey } from './setup-state.mjs';
 import { runSetupTrial } from './setup-trial.mjs';
+import { componentCatalog } from './component-catalog.mjs';
+import { validComponentSelection } from './component-install.mjs';
 
 const previewPort = 47823;
 const localAgentsPort = 47828;
+const localComponentsPort = 47829;
 const previewPrefix = '/__preview/';
 const chatPrefix = '/dsh-vps-chat/api/';
 const terminalPrefix = '/dsh-terminal-workbench/api/';
@@ -89,11 +93,14 @@ async function buildPreview(instance) {
   return { ...desktop, source, document };
 }
 
-export async function startPreview({ localAgents = false, port = localAgents ? localAgentsPort : previewPort, watch = true, log = () => {} } = {}) {
+export async function startPreview({ localAgents = false, localComponents = false, componentFailure = null, componentDelay = 550,
+  port = localComponents ? localComponentsPort : localAgents ? localAgentsPort : previewPort, watch = true, log = () => {} } = {}) {
   const instance = randomBytes(8).toString('hex');
   let current = await buildPreview(instance);
   let access = defaultAccess;
   let previewLocal;
+  let componentInstall;
+  const installedComponents = new Set();
   const fixtures = createPreviewFixtures();
   let projects = fixtures.projects;
   const token = randomBytes(24).toString('base64url');
@@ -145,6 +152,7 @@ export async function startPreview({ localAgents = false, port = localAgents ? l
 
   function localSdk() {
     previewLocal ??= createPreviewLocalSdk(() => access, { data,
+      runtimeAvailable: (backend) => !localComponents || installedComponents.has(backend),
       readRun: (id) => id ? localWorkflowRuns.get(id) : [...localWorkflowRuns.values()].at(-1),
       readSavedWorkflow: (id, runId) => {
         const approved = localWorkflowApprovals.get(runId);
@@ -154,6 +162,43 @@ export async function startPreview({ localAgents = false, port = localAgents ? l
         for (const client of clients) client.write('event: extensions\ndata: ' + JSON.stringify(state) + '\n\n');
       } });
     return previewLocal;
+  }
+
+  function componentState() {
+    return { supported: true, mode: 'on-demand', preview: true,
+      items: Object.entries(componentCatalog).map(([backend, { version }]) => ({
+        backend, version, ready: installedComponents.has(backend), available: true,
+      })) };
+  }
+
+  async function installComponents(ids) {
+    if (!validComponentSelection(ids)) return { ok: false, code: 'invalid_component' };
+    if (access.mode !== 'execute') return { ok: false, code: 'browse_only' };
+    if (componentInstall) return { ok: false, code: 'component_busy' };
+    const controller = new AbortController();
+    componentInstall = controller;
+    try {
+      await delay(componentDelay, undefined, { signal: controller.signal }).catch(() => {});
+      if (closed) return { ok: false, code: 'component_cancelled' };
+      const local = await localSdk();
+      const results = [];
+      for (const backend of ids) {
+        let code;
+        if (controller.signal.aborted) code = 'component_cancelled';
+        else if (componentFailure === backend) {
+          code = 'component_download_failed';
+          componentFailure = null;
+        } else if (!installedComponents.has(backend)) {
+          const { models: [model] } = local.status().providers.find((item) => item.backend === backend);
+          const result = await local.request({ op: 'register', backend, name: localBackends[backend].label,
+            model: model.id, effort: model.defaultEffort });
+          if (result.ok) installedComponents.add(backend);
+          else code = 'component_storage_failed';
+        }
+        results.push({ backend, ok: !code, ...(code && { code }) });
+      }
+      return { ok: results.every(({ ok }) => ok), results };
+    } finally { componentInstall = null; }
   }
 
   async function rebuild() {
@@ -184,7 +229,8 @@ export async function startPreview({ localAgents = false, port = localAgents ? l
     const { method, url } = request;
     if (method === 'GET') {
       if (url === previewPrefix + 'state') {
-        return json(response, { preferences: fixtures.preferences, projects, access });
+        return json(response, { preferences: fixtures.preferences, projects, access,
+          ...(localComponents && { localComponents: componentState() }) });
       }
       if (url === previewPrefix + 'revision') return json(response, current.manifest);
       if (url === previewPrefix + 'native.js') return reply(response, 200, mime.get('renderer.js'), current.source);
@@ -206,6 +252,20 @@ export async function startPreview({ localAgents = false, port = localAgents ? l
       if (name !== 'index.html' && mime.has(name)) return reply(response, 200, mime.get(name), current.files.get(name));
     }
 
+    if (localComponents && url === previewPrefix + 'local-components') {
+      if (method === 'GET') return json(response, componentState());
+      if (method === 'POST' && request.headers.origin === origin) {
+        try {
+          const packet = await readPacket(request);
+          if (packet.op === 'cancel') {
+            componentInstall?.abort();
+            return json(response, { ok: true });
+          }
+          if (packet.op === 'install') return json(response, await installComponents(packet.ids));
+        } catch {}
+        return json(response, { ok: false, code: 'invalid_preview_request' }, 400);
+      }
+    }
     if (url === previewPrefix + 'local-sdk' &&
         (method === 'GET' || method === 'POST' && request.headers.origin === origin)) {
       try {
@@ -218,7 +278,10 @@ export async function startPreview({ localAgents = false, port = localAgents ? l
         const { op, ...next } = await readPacket(request);
         if (op !== 'set-access' || !validAccess(next)) throw new Error('invalid_access');
         access = next;
-        if (access.mode === 'browse') (await previewLocal)?.revokeExecution();
+        if (access.mode === 'browse') {
+          componentInstall?.abort();
+          (await previewLocal)?.revokeExecution();
+        }
         return json(response, access);
       } catch {
         return json(response, { ok: false, code: 'invalid_access' }, 400);
@@ -348,6 +411,7 @@ export async function startPreview({ localAgents = false, port = localAgents ? l
   async function close() {
     if (closed) return;
     closed = true;
+    componentInstall?.abort();
     chat.dispose();
     await (await previewLocal?.catch(() => null))?.close();
     clearTimeout(timer);
@@ -387,7 +451,8 @@ export async function startPreview({ localAgents = false, port = localAgents ? l
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  const preview = await startPreview({ localAgents: process.argv.includes('--local-agents'), log: console.log });
+  const preview = await startPreview({ localAgents: process.argv.includes('--local-agents'),
+    localComponents: process.argv.includes('--local-components'), log: console.log });
   console.log(`VPS 工作台 · 界面预览 ${preview.origin}/`);
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void preview.close(); });
 }

@@ -12,15 +12,17 @@ import { runSetupTrial } from './setup-trial.mjs';
 import { readWorkflowRun } from '../workflow-engine/runner.mjs';
 import { workflowRunKey } from '../workflow-engine/state.mjs';
 import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
-import { localModels, openCodexRuntime } from './codex-runtime.mjs';
+import { ensurePrivateDirectory, localModels, openCodexRuntime } from './codex-runtime.mjs';
 import { openLocalSdk } from '../local-sdk/service.mjs';
 import { createLocalWorkbench } from '../local-sdk/workbench.mjs';
 import { isLocalBackend, localBackends } from '../local-sdk/providers.mjs';
 import { openLocalAgentRuntime } from './local-agent-runtime.mjs';
+import { createComponentInstaller, validComponentSelection } from './component-install.mjs';
 
 export { canonicalLocalDirectory, localCredentialVariable } from './codex-runtime.mjs';
 export { localMemoryJournalKey } from '../local-sdk/workbench.mjs';
 export { agyHashVariable, agyPathVariable, claudeKeyVariable } from './local-agent-runtime.mjs';
+export { openLocalCredentials } from './local-credentials.mjs';
 
 const staticRoutes = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -31,6 +33,8 @@ const staticRoutes = new Map([
 ]);
 const cookieName = 'vps-workbench-session';
 const blockedHeaders = ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip'];
+const componentErrors = new Set(['component_cancelled', 'component_platform_unavailable', 'component_download_failed',
+  'component_integrity_failed', 'component_archive_invalid', 'component_source_invalid', 'component_storage_failed']);
 
 function hasSession(header, ticket) {
   if (typeof header !== 'string') return false;
@@ -43,23 +47,38 @@ function hasSession(header, ticket) {
 
 export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoot, runtimeRoot, pythonPath,
   makeBridge = createBridge, makeSubscriptionHost = createStandaloneSubscriptionHost, access = () => defaultAccess,
-  data, onMemoryChanged, onMemoryError, localStateRoot, localApiKey, localAgentOptions,
+  data, onMemoryChanged, onMemoryError, localStateRoot, localApiKey, localAgentOptions, localCredentials,
+  componentRoot, componentMode = 'bundled', makeComponentInstaller = createComponentInstaller,
   makeLocalRuntime = openCodexRuntime, makeLocalAgentRuntime = openLocalAgentRuntime }) {
   const ticket = randomBytes(32).toString('base64url');
   const readRoute = createWorkbenchRouteReader(workbenchRoot);
   const local = new Map();
+  const components = componentRoot && makeComponentInstaller({ root: componentRoot });
+  let installation;
+  let closing = false;
+  let editingCredentials;
+  const canExecute = () => !closing && access().mode === 'execute';
+  async function loadRuntime(backend, stateRoot, provisioned) {
+    const stored = await localCredentials?.read(backend);
+    const options = { runtimeRoot, stateRoot, ...provisioned };
+    return backend === 'codex'
+      ? makeLocalRuntime({ ...options, apiKey: stored?.key ?? (stored?.state === 'unavailable' ? undefined : localApiKey) })
+      : makeLocalAgentRuntime({ ...localAgentOptions, ...options, backend,
+        claudeKey: stored?.key ?? (stored?.state === 'unavailable' ? undefined : localAgentOptions?.claudeKey) });
+  }
   if (localStateRoot) {
     for (const backend of Object.keys(localBackends)) {
       const stateRoot = backend === 'codex' ? localStateRoot : join(localStateRoot, backend);
       try {
-        const sdk = backend === 'codex'
-          ? await makeLocalRuntime({ runtimeRoot, stateRoot, apiKey: localApiKey })
-          : await makeLocalAgentRuntime({ ...localAgentOptions, backend, runtimeRoot, stateRoot });
-        const service = await openLocalSdk({ root: stateRoot, backend, models: sdk.models ?? localModels,
-          createThread: sdk.createThread, canExecute: () => access().mode === 'execute', credentialConfigured: sdk.credentialConfigured });
-        const workbench = createLocalWorkbench({ service, runtimeAvailable: sdk.runtimeAvailable, backend, access, data,
+        const provisioned = components ? await components.installed(backend) : null;
+        const record = { stateRoot, provisioned };
+        record.sdk = await loadRuntime(backend, stateRoot, provisioned);
+        const service = await openLocalSdk({ root: stateRoot, backend, models: record.sdk.models ?? localModels,
+          createThread: (...args) => record.sdk.createThread(...args), canExecute,
+          credentialConfigured: () => record.sdk.credentialConfigured() });
+        const workbench = createLocalWorkbench({ service, runtimeAvailable: () => record.sdk.runtimeAvailable, backend, access, data,
           onChange: onMemoryChanged, onError: onMemoryError });
-        local.set(backend, { service, workbench, sdk });
+        local.set(backend, Object.assign(record, { service, workbench }));
       } catch {
         // Each backend can be opened independently, including the existing SSH route.
       }
@@ -78,7 +97,53 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     });
     return { ...providers[0], providers, profiles: providers.flatMap(({ profiles }) => profiles) };
   }
+  function localComponentsStatus() {
+    if (!components) return null;
+    const items = components.status().map((item) => {
+      const record = local.get(item.backend);
+      const ready = record?.sdk.runtimeAvailable && record.service.status().profiles.length > 0;
+      const source = record?.provisioned ? 'downloaded' : record?.sdk.runtimeAvailable ? 'existing' : null;
+      return { ...item, ready: Boolean(ready), source, available: Boolean(record) };
+    });
+    return { supported: components.supported, mode: componentMode, items };
+  }
+  async function provisionLocalComponents(ids, signal) {
+    const results = [];
+    for (const backend of ids) {
+      const selected = local.get(backend);
+      let code;
+      try {
+        signal.throwIfAborted();
+        if (!selected) throw Object.assign(new Error(), { code: 'component_storage_failed' });
+        if (!selected.sdk.runtimeAvailable) {
+          const provisioned = await components.install(backend, signal);
+          signal.throwIfAborted();
+          const sdk = await loadRuntime(backend, selected.stateRoot, provisioned);
+          if (!sdk.runtimeAvailable) throw Object.assign(new Error(), { code: 'component_archive_invalid' });
+          Object.assign(selected, { sdk, provisioned });
+        }
+        signal.throwIfAborted();
+        if (!selected.service.status().profiles.length) {
+          const directory = await ensurePrivateDirectory(join(localStateRoot, 'installed-workspaces', backend));
+          signal.throwIfAborted();
+          const model = selected.service.status().models[0];
+          const result = await selected.service.registerProfile({ name: localBackends[backend].label,
+            directory, model: model.id, effort: model.defaultEffort });
+          if (!result.ok) throw Object.assign(new Error(), { code: 'component_storage_failed' });
+        }
+      } catch (error) {
+        code = signal.aborted ? 'component_cancelled' :
+          componentErrors.has(error.code) ? error.code : 'component_storage_failed';
+      }
+      results.push({ backend, ok: !code, ...(code && { code }) });
+    }
+    return { ok: results.every((item) => item.ok), results };
+  }
   async function closeLocal() {
+    closing = true;
+    installation?.controller.abort();
+    await installation?.result;
+    await editingCredentials;
     for (const { workbench } of local.values()) workbench.dispose();
     await Promise.allSettled([...local.values()].map(({ service }) => service.close()));
   }
@@ -200,6 +265,39 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     origin,
     cookie: { url: origin, name: cookieName, value: ticket, path: '/', httpOnly: true, sameSite: 'strict' },
     localStatus,
+    localComponentsStatus,
+    installLocalComponents(ids) {
+      if (!validComponentSelection(ids)) return { ok: false, code: 'invalid_component' };
+      if (!canExecute()) return { ok: false, code: 'browse_only' };
+      if (!components?.supported) return { ok: false, code: 'component_platform_unavailable' };
+      if (installation || editingCredentials) return { ok: false, code: 'component_busy' };
+      const controller = new AbortController();
+      const result = provisionLocalComponents(ids, controller.signal).finally(() => { installation = null; });
+      installation = { controller, result };
+      return result;
+    },
+    cancelLocalComponents() { installation?.controller.abort(); },
+    saveLocalCredential(backend, key) {
+      if (!canExecute()) return { ok: false, code: 'browse_only' };
+      if (installation || editingCredentials) return { ok: false, code: 'component_busy' };
+      const selected = local.get(backend);
+      if (!localCredentials || !selected?.sdk.runtimeAvailable) return { ok: false, code: 'credential_unavailable' };
+      editingCredentials = (async () => {
+        await localCredentials.write(backend, key, canExecute);
+        selected.sdk = await loadRuntime(backend, selected.stateRoot, selected.provisioned);
+        return { ok: true };
+      })().catch((error) => ({ ok: false, code: ['invalid_key', 'browse_only'].includes(error.code) ? error.code : 'credential_unavailable' }))
+        .finally(() => { editingCredentials = null; });
+      return editingCredentials;
+    },
+    async loginLocalAntigravity(profileId) {
+      if (!canExecute()) return { ok: false, code: 'browse_only' };
+      const selected = local.get('antigravity');
+      const profile = selected?.service.status().profiles.find(({ id }) => profileId === id);
+      if (!profile || !selected.sdk.login) return { ok: false, code: 'credential_unavailable' };
+      try { return await selected.sdk.login(profile, canExecute); }
+      catch { return { ok: false, code: 'credential_unavailable' }; }
+    },
     async requestLocal(body) {
       if (body?.location !== 'local-sdk' || !isLocalBackend(body.backend))
         return { ok: false, code: 'execution_location_mismatch', message: '请选择对应的本机配置。' };
@@ -228,6 +326,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     },
     accessChanged() {
       if (access().mode !== 'browse') return;
+      installation?.controller.abort();
       host.revokeAccount();
       for (const { service } of local.values()) service.revokeExecution();
     },
