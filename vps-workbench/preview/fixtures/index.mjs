@@ -253,6 +253,10 @@ export function createPreviewFixtures({ backendPlatform, backendFailure } = {}) 
       return readSession(session);
     }
     if (session.polls >= (design || acp ? 16 : 4)) {
+      if (turn.prompt.includes('交接格式：只返回一个 JSON 对象')) {
+        finishTurn(turn, 'complete', JSON.stringify({ conclusion: 'VPS 审校完成。', evidence: '依据本轮证据。', pending: '待汇总。' }));
+        return readSession(session);
+      }
       if (turn.prompt.startsWith(workflowEditPrefix)) {
         const fence = String.fromCharCode(96).repeat(3);
         finishTurn(turn, 'complete', `本地预览提供一份示例配置。\n\n${fence}vps-workflow\n${JSON.stringify(workflowExample(turn.prompt), null, 2)}\n${fence}`);

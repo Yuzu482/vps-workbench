@@ -30,6 +30,8 @@ export async function createPreviewLocalSdk(access, { runtimeAvailable = () => t
             '</title><style>body{font:16px system-ui;padding:32px;background:#fbf5e9}</style></head>' +
             '<body><h1 id="heading">' + title + '</h1><button data-dsh-go="' + (index ? 1 : 2) + '">切换画板</button></body></html>\n' +
             fence).join('\n\n');
+        } else if (prompt.includes('交接格式：只返回一个 JSON 对象')) {
+          reply = JSON.stringify({ conclusion: '本机完成初稿。', evidence: '依据本地演示简报。', pending: '待审校。' });
         } else if (prompt.startsWith('提炼用户明确')) {
           reply = JSON.stringify({ memories: [{ title: '演示偏好', text: '这是本机提炼夹具生成的笔记。' }] });
         }
@@ -72,12 +74,12 @@ export async function createPreviewLocalSdk(access, { runtimeAvailable = () => t
   }
   return {
     status,
-    async request(body) {
+    async request(body, options) {
       const selected = backends.get(body?.backend ?? 'codex');
       if (!selected) return { ok: false, code: 'invalid_request' };
       const { service, workbench } = selected;
       if (body.op === 'workbench' && body.location === 'local-sdk')
-        return workbench.request(body.payload);
+        return workbench.request(body.payload, options);
       if (body.op !== 'register') return service.request(body);
       const { name, model, effort } = body;
       const result = await service.registerProfile({ name, model, effort, directory });

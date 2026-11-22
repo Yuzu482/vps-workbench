@@ -41,7 +41,7 @@ export function prepareWorkflowStage(body, reference, readRun, state, isProject,
       body.extensions || body.advanced || body.effort) return changedWorkflowStage;
   let run;
   try { run = readRun(reference.runId.toLowerCase()); } catch { return changedWorkflowStage; }
-  if (run?.id !== reference.runId.toLowerCase() || ![2, 3, 4].includes(run.version) || run.phase !== 'running' || run.stopRequested) {
+  if (run?.id !== reference.runId.toLowerCase() || ![2, 3, 4, 5].includes(run.version) || run.phase !== 'running' || run.stopRequested) {
     return changedWorkflowStage;
   }
   const index = run.rows.findIndex(({ targetId, sessionId, turnId, state }) =>
@@ -49,7 +49,9 @@ export function prepareWorkflowStage(body, reference, readRun, state, isProject,
   const stage = run.workflow.stages[index];
   const projectId = run.projectId ?? null;
   if (!stage || stage.provider !== body.settings?.provider || stage.model !== (body.model ?? '') ||
-      (stage.agent?.memory === 'shared' && projectId !== null && !isProject(projectId))) return changedWorkflowStage;
+      (run.version === 5 && (stage.execution.location !== (scoped ? 'ssh-vps' : 'local-sdk') ||
+        (!scoped && body.settings?.profileId !== stage.execution.configId))) ||
+      (run.version !== 5 && stage.agent?.memory === 'shared' && projectId !== null && !isProject(projectId))) return changedWorkflowStage;
   const fileAccess = stage.fileAccess ?? null;
   if (fileAccess) {
     let approved;
@@ -64,7 +66,7 @@ export function prepareWorkflowStage(body, reference, readRun, state, isProject,
   if (!resources.ok) return resources;
   const { mcpServers, pluginInstructions } = resources;
   try {
-    return { ok: true, projectId, memory: stage.agent?.memory ?? 'isolated', mcpServers, fileAccess,
+    return { ok: true, projectId, memory: run.version === 5 ? 'isolated' : stage.agent?.memory ?? 'isolated', mcpServers, fileAccess,
       prompt: workflowStagePrompt(run, index, pluginInstructions, scoped) };
   } catch {
     return unavailable('此阶段的任务和提示词模板组合过长。请缩短任务或减少模板。');

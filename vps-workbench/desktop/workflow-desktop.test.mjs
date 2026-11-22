@@ -8,7 +8,7 @@ import { openSettingsSection } from './test-settings.mjs';
 import { agentPresetKey, legacyAgentPresetKey, readAgentPresets, resolveAgentPreset } from '../agent-presets/state.mjs';
 import { extensionPreferenceKey } from '../extensions/state.mjs';
 import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
-import { readWorkflows, workflowEditPrefix, workflowKey, workflowRunKey } from '../workflow-engine/state.mjs';
+import { mixedWorkflowRunKey, readWorkflows, workflowEditPrefix, workflowKey, workflowRunKey } from '../workflow-engine/state.mjs';
 import { readWorkflowRun } from '../workflow-engine/runner.mjs';
 
 const require = createRequire(import.meta.url);
@@ -16,6 +16,34 @@ const { _electron } = require('../../dsh-terminal-workbench/client/browser-test/
 const { version } = require('../package.json');
 const executable = resolve(process.env.VPS_WORKBENCH_TEST_EXE ||
   `dist/VPS-Workbench-${version}-win-x64/VPS Workbench.exe`);
+
+test('packaged desktop exposes protected mixed-workflow IPC in an isolated data directory', { timeout: 40_000 }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'vps-mixed-desktop-'));
+  const browserData = join(root, 'desktop');
+  await mkdir(browserData);
+  await mkdir(join(browserData, 'conversations'));
+  await writeFile(join(browserData, 'conversations', 'ssh-relay.json'), '{}');
+  let desktop;
+  t.after(async () => {
+    await desktop?.close();
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+  });
+  desktop = await _electron.launch({ executablePath: executable, cwd: root, timeout: 15_000,
+    env: { ...process.env, APPDATA: root, LOCALAPPDATA: root, VPS_WORKBENCH_DATA_DIR: browserData } });
+  const page = await desktop.firstWindow();
+  await page.waitForURL(/^http:\/\/127\.0\.0\.1:\d+\/$/u, { waitUntil: 'domcontentloaded' });
+  const result = await page.evaluate(async (key) => {
+    const native = window.vpsWorkbench;
+    const status = await native.mixedWorkflow({ op: 'status' });
+    const canOverwrite = await native.setPreference(key, '{}').then(() => true, () => false);
+    await native.setAccess({ mode: 'browse', workspace: 'read-only' });
+    const denied = await native.mixedWorkflow({ op: 'start', input: {} });
+    return { status, canOverwrite, denied };
+  }, mixedWorkflowRunKey);
+  assert.deepEqual(result.status, { ok: true, run: null, running: false, error: '' });
+  assert.equal(result.canOverwrite, false);
+  assert.equal(result.denied.code, 'workbench_browse_only');
+});
 
 test('packaged Agent resources, scoped memory and legacy presets apply to a parallel workflow', { timeout: 100_000 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'vps-workflow-desktop-'));
@@ -62,7 +90,7 @@ test('packaged Agent resources, scoped memory and legacy presets apply to a para
   const legacyId = 'c04d157a-6829-4c9d-af24-0747a0bece4f';
   const { name, provider, model, instruction } = stages[0];
   const legacyPresets = JSON.stringify([{ id: legacyId, revision: 3, name, provider, model, instruction }]);
-  await writeFile(preferencesFile, JSON.stringify({ ...preferences, [legacyAgentPresetKey]: legacyPresets,
+  await writeFile(preferencesFile, JSON.stringify({ ...preferences, 'dsh-vps-chat:component-welcome:v1': 'seen', [legacyAgentPresetKey]: legacyPresets,
     [extensionPreferenceKey]: JSON.stringify(fixtureExtensions) }));
   const stageSessions = new Map();
   const timeline = [];

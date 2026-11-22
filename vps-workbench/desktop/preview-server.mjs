@@ -12,7 +12,9 @@ import { createProjectMemoryBridge } from './project-memory.mjs';
 import { applyExtensionChange, extensionPreferenceKey, readExtensions } from '../extensions/state.mjs';
 import { membershipKey, parseProjectMemberships } from '../../remote-workbench/vps-chat/client/project-folders.js';
 import { readWorkflowRun } from '../workflow-engine/runner.mjs';
-import { readWorkflows } from '../workflow-engine/state.mjs';
+import { readWorkflows, workflowKey, workflowProviders } from '../workflow-engine/state.mjs';
+import { mixedLocalRoute, mixedVpsRoute, openMixedWorkflow, requestMixedWorkflow } from './mixed-workflow.mjs';
+import { readModelCatalog } from '../../remote-workbench/vps-chat/client/model-catalog.js';
 import { decodeWorkflowAttachments } from './workflow-attachments.mjs';
 import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
 import { createPreviewLocalSdk } from '../preview/fixtures/local-sdk.mjs';
@@ -132,12 +134,45 @@ export async function startPreview({ localAgents = false, localComponents = fals
     data, backend: { request: fixtures.chat }, extractor: { request: fixtures.extractMemory }, access: () => access,
     readRun: (id) => workflowRuns.get(id),
     readSavedWorkflow: (id, runId) => {
+      if (mixed.status().run?.id === runId) return savedWorkflow(id);
       const approved = workflowApprovals.get(runId);
       return approved?.id === id ? approved : null;
     },
     onChange: (state) => {
       for (const client of clients) client.write('event: extensions\ndata: ' + JSON.stringify(state) + '\n\n');
     },
+  });
+  const savedWorkflow = (id) => readWorkflows(data.preference(workflowKey) ?? null).find((record) => record.id === id);
+  const previewPreset = () => ({ ...fixtures.chat({ op: 'preset' }).preset, providers: Object.keys(workflowProviders) });
+  const localPacket = (body, options) => localSdk().then((sdk) => sdk.request({ op: 'workbench', location: 'local-sdk',
+    backend: 'codex', payload: body }, options));
+  function dispatchMixed(body, options) {
+    if (body.op === 'workflow-artifacts' && body.settings.location === 'ssh-vps') return readWorkflowArtifacts(body,
+      { readRun: options.workflowRun, backend: { request: previewArtifacts }, isAllowed: options.isLive });
+    return body.settings.location === 'local-sdk' ? localPacket(body, options) : chat.request(body, options);
+  }
+  const mixed = openMixedWorkflow({ data, canExecute: () => access.mode === 'execute', pollInterval: 150,
+    async targets() {
+      const preset = previewPreset();
+      const profiles = (await localSdk()).status().profiles.filter(({ backend }) => backend === 'codex');
+      return { ok: true, targets: [{ id: preset.memoryTargetId, targetId: preset.memoryTargetId, location: 'ssh-vps',
+        label: preset.name, providers: preset.providers }, ...profiles.map(({ id, targetId, name }) =>
+        ({ id, targetId, label: name, location: 'local-sdk', providers: ['codex'] }))] };
+    },
+    async resolve(stage) {
+      if (stage?.execution?.location === 'local-sdk') {
+        const sdk = await localSdk();
+        return mixedLocalRoute(stage, { sdk: { runtimeAvailable: true }, service: { status: sdk.status } });
+      }
+      const preset = previewPreset();
+      if (!preset.providers.includes(stage?.provider)) return null;
+      const reply = fixtures.chat({ op: 'configuration', settings: { ...preset.settings, provider: stage.provider } });
+      return mixedVpsRoute(stage, preset, () => true, reply, () => null);
+    },
+    async catalog(route) {
+      return readModelCatalog(await dispatchMixed({ op: 'models', settings: route.settings, targetId: route.targetId }));
+    },
+    dispatch: (op, body, _route, options) => dispatchMixed({ op, ...body }, options),
   });
   let origin;
   let authority;
@@ -156,6 +191,7 @@ export async function startPreview({ localAgents = false, localComponents = fals
       runtimeAvailable: (backend) => !localComponents || installedComponents.has(backend),
       readRun: (id) => id ? localWorkflowRuns.get(id) : [...localWorkflowRuns.values()].at(-1),
       readSavedWorkflow: (id, runId) => {
+        if (mixed.status().run?.id === runId) return savedWorkflow(id);
         const approved = localWorkflowApprovals.get(runId);
         return approved?.id === id ? approved : null;
       },
@@ -341,6 +377,17 @@ export async function startPreview({ localAgents = false, localComponents = fals
         return json(response, { ok: true });
       } catch { return json(response, { ok: false, code: 'invalid_preview_workflow' }, 400); }
     }
+    if (method === 'POST' && request.headers.origin === origin && url === previewPrefix + 'mixed-workflow') {
+      try {
+        const packet = await readPacket(request);
+        if (packet.op === 'save-definitions') {
+          readWorkflows(packet.value);
+          await data.setPreference(workflowKey, packet.value);
+          return json(response, { ok: true });
+        }
+        return json(response, await requestMixedWorkflow(mixed, packet));
+      } catch { return json(response, { ok: false, code: 'invalid_preview_workflow' }, 400); }
+    }
     if (method === 'POST' && request.headers.origin === origin && url === previewPrefix + 'workflow-attachments') {
       try {
         const packet = await readPacket(request);
@@ -410,6 +457,7 @@ export async function startPreview({ localAgents = false, localComponents = fals
   origin = `http://${authority}`;
 
   async function close() {
+    await mixed.dispose();
     if (closed) return;
     closed = true;
     componentInstall?.abort();

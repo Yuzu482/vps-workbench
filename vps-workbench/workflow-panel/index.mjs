@@ -3,6 +3,7 @@ import { createAgentModulesEditor } from '../agent-presets/settings.mjs';
 import { resolveAgentPreset } from '../agent-presets/state.mjs';
 import { createRunArtifacts } from './run-artifacts.mjs';
 import { createStageFileAccessEditor } from './file-access.mjs';
+import { createMixedRunBrief, executionContexts, executionLocations, getMixedStartReason, targetForStage } from './mixed.mjs';
 import { linearWorkflowEdges, validateWorkflowDraft, validateWorkflowEdges, workflowProviders } from '../workflow-engine/state.mjs';
 import { createStageGraph } from './stage-graph.mjs';
 import { workflowPanelStyles } from './styles.mjs';
@@ -22,6 +23,11 @@ const asDraft = ({ name, stages, edges }) => ({ name, stages, edges });
 const messageOf = (error, fallback) => error instanceof Error && error.message ? error.message : fallback;
 const personalMemoryLabel = '个人记忆（未归类）';
 const emptyProjects = new Map();
+const usesExplicitExecution = (workflow) => workflow?.stages.some(({ execution }) => Boolean(execution));
+
+function modelCatalogKey(stage) {
+  return stage.execution ? JSON.stringify([stage.execution.location, stage.execution.configId, stage.provider]) : stage.provider;
+}
 
 function withAgent(stage, agent) {
   const next = { ...stage };
@@ -72,6 +78,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
   const alert = (message) => message && h('p', { className: 'vc-workflow-error', role: 'alert' }, message);
   const actions = (...children) => h('div', { className: 'vc-workflow-actions' }, ...children);
   const RunArtifacts = createRunArtifacts(React, { button, note, alert });
+  const MixedRunBrief = createMixedRunBrief(React, { button, field, note, actions, providerLabel, defaultModel });
 
   function PresetGallery({ stage, choices, moduleCatalog, onApply, onManage }) {
     const galleryId = React.useId();
@@ -113,9 +120,18 @@ export function createWorkflowPanel(React, { icon } = {}) {
   }
 
   function StageEditor({ stage, index, count, dependencies, available, catalog, load, presetChoices, onManageAgentPresets,
-    moduleCatalog, onChange, onMove, onDelete, onDisconnect, disabled, fileEditor }) {
+    moduleCatalog, onChange, onMove, onDelete, onDisconnect, disabled, fileEditor, mixed }) {
     const number = index + 1;
-    const connected = available.includes(stage.provider);
+    const { execution } = stage;
+    const locationTargets = mixed?.targets?.filter(({ location }) => location === execution?.location) ?? [];
+    const target = targetForStage(stage, locationTargets);
+    const allowed = execution ? target?.providers ?? [] : available;
+    const providers = execution?.location === 'local-sdk' ? ['codex'] : Object.keys(workflowProviders);
+    const connected = allowed.includes(stage.provider) && (!execution || mixed?.canExecute !== false);
+    const blind = execution?.context === 'blind';
+    const matchingScope = execution?.location === 'local-sdk' ? fileEditor.localSdk && target?.targetId && target.targetId === fileEditor.catalogScope
+      : !fileEditor.localSdk && target?.id === moduleCatalog?.codexTargetId;
+    const canEditGrants = !blind && Boolean(!execution || (target && matchingScope));
     const models = catalog?.models ?? [];
     const supportsModels = workflowProviders[stage.provider]?.models;
     const savedModel = stage.model && !models.some(({ id }) => id === stage.model);
@@ -127,15 +143,49 @@ export function createWorkflowPanel(React, { icon } = {}) {
         agentPreset: { id, name } }, agent && structuredClone(agent)));
     }
 
+    function changeLocation(location) {
+      if (!location) {
+        const next = { ...stage };
+        delete next.execution;
+        onChange(next);
+        return;
+      }
+      const provider = location === 'local-sdk' ? 'codex' : stage.provider;
+      onChange({ ...stage, provider, model: '', execution: { location, configId: '', context: execution?.context ?? 'independent' } });
+    }
+
+    function clearAgent() {
+      const next = withAgent(stage, null);
+      delete next.agentPreset;
+      onChange(next);
+    }
+
+    const agentEditor = canEditGrants && h(AgentModulesEditor, { key: stage.id, agent: stage.agent ?? null,
+      provider: stage.provider, moduleCatalog, disabled,
+      onChange: (agent) => onChange(withAgent(stage, execution && agent ? { ...agent, memory: 'isolated' } : agent)) });
+
     return h('fieldset', { className: 'vc-workflow-card vc-workflow-inspector', disabled },
       h('legend', null, `第 ${number} 阶段`),
-      h(PresetGallery, { stage, choices: presetChoices, moduleCatalog, onApply: applyPreset, onManage: onManageAgentPresets }),
+      !execution && h(PresetGallery, { stage, choices: presetChoices, moduleCatalog, onApply: applyPreset, onManage: onManageAgentPresets }),
+      mixed && h('div', { className: 'vc-workflow-fields' },
+        field('执行位置', h('select', { value: execution?.location ?? '', onChange: (event) => changeLocation(event.target.value) },
+          h('option', { value: '' }, '沿用当前工作区'),
+          Object.entries(executionLocations).map(([value, label]) => h('option', { key: value, value }, label)))),
+        execution && field('执行配置', h('select', { value: execution.configId, required: true,
+          onChange: (event) => onChange({ ...stage, model: '', execution: { ...execution, configId: event.target.value } }) },
+          h('option', { value: '', disabled: true }, locationTargets.length ? '选择已登记的配置' : '没有已登记的配置'),
+          execution.configId && !target && h('option', { value: execution.configId, disabled: true }, '原配置不可用'),
+          locationTargets.map(({ id, label }) => h('option', { key: id, value: id }, label)))),
+        execution && field('阶段上下文', h('select', { value: execution.context,
+          onChange: (event) => onChange({ ...stage, execution: { ...execution, context: event.target.value } }) },
+          Object.entries(executionContexts).map(([value, label]) => h('option', { key: value, value }, label))))),
+      execution && note(blind ? '盲审接收运行简报、当前阶段指令和启动时指定的证据。' : '此阶段使用独立会话和独立记忆。'),
       h('div', { className: 'vc-workflow-fields' },
         field('阶段名称', h('input', { value: stage.name, onChange: setValue('name'), required: true, maxLength: 64 })),
         field('执行工具', h('select', { value: stage.provider, onChange: (event) =>
           onChange({ ...stage, provider: event.target.value, model: '' }) },
-        Object.keys(workflowProviders).map((provider) => h('option', { key: provider, value: provider },
-          providerLabel(provider) + (available.includes(provider) ? '' : '（未启用）')))))),
+        providers.map((provider) => h('option', { key: provider, value: provider },
+          providerLabel(provider) + (allowed.includes(provider) ? '' : '（未启用）')))))),
       supportsModels ? h('div', { className: 'vc-workflow-model' },
         field('模型', h('select', { value: stage.model, onChange: setValue('model') },
           h('option', { value: '' }, defaultModel(stage.provider)),
@@ -143,18 +193,25 @@ export function createWorkflowPanel(React, { icon } = {}) {
             `${stage.model}${missingCatalogModel ? '（目录中不可用）' : '（已保存）'}`),
           models.map(({ id, displayName }) =>
             h('option', { key: id, value: id }, displayName && displayName !== id ? `${displayName} · ${id}` : id)))),
-        button(catalog?.status === 'ready' ? '刷新模型' : '读取模型', () => load(stage.provider), {
+        button(catalog?.status === 'ready' ? '刷新模型' : '读取模型', () => load(stage), {
           'aria-label': `读取第 ${number} 阶段的模型目录`,
           disabled: !connected || catalog?.status === 'loading',
         })) : note(defaultModel(stage.provider)),
-      !connected && note('执行工具尚未启用。可以保存工作流，启用后可运行。'),
+      execution && mixed?.canExecute === false ? note('仅浏览模式下无法读取模型目录或运行阶段。')
+        : !connected && note(execution && !target ? '请选择此阶段的已登记执行配置。' : '执行工具尚未启用。可以保存工作流，启用后可运行。'),
       catalog?.status === 'loading' && note('正在读取模型目录…', 'status'),
       catalog?.status === 'error' && alert(`模型目录读取失败：${catalog.error}`),
       missingCatalogModel && note('已保存的模型当前不可用。运行前请选择可用模型。'),
       field('角色与指令', h('textarea', { value: stage.instruction, onChange: setValue('instruction'), required: true, maxLength: 1200 })),
-      h(AgentModulesEditor, { key: stage.id, agent: stage.agent ?? null, provider: stage.provider, moduleCatalog, disabled,
-        onChange: (agent) => onChange(withAgent(stage, agent)) }),
-      h(StageFileAccessEditor, { ...fileEditor, stage, connected }),
+      agentEditor && (execution ? h('div', { className: 'vc-workflow-independent-modules' }, agentEditor) : agentEditor),
+      canEditGrants && h(StageFileAccessEditor, { ...fileEditor, stage, connected }),
+      !canEditGrants && (stage.agent || stage.agentPreset || stage.fileAccess) && h('div', { className: 'vc-workflow-dependencies' },
+        h('h4', null, '现有资源授权'),
+        note(blind ? '保存盲审阶段前须清除以下授权。' : '切换主工作区至此配置后可编辑授权。'),
+        stage.agent && note(agentSummary(stage.agent)),
+        stage.fileAccess && note(`${stage.fileAccess.paths.length} 个文件路径 · ${stage.fileAccess.attachments.length} 个附件`),
+        actions((stage.agent || stage.agentPreset) && button('清除 Agent 资源及预设', clearAgent),
+          stage.fileAccess && button('清除此阶段文件授权', () => fileEditor.onChange()))),
       h('div', { className: 'vc-workflow-dependencies' },
         h('h4', null, '上游阶段'),
         dependencies.length ? h('ul', null, dependencies.map(({ id, number: upstream, name }) =>
@@ -196,42 +253,49 @@ export function createWorkflowPanel(React, { icon } = {}) {
   }
 
   function RunSummary({ run, projects, running, launchAction, controlAction, performLaunch, performControl,
-    onResume, onPause, onStop, readArtifacts }) {
+    onResume, onPause, onStop, readArtifacts, targets, canExecute = true }) {
     if (!run) return null;
     const resumable = run.phase === 'paused' || run.phase === 'running';
     const checkingStop = run.stopRequested;
     const retryStop = checkingStop && run.rows.some(({ state }) => state === 'canceling');
     return h(React.Fragment, null,
       h('div', { className: 'vc-workflow-title-row' },
-        h('h3', null, '最近运行'),
+        h('h3', null, run.mixed ? '最近的混合运行' : '最近运行'),
         h('span', { role: 'status' }, resumable && checkingStop ? '等待确认停止' : phases[run.phase] ?? run.phase)),
       h('strong', null, run.workflow.name),
-      usesSharedMemory(run.workflow) && Object.hasOwn(run, 'projectId') &&
+      !run.mixed && usesSharedMemory(run.workflow) && Object.hasOwn(run, 'projectId') &&
         note(`记忆项目 · ${run.projectId === null ? personalMemoryLabel : projects.get(run.projectId) ?? '已移除的项目'}`),
       run.task && h('div', { className: 'vc-workflow-text', 'aria-label': '最近运行的任务', tabIndex: 0 }, run.task),
+      run.mixed && h('dl', { className: 'vc-workflow-details' },
+        h('dt', null, '验收标准'), h('dd', null, run.mixed.criteria),
+        run.mixed.constraints && h(React.Fragment, null, h('dt', null, '约束'), h('dd', null, run.mixed.constraints))),
       run.message && note(run.message, 'status'),
+      resumable && !canExecute && note('切换到执行模式后可继续或停止此工作流。'),
       resumable && actions(
         running && !checkingStop && button('暂停运行', () => performControl('pause', onPause), { disabled: Boolean(controlAction) }),
         !running && button(checkingStop ? '查询停止结果' : '查询并继续', () => performLaunch('resume', onResume), {
-          primary: true, disabled: Boolean(launchAction || controlAction),
+          primary: true, disabled: !canExecute || Boolean(launchAction || controlAction),
         }),
         (!checkingStop || retryStop) &&
-          button(checkingStop ? '重试停止' : '停止运行', () => performControl('stop', onStop), { disabled: Boolean(controlAction) })),
+          button(checkingStop ? '重试停止' : '停止运行', () => performControl('stop', onStop),
+            { disabled: !canExecute || Boolean(controlAction) })),
       h('ol', { className: 'vc-workflow-list', 'aria-label': '运行阶段' },
         run.workflow.stages.map((stage, index) => {
           const row = run.rows[index];
           const name = stage.name || `第 ${index + 1} 阶段`;
+          const target = targetForStage(stage, targets);
           return h('li', { key: stage.id, className: 'vc-workflow-card' },
             h('div', { className: 'vc-workflow-title-row' },
               h('strong', null, `第 ${index + 1} 阶段 · ${name}`),
               h('span', null, rowStates[row?.state] ?? row?.state ?? rowStates.waiting)),
             note(`${providerLabel(stage.provider)} · ${stage.model || defaultModel(stage.provider)}`),
-            stage.agent && note(agentSummary(stage.agent)),
-            run.version === 4 && row?.turnId && h('div', { className: 'vc-workflow-output-path', role: 'group',
+            stage.execution && note(`${executionLocations[stage.execution.location]} · ${target?.label ?? '原配置'} · ${executionContexts[stage.execution.context]}`),
+            stage.agent && note(agentSummary(run.mixed ? { ...stage.agent, memory: 'isolated' } : stage.agent)),
+            [4, 5].includes(run.version) && row?.turnId && h('div', { className: 'vc-workflow-output-path', role: 'group',
               'aria-label': `第 ${index + 1} 阶段输出目录`, tabIndex: 0 },
               h('span', { className: 'vc-workflow-note' }, '输出目录'),
               h('code', null, `~/.remote-ssh-chat/workflow-outputs/${row.turnId}`)),
-            run.version === 4 && row?.turnId && artifactRowStates.has(row.state) && typeof readArtifacts === 'function' &&
+            [4, 5].includes(run.version) && row?.turnId && artifactRowStates.has(row.state) && typeof readArtifacts === 'function' &&
               h(RunArtifacts, { key: `${run.id ?? ''}:${row.turnId}`, run, index, readArtifacts }),
             row?.reply && h('pre', { className: 'vc-workflow-text', tabIndex: 0,
               'aria-label': `第 ${index + 1} 阶段输出` }, row.reply));
@@ -241,7 +305,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
   return function WorkflowPanel({ open, preferRunPane, onClose, workflows, availableProviders, catalogScope, readModels, onChange, onEditInChat,
     proposal, onDismissProposal, run, running, canStart, onStart, onResume, onPause, onStop, exampleError,
     agentPresets = [], onManageAgentPresets, moduleCatalog, projects = emptyProjects, selectedProject,
-    readFileTarget, saveAttachments, readArtifacts, localSdk }) {
+    readFileTarget, saveAttachments, readArtifacts, localSdk, mixed }) {
     const titleId = React.useId();
     const memoryProjectErrorId = React.useId();
     const configurationId = React.useId();
@@ -270,7 +334,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
     const [confirmDelete, setConfirmDelete] = React.useState(false);
     const [transition, setTransition] = React.useState(null);
     const [transitionError, setTransitionError] = React.useState('');
-    const [compactView, setCompactView] = React.useState(run ? 'run' : 'configuration');
+    const [compactView, setCompactView] = React.useState(run || mixed?.run ? 'run' : 'configuration');
     const [editError, setEditError] = React.useState('');
     const [proposalError, setProposalError] = React.useState(null);
     const [runError, setRunError] = React.useState('');
@@ -321,10 +385,16 @@ export function createWorkflowPanel(React, { icon } = {}) {
     const stage = draft?.stages[activeStage];
     const linear = draft && isLinear(draft);
     const stale = Boolean(working?.revision != null && working.revision !== selected?.revision);
+    const explicitExecution = usesExplicitExecution(selected);
     const unavailable = selected?.stages.filter(({ provider }) => !availableProviders.includes(provider)) ?? [];
-    const missingModel = selected?.stages.find(({ provider, model }) =>
-      model && catalogs[provider]?.status === 'ready' && !catalogs[provider].models.some(({ id }) => id === model));
+    const missingModel = selected?.stages.find((item) => {
+      const catalog = catalogs[modelCatalogKey(item)];
+      return item.model && catalog?.status === 'ready' && !catalog.models.some(({ id }) => id === item.model);
+    });
     const unresolved = run?.phase === 'paused' || run?.phase === 'running';
+    const mixedRun = mixed?.run;
+    const mixedUnresolved = mixedRun?.phase === 'paused' || mixedRun?.phase === 'running';
+    const currentRun = mixedUnresolved ? mixedRun : unresolved ? run : null;
     const sharedMemory = usesSharedMemory(selected);
     const defaultMemoryProject = projects.has(selectedProject) ? selectedProject : '';
     const memoryProject = memoryProjectOverride && memoryProjectOverride.workflowId === selected?.id
@@ -360,9 +430,11 @@ export function createWorkflowPanel(React, { icon } = {}) {
     }
 
     function closeTransition(restoreFocus = false) {
-      draftDialog.current.close();
       setTransition(null);
-      if (restoreFocus) transition?.trigger.focus({ preventScroll: true });
+      if (restoreFocus) {
+        draftDialog.current.close();
+        transition?.trigger.focus({ preventScroll: true });
+      }
     }
 
     function stay() {
@@ -487,13 +559,15 @@ export function createWorkflowPanel(React, { icon } = {}) {
       void write({ op: 'save', id, revision, draft });
     }
 
-    async function load(provider) {
-      if (catalogRequests.current.has(provider)) return;
+    async function load(item) {
+      const key = modelCatalogKey(item);
+      if (catalogRequests.current.has(key)) return;
       const controller = new AbortController();
-      catalogRequests.current.set(provider, controller);
-      setCatalogs((previous) => ({ ...previous, [provider]: { ...previous[provider], status: 'loading' } }));
+      catalogRequests.current.set(key, controller);
+      setCatalogs((previous) => ({ ...previous, [key]: { ...previous[key], status: 'loading' } }));
       try {
-        const models = await readModels(provider, controller.signal);
+        if (item.execution && !mixed) throw new Error('当前工作台无法读取此执行配置。');
+        const models = item.execution ? await mixed.catalog(item) : await readModels(item.provider, controller.signal);
         if (controller.signal.aborted) return;
         if (!Array.isArray(models)) throw new Error('返回的模型目录格式无效。');
         const ids = new Set();
@@ -504,14 +578,14 @@ export function createWorkflowPanel(React, { icon } = {}) {
           ids.add(model.id);
           return { id: model.id, displayName: typeof model.displayName === 'string' ? model.displayName : '' };
         });
-        setCatalogs((previous) => ({ ...previous, [provider]: { status: 'ready', models: options } }));
+        setCatalogs((previous) => ({ ...previous, [key]: { status: 'ready', models: options } }));
       } catch (error) {
         if (!controller.signal.aborted) {
-          setCatalogs((previous) => ({ ...previous, [provider]: { ...previous[provider], status: 'error',
+          setCatalogs((previous) => ({ ...previous, [key]: { ...previous[key], status: 'error',
             error: messageOf(error, '请重试。') } }));
         }
       } finally {
-        if (catalogRequests.current.get(provider) === controller) catalogRequests.current.delete(provider);
+        if (catalogRequests.current.get(key) === controller) catalogRequests.current.delete(key);
       }
     }
 
@@ -544,6 +618,10 @@ export function createWorkflowPanel(React, { icon } = {}) {
 
     function editInChat(workflow) {
       setEditError('');
+      if (usesExplicitExecution(workflow)) {
+        setEditError('请在工作流面板编辑已绑定执行配置的阶段。');
+        return;
+      }
       try {
         if (!onEditInChat(workflow)) setEditError('无法打开工作流编辑会话。');
       } catch (error) {
@@ -552,15 +630,17 @@ export function createWorkflowPanel(React, { icon } = {}) {
     }
 
     async function perform(action, callback, request, setAction) {
-      if (request.current) return;
+      if (request.current) return false;
       request.current = true;
       setAction(action);
       setRunError('');
       try {
         const result = await callback();
         if (result === false) setRunError('操作未执行，请检查当前运行状态。');
+        return result;
       } catch (error) {
         setRunError(messageOf(error, '无法操作工作流运行。'));
+        return false;
       } finally {
         request.current = false;
         setAction(null);
@@ -570,7 +650,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
     const launch = (action, callback) => perform(action, callback, launchRequest, setLaunchAction);
     const control = (action, callback) => perform(action, callback, controlRequest, setControlAction);
     const start = () => {
-      if (fileRequest.current) return false;
+      if (fileRequest.current || explicitExecution || mixed?.running || mixedUnresolved) return false;
       return onStart(asDraft(selected), task.trim(), sharedMemory && memoryProject ? memoryProject : null, selected.id);
     };
 
@@ -578,11 +658,15 @@ export function createWorkflowPanel(React, { icon } = {}) {
     if (fileBusy) startReason = '文件授权更新完成后可以运行。';
     else if (working) startReason = '保存工作流后可以运行。';
     else if (!selected) startReason = '请选择一个已保存的工作流。';
+    else if (explicitExecution && !mixed) startReason = '当前工作台无法运行带执行配置的工作流。';
+    else if (explicitExecution && mixed.canExecute === false) startReason = '仅浏览模式下无法运行混合工作流。';
+    else if (explicitExecution) startReason = getMixedStartReason(selected, mixed.targets);
     else if (unavailable.length) startReason = `需要启用 ${[...new Set(unavailable.map(({ provider }) => providerLabel(provider)))].join('、')}。`;
-    else if (missingModel) startReason = `阶段「${missingModel.name}」的模型 ${missingModel.model} 当前不可用。`;
-    else if (unresolved) startReason = '请继续或停止当前运行。';
-    else if (!canStart) startReason = '当前连接暂不可运行工作流。';
-    const startDisabled = Boolean(startReason || missingMemoryProject || !task.trim() || launchAction || controlAction || running || writeBusy);
+    if (!startReason && missingModel) startReason = `阶段「${missingModel.name}」的模型 ${missingModel.model} 当前不可用。`;
+    if (!startReason && (unresolved || mixedUnresolved)) startReason = '请继续或停止当前运行。';
+    if (!startReason && !explicitExecution && !canStart) startReason = '当前连接暂不可运行工作流。';
+    const operationsBusy = Boolean(launchAction || controlAction || running || mixed?.running || writeBusy);
+    const startDisabled = Boolean(startReason || missingMemoryProject || !task.trim() || operationsBusy);
 
     return h('dialog', { ref: dialog, className: 'vc-workflow-dialog vc-popup-motion', 'aria-labelledby': titleId,
       onCancel: (event) => { event.preventDefault(); dismiss(); } },
@@ -628,7 +712,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
           actions(
             button('在聊天中创建', (event) => requestTransition(event.currentTarget, '在聊天中创建工作流', () => editInChat(null)),
               { disabled: writeBusy || fileBusy }),
-            selected && button('在聊天中编辑', (event) => requestTransition(event.currentTarget, '在聊天中编辑工作流',
+            selected && !explicitExecution && !usesExplicitExecution(draft) && button('在聊天中编辑', (event) => requestTransition(event.currentTarget, '在聊天中编辑工作流',
               (saved) => editInChat(saved ?? selected)), { disabled: writeBusy || fileBusy })),
           stale && alert('工作流已在别处更新或删除。当前草稿仍保留。'),
           stale && actions(button('读取已保存版本', (event) => requestTransition(event.currentTarget, '读取已保存版本',
@@ -639,11 +723,11 @@ export function createWorkflowPanel(React, { icon } = {}) {
               field('工作流名称', h('input', { value: draft.name, required: true, disabled: writeBusy, maxLength: 80,
                 onChange: (event) => update({ ...draft, name: event.target.value }) }))),
             h(StageGraph, { key: `${working?.id ?? selected?.id}:${selected?.revision ?? 0}`,
-              stages: draft.stages, edges: draft.edges, active: activeStage, moduleCatalog,
+              stages: draft.stages, edges: draft.edges, active: activeStage, moduleCatalog, targets: mixed?.targets,
               onSelect: selectStage, onMove: linear ? moveStage : null, onAdd: addStage, onConnect: connectStages, disabled: writeBusy }),
-            h(StageEditor, { stage, index: activeStage, count: draft.stages.length, available: availableProviders,
+            h(StageEditor, { stage, index: activeStage, count: draft.stages.length, available: availableProviders, mixed,
               dependencies: stageDependencies(draft.stages, draft.edges, stage.id), onDisconnect: disconnectStages,
-              catalog: catalogs[stage.provider], load, disabled: writeBusy, presetChoices, onManageAgentPresets, moduleCatalog,
+              catalog: catalogs[modelCatalogKey(stage)], load, disabled: writeBusy, presetChoices, onManageAgentPresets, moduleCatalog,
               fileEditor: { key: `${working?.id ?? selected?.id}:${working?.revision ?? selected?.revision ?? 0}:${stage.id}:${stage.provider}`,
                 open, catalogScope, readFileTarget, saveAttachments, localSdk, busy: fileBusy, disabled: writeBusy || stale,
                 onChange: changeStageFileAccess, onRequest: requestStageFileAccess },
@@ -660,24 +744,31 @@ export function createWorkflowPanel(React, { icon } = {}) {
         h('section', { id: runPaneId, className: 'vc-workflow-pane vc-workflow-run-pane', 'aria-label': '工作流运行' },
           h('div', { className: 'vc-workflow-title-row' },
             h('h3', null, '运行工作流'),
-            unresolved ? note(`当前运行 · ${run.stopRequested ? '等待确认停止' : phases[run.phase]}`, 'status') : null),
-          field('运行任务', h('textarea', { value: task, onChange: (event) => setTask(event.target.value) })),
-          sharedMemory && field('记忆项目', h('select', { value: memoryProject,
-            disabled: Boolean(launchAction), 'aria-invalid': missingMemoryProject || undefined,
-            'aria-describedby': missingMemoryProject ? memoryProjectErrorId : undefined,
-            onChange: (event) => setMemoryProjectOverride({ workflowId: selected.id, projectId: event.target.value }),
-          }, missingMemoryProject && h('option', { value: memoryProject, disabled: true }, '已移除的项目'),
-          h('option', { value: '' }, personalMemoryLabel),
-          Array.from(projects, ([id, title]) => h('option', { key: id, value: id }, title)))),
-          missingMemoryProject && h('p', { id: memoryProjectErrorId, className: 'vc-workflow-error', role: 'alert' },
-            '所选记忆项目已移除，请重新选择。'),
-          actions(button('开始运行', () => launch('start', start),
-            { primary: true, disabled: startDisabled }),
-          running && launchAction === 'start' && !unresolved
-            ? button('取消准备', () => control('pause', onPause), { disabled: Boolean(controlAction) }) : null),
-          startReason && note(startReason),
+            currentRun && note(`当前运行 · ${currentRun.stopRequested ? '等待确认停止' : phases[currentRun.phase]}`, 'status')),
+          explicitExecution ? (mixed ? h(MixedRunBrief, { key: `${selected.id}:${selected.revision}`,
+            workflow: selected, targets: mixed.targets, disabled: operationsBusy, startReason,
+            onStart: (brief) => launch('start', () => mixed.start(brief)) }) : note(startReason)) : h(React.Fragment, null,
+            field('运行任务', h('textarea', { value: task, onChange: (event) => setTask(event.target.value) })),
+            sharedMemory && field('记忆项目', h('select', { value: memoryProject,
+              disabled: Boolean(launchAction), 'aria-invalid': missingMemoryProject || undefined,
+              'aria-describedby': missingMemoryProject ? memoryProjectErrorId : undefined,
+              onChange: (event) => setMemoryProjectOverride({ workflowId: selected.id, projectId: event.target.value }),
+            }, missingMemoryProject && h('option', { value: memoryProject, disabled: true }, '已移除的项目'),
+            h('option', { value: '' }, personalMemoryLabel),
+            Array.from(projects, ([id, title]) => h('option', { key: id, value: id }, title)))),
+            missingMemoryProject && h('p', { id: memoryProjectErrorId, className: 'vc-workflow-error', role: 'alert' },
+              '所选记忆项目已移除，请重新选择。'),
+            actions(button('开始运行', () => launch('start', start), { primary: true, disabled: startDisabled }),
+              running && launchAction === 'start' && !unresolved
+                ? button('取消准备', () => control('pause', onPause), { disabled: Boolean(controlAction) }) : null),
+            startReason && note(startReason)),
           alert(exampleError),
+          (explicitExecution || mixedRun) && alert(mixed?.error),
           alert(runError),
+          h(RunSummary, { run: mixedRun, projects, running: mixed?.running, launchAction, controlAction,
+            performLaunch: launch, performControl: control, targets: mixed?.targets, canExecute: mixed?.canExecute,
+            readArtifacts: open && !closing && mixed?.canExecute ? mixed.readArtifacts : undefined,
+            onResume: () => mixed.action('resume'), onPause: () => mixed.action('pause'), onStop: () => mixed.action('stop') }),
           h(RunSummary, { run, projects, running, launchAction, controlAction, performLaunch: launch, performControl: control,
             onResume, onPause, onStop, readArtifacts: open && !closing ? readArtifacts : undefined })))));
   };

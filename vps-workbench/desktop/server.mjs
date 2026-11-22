@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -9,7 +9,7 @@ import { accessDenied, defaultAccess, permitsChat, permitsTerminal, withWorkspac
 import { createProjectMemoryBridge } from './project-memory.mjs';
 import { readSetupPreset, setupConnectionKey } from './setup-state.mjs';
 import { runSetupTrial } from './setup-trial.mjs';
-import { readWorkflowRun } from '../workflow-engine/runner.mjs';
+import { readLegacyWorkflowRun } from '../workflow-engine/runner.mjs';
 import { workflowRunKey } from '../workflow-engine/state.mjs';
 import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
 import { ensurePrivateDirectory, localModels, openCodexRuntime } from './codex-runtime.mjs';
@@ -18,11 +18,16 @@ import { createLocalWorkbench } from '../local-sdk/workbench.mjs';
 import { isLocalBackend, localBackends } from '../local-sdk/providers.mjs';
 import { openLocalAgentRuntime } from './local-agent-runtime.mjs';
 import { createComponentInstaller, validComponentSelection } from './component-install.mjs';
+import { mixedLocalRoute, mixedVpsRoute, openMixedWorkflow, requestMixedWorkflow } from './mixed-workflow.mjs';
+import { workflowProviders } from '../workflow-engine/state.mjs';
+import { readToolPreferences } from '../../remote-workbench/vps-chat/client/tool-preferences.js';
+import { readModelCatalog } from '../../remote-workbench/vps-chat/client/model-catalog.js';
 
 export { canonicalLocalDirectory, localCredentialVariable } from './codex-runtime.mjs';
 export { localMemoryJournalKey } from '../local-sdk/workbench.mjs';
 export { agyHashVariable, agyPathVariable, claudeKeyVariable } from './local-agent-runtime.mjs';
 export { openLocalCredentials } from './local-credentials.mjs';
+export { readLegacyWorkflowRun } from '../workflow-engine/runner.mjs';
 
 const staticRoutes = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -61,10 +66,13 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
   async function loadRuntime(backend, stateRoot, provisioned) {
     const stored = await localCredentials?.read(backend);
     const options = { runtimeRoot, stateRoot, ...provisioned };
-    return backend === 'codex'
-      ? makeLocalRuntime({ ...options, apiKey: stored?.key ?? (stored?.state === 'unavailable' ? undefined : localApiKey) })
-      : makeLocalAgentRuntime({ ...localAgentOptions, ...options, backend,
-        claudeKey: stored?.key ?? (stored?.state === 'unavailable' ? undefined : localAgentOptions?.claudeKey) });
+    if (backend === 'codex') {
+      const apiKey = stored?.key ?? (stored?.state === 'unavailable' ? undefined : localApiKey);
+      const runtime = await makeLocalRuntime({ ...options, apiKey });
+      return { ...runtime, workflowCredentialPin: createHash('sha256').update(apiKey ?? '').digest('hex') };
+    }
+    return makeLocalAgentRuntime({ ...localAgentOptions, ...options, backend,
+      claudeKey: stored?.key ?? (stored?.state === 'unavailable' ? undefined : localAgentOptions?.claudeKey) });
   }
   if (localStateRoot) {
     for (const backend of Object.keys(localBackends)) {
@@ -152,6 +160,68 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
   const backend = makeBridge({ ...bridgeOptions, root: workbenchRoot });
   const chat = data ? createProjectMemoryBridge({ data, backend, access, onChange: onMemoryChanged, onError: onMemoryError,
     extractor: makeBridge({ ...bridgeOptions, root: join(workbenchRoot, 'project-memory') }) }) : backend;
+  const providers = Object.keys(workflowProviders);
+  async function vpsTarget() {
+    const saved = data.preference(setupConnectionKey);
+    const packet = saved === undefined ? await backend.request({ op: 'preset' }, { current: true }) :
+      await readSetupPreset(saved, (settings) => backend.request({ op: 'configuration', settings }, { current: true }));
+    const preset = packet?.ok === true && packet.preset;
+    if (!preset?.settings.hostKeyConfirmed || !/^[a-f0-9]{64}$/.test(preset.memoryTargetId)) return null;
+    let tools;
+    const { key, ids } = await readToolPreferences(preset.settings, [...providers, 'claude-subscription'], (name) => {
+      tools = data.preference(name);
+      return tools;
+    });
+    return { ...preset, providers: (ids ?? [preset.settings.provider ?? 'claude']).filter((id) => providers.includes(id)),
+      isCurrent: () => data.preference(setupConnectionKey) === saved && data.preference(key) === tools };
+  }
+  const mixed = data && openMixedWorkflow({ data, canExecute,
+    async targets() {
+      const items = (local.get('codex')?.service.status().profiles ?? []).map(({ id, name, targetId }) =>
+        ({ id, targetId, label: name, location: 'local-sdk', providers: ['codex'] }));
+      const vps = await vpsTarget().catch(() => null);
+      if (vps) items.push({ id: vps.memoryTargetId, targetId: vps.memoryTargetId, label: vps.name,
+        location: 'ssh-vps', providers: vps.providers });
+      return { ok: true, targets: items };
+    },
+    async resolve(stage) {
+      if (stage?.execution?.location === 'local-sdk') return mixedLocalRoute(stage, local.get('codex'));
+      const vps = await vpsTarget();
+      if (!vps?.providers.includes(stage?.provider)) return null;
+      const settings = { ...vps.settings, provider: stage.provider };
+      const reply = await backend.request({ op: 'configuration', settings }, { current: true });
+      return mixedVpsRoute(stage, vps, vps.isCurrent, reply, readRoute);
+    },
+    async catalog(route) {
+      const body = { op: 'models', settings: route.settings, targetId: route.targetId };
+      const packet = route.settings.location === 'local-sdk' ? await local.get('codex').workbench.request(body) :
+        await backend.request(body, { current: true, pinnedRelay: route.pinnedRelay });
+      if (packet?.ok !== true) throw new Error('无法读取所选执行配置的模型目录。');
+      const models = readModelCatalog(packet);
+      if (!models.length) throw new Error('所选执行配置没有可用的模型。');
+      return models;
+    },
+    async dispatch(op, payload, route, options) {
+      const body = { op, ...payload };
+      if (route.settings.location === 'local-sdk') return local.get('codex').workbench.request(body, options);
+      if (op === 'workflow-artifacts') return readWorkflowArtifacts(body, { readRun: options.workflowRun,
+        backend: { request: (packet) => backend.request(packet, { current: true, pinnedRelay: route.pinnedRelay }) },
+        isAllowed: options.isLive });
+      if (op === 'send') {
+        for (const kind of ['model', 'account']) {
+          if (!options.isLive()) return { ok: false, code: 'mixed_route_changed' };
+          const check = await backend.request({ op: 'setup-check', kind, settings: body.settings, targetId: body.targetId,
+            mcpServers: [] }, { current: true, pinnedRelay: route.pinnedRelay });
+          const ready = kind === 'model' ? check?.status === 'model_route_ready' :
+            ['signed_in', 'key_configured', 'manual'].includes(check?.status);
+          if (check?.ok !== true || check.targetId !== body.targetId || !ready) return { ok: false, code: 'mixed_preflight',
+            message: kind === 'model' ? '预期 VPS 出口或模型服务路由未通过检查。' : '请核对原 VPS 配置的账号登录。' };
+        }
+      }
+      if (!options.isLive()) return { ok: false, code: 'mixed_route_changed' };
+      return chat.request(body, { ...options, pinnedRelay: route.pinnedRelay });
+    },
+  });
   const bridge = {
     request(body, options) {
       if (body.op === 'configuration') {
@@ -169,7 +239,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
       }
       if (data && body.op === 'workflow-artifacts') {
         return readWorkflowArtifacts(body, {
-          readRun: () => readWorkflowRun(data.preference(workflowRunKey) ?? null), backend,
+          readRun: () => readLegacyWorkflowRun(data.preference(workflowRunKey) ?? null), backend,
           isAllowed: () => permitsChat(access(), body.op) && (!options?.isLive || options.isLive()),
         });
       }
@@ -269,6 +339,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     origin,
     cookie: { url: origin, name: cookieName, value: ticket, path: '/', httpOnly: true, sameSite: 'strict' },
     localStatus,
+    requestMixedWorkflow: (body) => requestMixedWorkflow(closing ? null : mixed, body),
     localComponentsStatus,
     installLocalComponents(ids) {
       if (!validComponentSelection(ids)) return { ok: false, code: 'invalid_component' };
@@ -330,11 +401,13 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     },
     accessChanged() {
       if (access().mode !== 'browse') return;
+      void mixed?.pause()?.catch(() => {});
       installation?.controller.abort();
       host.revokeAccount();
       for (const { service } of local.values()) service.revokeExecution();
     },
     async close() {
+      await mixed?.dispose();
       terminal.dispose();
       host.dispose();
       await closeLocal();

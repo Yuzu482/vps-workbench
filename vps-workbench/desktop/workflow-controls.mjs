@@ -27,6 +27,33 @@ export function useWorkflowControls({ store, rpc, readList, connection, remoteEn
   const [run, setRun] = React.useState(store.initialRun);
   const [running, setRunning] = React.useState(false);
   const [exampleError, setExampleError] = React.useState('');
+  const [mixedTargets, setMixedTargets] = React.useState([]);
+  const [mixedStatus, setMixedStatus] = React.useState(null);
+  const mixedRequest = store.mixedRequest;
+  React.useEffect(() => {
+    if (!open || !mixedRequest) return;
+    let live = true;
+    let timer;
+    async function update() {
+      try {
+        const status = await mixedRequest({ op: 'status' });
+        if (live && status?.ok) setMixedStatus(status);
+      } catch {
+        if (live) setMixedStatus((current) => ({ ...current, error: '暂时无法读取混合工作流状态。' }));
+      } finally { if (live) timer = setTimeout(update, 750); }
+    }
+    void mixedRequest({ op: 'targets' }).then((result) => {
+      if (live && result.ok) setMixedTargets(result.targets);
+    }).catch(() => { if (live) setMixedTargets([]); });
+    void update();
+    return () => { live = false; clearTimeout(timer); };
+  }, [open, mixedRequest]);
+
+  async function callMixed(packet) {
+    const result = await mixedRequest(packet);
+    if (!result?.ok) throw new Error(result?.message || '混合工作流暂不可用。');
+    return result;
+  }
   const runner = React.useRef(null);
   const availableProviders = toolIds.filter((id) => Object.hasOwn(workflowProviders, id));
   const context = React.useRef(null);
@@ -168,6 +195,22 @@ export function useWorkflowControls({ store, rpc, readList, connection, remoteEn
       open, preferRunPane, onClose: () => { setOpen(false); setProposal(null); setExampleError(''); }, workflows: store.items, exampleError,
       availableProviders, catalogScope: scope, readModels: readPanelModels, onChange: store.change, onEditInChat: startChatEdit,
       proposal, onDismissProposal: () => setProposal(null), run, running,
+      mixed: mixedRequest ? { ...mixedStatus, targets: mixedTargets, canExecute: remoteEnabled,
+        catalog: async (stage) => (await callMixed({ op: 'catalog', stage })).models,
+        readArtifacts: (run, stageIndex, path, _signal, { after, offset } = {}) => callMixed({ op: 'artifacts', query: {
+          runId: run.id, stageIndex, ...(path !== undefined && { path }), ...(after !== undefined && { after }),
+          ...(offset !== undefined && { offset }),
+        } }),
+        async start(input) {
+          const result = await callMixed({ op: 'start', input });
+          void callMixed({ op: 'status' }).then(setMixedStatus).catch(() => {});
+          return result;
+        },
+        async action(op) {
+          const result = await callMixed({ op });
+          void callMixed({ op: 'status' }).then(setMixedStatus).catch(() => {});
+          return result;
+        } } : null,
       canStart: !error && remoteEnabled && (local ? local.runtimeReady && local.profile?.targetId === scope : connection?.hostKeyConfirmed) &&
         availableProviders.length > 0,
       localSdk: Boolean(local),

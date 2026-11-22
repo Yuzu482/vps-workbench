@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('vpsWorkbench', {
   bootstrap: () => ipcRenderer.invoke('workbench:bootstrap'),
+  mixedWorkflow: (body) => ipcRenderer.invoke('workbench:mixed-workflow', body),
   setPreference: (key, value) => ipcRenderer.invoke('workbench:set-preference', key, value),
   setAccess: (access) => ipcRenderer.invoke('workbench:set-access', access),
   localSdkStatus: () => ipcRenderer.invoke('workbench:local-sdk-status'),

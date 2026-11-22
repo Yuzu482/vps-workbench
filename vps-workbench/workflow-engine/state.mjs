@@ -1,6 +1,7 @@
 export const workflowKey = 'dsh-vps-chat:workflows:v1';
 export const workflowRunKey = 'dsh-vps-chat:workflow-run:v1';
 export const localWorkflowRunKey = 'dsh-vps-chat:local-workflow-run:v1';
+export const mixedWorkflowRunKey = 'dsh-vps-chat:mixed-workflow-run:v1';
 export const workflowEditPrefix = '根据用户要求提出一份工作流草案。';
 export const maxWorkflowChatLength = 8192;
 
@@ -130,6 +131,16 @@ function validateStageAgentPreset(value, label) {
   return { id: value.id.toLowerCase(), name: workflowText(value.name, 64, `${label}的 Agent 预设名称`, false) };
 }
 
+function validateStageExecution(value, label) {
+  if (!exactFields(value, 'location', 'configId', 'context') ||
+      !['independent', 'blind'].includes(value.context) ||
+      !(value.location === 'local-sdk' ? workflowUuid(value.configId) :
+        value.location === 'ssh-vps' && typeof value.configId === 'string' && targetId.test(value.configId))) {
+    throw new Error(`${label}的执行位置、配置或上下文无效。`);
+  }
+  return { location: value.location, configId: value.configId.toLowerCase(), context: value.context };
+}
+
 export function linearWorkflowEdges(stages) {
   return stages.slice(1).map((stage, i) => ({ from: stages[i].id, to: stage.id }));
 }
@@ -176,9 +187,11 @@ function validateDraft(value, allowAgentMetadata) {
     const hasAgent = allowAgentMetadata && Object.hasOwn(stage ?? {}, 'agent');
     const hasAgentPreset = allowAgentMetadata && Object.hasOwn(stage ?? {}, 'agentPreset');
     const hasFileAccess = allowAgentMetadata && Object.hasOwn(stage ?? {}, 'fileAccess');
+    const hasExecution = allowAgentMetadata && Object.hasOwn(stage ?? {}, 'execution');
     if (hasAgent) fields.push('agent');
     if (hasAgentPreset) fields.push('agentPreset');
     if (hasFileAccess) fields.push('fileAccess');
+    if (hasExecution) fields.push('execution');
     if (!exactFields(stage, ...fields) || typeof stage.provider !== 'string' ||
         !Object.hasOwn(workflowProviders, stage.provider)) throw new Error(`${label}的字段或服务商无效。`);
     const { provider, model } = stage;
@@ -192,6 +205,12 @@ function validateDraft(value, allowAgentMetadata) {
     if (hasFileAccess) {
       const fileAccess = validateWorkflowFileAccess(stage.fileAccess);
       if (fileAccess.paths.length || fileAccess.attachments.length) normalized.fileAccess = fileAccess;
+    }
+    if (hasExecution) {
+      normalized.execution = validateStageExecution(stage.execution, label);
+      if (normalized.execution.context === 'blind' && (normalized.agent || normalized.agentPreset || normalized.fileAccess)) {
+        throw new Error(`${label}为盲审，须先移除 Agent、插件和文件权限。`);
+      }
     }
     return normalized;
   });
@@ -262,7 +281,7 @@ export function createWorkflowEditPrompt(request, draft = null) {
   ].join('\n');
   if (draft === null) return prompt;
   const metadata = validateWorkflowDraft(draft);
-  metadata.stages = metadata.stages.map(({ agent, agentPreset, fileAccess, ...stage }) => stage);
+  metadata.stages = metadata.stages.map(({ agent, agentPreset, fileAccess, execution, ...stage }) => stage);
   const reference = `${prompt}\n\n当前草案，作为参考\n${JSON.stringify(metadata)}`;
   if (reference.length > maxWorkflowChatLength) throw new Error(`编辑请求超出聊天长度上限。请缩短本轮要求。${proposalLengthGuidance}`);
   return reference;
@@ -298,7 +317,7 @@ export function readWorkflowProposal(reply, { requireStageIds = false } = {}) {
   let value;
   try { value = JSON.parse(source); } catch { throw new Error('工作流草案须使用有效的 JSON。'); }
   if (requireStageIds && exactFields(value, 'name', 'stages')) {
-    throw new Error('当前工作流含有本机 Agent 设置。请让模型在草案中提供工作流连线，并为保留的步骤使用原有 ID。');
+    throw new Error('当前工作流含有步骤配置。请让模型在草案中提供工作流连线，并为保留的步骤使用原有 ID。');
   }
   return validateDraft(value, false);
 }
@@ -310,13 +329,14 @@ export function preserveWorkflowAgents(previousWorkflow, proposedDraft) {
   const previous = validateWorkflowDraft({ name, stages, ...(Object.hasOwn(previousWorkflow, 'edges') ? { edges } : {}) });
   const previousById = new Map(previous.stages.map((stage) => [stage.id, stage]));
   for (const stage of draft.stages) {
-    const { agent, agentPreset, fileAccess, provider } = previousById.get(stage.id) ?? {};
+    const { agent, agentPreset, fileAccess, execution, provider } = previousById.get(stage.id) ?? {};
     if (agent?.mcpServers.length && stage.provider !== provider) {
       throw new Error(`步骤「${stage.name}」已配置 MCP 服务器。请保留 ${workflowProviders[provider].label}，或先在编辑器中移除该步骤的 MCP 服务器。`);
     }
     if (agent) stage.agent = agent;
     if (agentPreset) stage.agentPreset = agentPreset;
     if (fileAccess) stage.fileAccess = fileAccess;
+    if (execution) stage.execution = execution;
   }
   return draft;
 }

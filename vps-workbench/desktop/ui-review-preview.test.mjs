@@ -226,6 +226,53 @@ async function sidebarButton(page, name) {
   return button;
 }
 
+test('mixed workflow preview approves an exact edge and runs local drafting with VPS blind review', { timeout: 35_000 }, async (t) => {
+  const page = await openPreview(t, { viewport: { width: 420, height: 640 }, previewOptions: { localAgents: true }, seed({ preferences }) {
+    preferences['dsh-vps-chat:desktop-view-location:v1'] = 'ssh-vps';
+  } });
+  const record = await page.evaluate(async (key) => {
+    const native = window.vpsWorkbench;
+    const { targets } = await native.mixedWorkflow({ op: 'targets' });
+    const local = targets.find(({ location }) => location === 'local-sdk');
+    const vps = targets.find(({ location }) => location === 'ssh-vps');
+    const stages = [
+      { id: 'draft', name: '混合起草', provider: 'codex', model: '', instruction: '写出活动说明。',
+        execution: { location: local.location, configId: local.id, context: 'independent' } },
+      { id: 'blind', name: '混合盲审', provider: 'claude-sdk', model: '', instruction: '核对活动信息。',
+        execution: { location: vps.location, configId: vps.id, context: 'blind' } },
+      { id: 'summary', name: '混合汇总', provider: 'claude-sdk', model: '', instruction: '汇总阶段证据。',
+        execution: { location: vps.location, configId: vps.id, context: 'independent' } },
+    ];
+    const draft = { id: crypto.randomUUID(), revision: 1, name: '混合发布', stages,
+      edges: [{ from: 'draft', to: 'summary' }, { from: 'blind', to: 'summary' }] };
+    await native.setPreference(key, JSON.stringify([draft]));
+    return draft;
+  }, workflowKey);
+  await page.reload();
+  const sidebar = page.getByRole('button', { name: '展开会话侧栏', exact: true });
+  if (await sidebar.isVisible()) await sidebar.click();
+  await page.getByRole('button', { name: '工作流', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: '工作流', exact: true });
+  await panel.getByLabel('已保存的工作流').selectOption(record.id);
+  await panel.getByRole('button', { name: '运行', exact: true }).click();
+  const brief = panel.getByRole('group', { name: '运行简报', exact: true });
+  const launch = brief.getByRole('button', { name: '开始运行', exact: true });
+  await brief.getByLabel('运行任务', { exact: true }).fill('准备活动说明。');
+  await brief.getByLabel('验收标准', { exact: true }).fill('标明免费报名。');
+  await brief.getByLabel('「混合盲审」的证据', { exact: true }).fill('原始资料写明免费报名。');
+  assert.equal(await launch.isDisabled(), true);
+  await brief.getByRole('checkbox', { name: '结论', exact: true }).check();
+  await brief.getByRole('checkbox', { name: '确认传递所选字段', exact: true }).check();
+  await launch.scrollIntoViewIfNeeded();
+  await assertWithinViewport(launch);
+  await launch.press('Enter');
+  await panel.getByText('工作流已完成。', { exact: true }).waitFor({ timeout: 15_000 });
+  const status = await page.evaluate(() => window.vpsWorkbench.mixedWorkflow({ op: 'status' }));
+  assert.equal(status.run.phase, 'complete');
+  assert.deepEqual(status.run.mixed.transfers, [{ from: 'draft', to: 'summary', fields: ['conclusion'] }]);
+  assert.match(status.run.rows[0].reply, /本机完成初稿/u);
+});
+
 async function openDesign(page) {
   await (await sidebarButton(page, '纸间书店')).click();
   await (await sidebarButton(page, '纸间书店 · 网站设计，设计会话')).click();
@@ -333,6 +380,7 @@ test('P0 keeps unsaved workflow names and links until a guarded action succeeds'
   await page.evaluate(() => { window.rejectWorkflowWrite = false; });
   await newWorkflow.click();
   await save.click();
+  await prompt.waitFor({ state: 'hidden' });
   assert.equal(await name.inputValue(), '');
   const saved = (await readSavedWorkflows(page)).find(({ id }) => id === original.id);
   assert.equal(saved.name, edited);

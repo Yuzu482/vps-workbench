@@ -35,7 +35,14 @@
     for (const listener of projectListeners) listener(projects);
   }
 
+  async function mixedWorkflow(body) {
+    const response = await fetch('/__preview/mixed-workflow', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body) });
+    return response.json();
+  }
+
   window.vpsWorkbench = {
+    mixedWorkflow,
     async bootstrap() {
       const response = await fetch('/__preview/state');
       if (!response.ok) throw new Error('preview_state_unavailable');
@@ -81,6 +88,10 @@
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'cancel' }) });
     },
     async setPreference(name, value) {
+      if (name === 'dsh-vps-chat:workflows:v1') {
+        const result = await mixedWorkflow({ op: 'save-definitions', value });
+        if (!result.ok) throw new Error('preview_workflow_unavailable');
+      }
       if (name === 'dsh-vps-chat:setup-connection:v1') {
         const response = await fetch('/__preview/connection', { method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ op: 'save-connection', value }) });

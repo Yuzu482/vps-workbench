@@ -293,7 +293,7 @@ export function createBridge({
   let disposed = false;
   let active = 0;
   return {
-    async request(body, { current = false } = {}) {
+    async request(body, { current = false, pinnedRelay } = {}) {
       if (disposed || typeof root !== 'string' || !isAbsolute(root) ||
           (body.op !== 'configuration' && (!isAbsolute(pythonPath) || !existsSync(pythonPath)))) return notReady;
       const provider = body.settings?.provider;
@@ -311,6 +311,7 @@ export function createBridge({
       if (!localOnly && compatibilityDirectory) {
         try {
           const policy = readRoute();
+          if (pinnedRelay !== undefined && JSON.stringify(policy) !== pinnedRelay) return relayRequired;
           directClaude = provider === 'claude' && policy === null;
           if (advanced && directClaude) {
             return { ...invalidRequest, message: '当前 Claude API 直连执行端无法应用高级参数。请恢复执行端默认后发送。' };

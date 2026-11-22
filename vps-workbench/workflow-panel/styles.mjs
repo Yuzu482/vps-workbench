@@ -227,6 +227,13 @@ button.vc-workflow-port:not(:disabled):hover::before,
 }
 .vc-workflow-details {display:grid; grid-template-columns:auto minmax(0,1fr); gap:5px 12px}
 .vc-workflow-details dt {color:var(--vc-muted)}
+.vc-workflow-independent-modules .vc-agent-memory {display:none}
+.vc-workflow-mixed-routes {gap:6px}
+.vc-workflow-mixed-section, .vc-workflow-mixed-routes > li {display:grid; gap:5px; min-width:0}
+.vc-workflow-mixed-section {border-top:1px solid var(--vc-line); padding-top:8px}
+.vc-workflow-transfer-options {display:flex; flex-wrap:wrap; gap:6px 10px}
+.vc-workflow-transfer-options label, .vc-workflow-transfer-confirm {display:flex; align-items:baseline; gap:5px; min-width:0}
+.vc-workflow-transfer-options input, .vc-workflow-transfer-confirm input {margin:0; accent-color:var(--vc-accent)}
 @media (max-width:760px) {
   [data-vps-chat] .vc-workflow-dialog {width:calc(100vw - 20px); height:calc(100dvh - 54px)}
   .vc-workflow-header, .vc-workflow-pane {padding-inline:12px}

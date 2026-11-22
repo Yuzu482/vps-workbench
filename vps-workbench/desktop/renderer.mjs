@@ -17,7 +17,7 @@ import {
   applyWorkflowChange, localWorkflowRunKey, maxWorkflowAttachmentBytes, maxWorkflowAttachments, readWorkflows,
   validWorkflowFileName, workflowKey, workflowRunKey,
 } from '../workflow-engine/state.mjs';
-import { readWorkflowRun } from '../workflow-engine/runner.mjs';
+import { readLegacyWorkflowRun } from '../workflow-engine/runner.mjs';
 import { createWorkflowPanel } from '../workflow-panel/index.mjs';
 import { DesktopChrome } from './chrome.mjs';
 import { createStreamingMarkdownParser, stabilizeStreamingRecord } from './streaming-render.mjs';
@@ -130,7 +130,7 @@ try {
   let workflowError = '';
   try {
     initialWorkflows = readWorkflows(values.get(workflowKey) ?? null);
-    initialWorkflowRun = readWorkflowRun(values.get(workflowRunKey) ?? null);
+    initialWorkflowRun = readLegacyWorkflowRun(values.get(workflowRunKey) ?? null);
   } catch {
     workflowError = '本机的工作流配置或运行回执无法读取。';
     showLocalStatus(workflowError);
@@ -138,7 +138,7 @@ try {
   const saveWorkflowRun = (run) => saveLocalPreference(workflowRunKey, JSON.stringify(run));
   let initialLocalRun = null;
   let localRunError = '';
-  try { initialLocalRun = readWorkflowRun(values.get(localWorkflowRunKey) ?? null); }
+  try { initialLocalRun = readLegacyWorkflowRun(values.get(localWorkflowRunKey) ?? null); }
   catch { localRunError = '本机 SDK 的工作流运行回执无法读取。'; }
   const saveLocalRun = (run) => saveLocalPreference(localWorkflowRunKey, JSON.stringify(run));
   let startingExtensions;
@@ -308,7 +308,7 @@ try {
         extensions: { state: extensions, change: changeExtensions, busy: extensionsBusy },
         agentPresets: { items: agentItems, change: changeAgentPresets, error: agentPresetError },
         workflowStore: { items: workflowItems, change: changeWorkflows, initialRun: initialWorkflowRun,
-          saveRun: saveWorkflowRun, saveAttachments: saveWorkflowAttachments, error: workflowError } }) : null,
+          saveRun: saveWorkflowRun, saveAttachments: saveWorkflowAttachments, mixedRequest: native.mixedWorkflow, error: workflowError } }) : null,
       visited.has('local-sdk') ? h(LocalWorkspace, { native, active: !sshVisible, access, accessPending, changeAccess,
         projectCatalog, terminalView: noTerminal, resourcesOpen, setResourcesOpen,
         newChatRequest: localNew, onNewChat: startChat,
@@ -318,7 +318,8 @@ try {
         extensions: { state: extensions, change: changeExtensions, busy: extensionsBusy },
         agentPresets: { items: agentItems, change: changeAgentPresets, error: agentPresetError },
         workflowStore: { items: workflowItems, change: changeWorkflows, initialRun: initialLocalRun,
-          saveRun: saveLocalRun, saveAttachments: saveWorkflowAttachments, error: workflowError || localRunError } }) : null,
+          saveRun: saveLocalRun, saveAttachments: saveWorkflowAttachments, mixedRequest: native.mixedWorkflow,
+          error: workflowError || localRunError } }) : null,
       h('div', { ref: settingsLayer, className: 'desktop-settings-surface' }));
   }
   root.render(h(DesktopApp));

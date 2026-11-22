@@ -1,9 +1,12 @@
 import { createPortal } from 'react-dom';
 import { menuIcon } from '../../remote-workbench/vps-chat/client/menu-icons.js';
+import { executionContexts, executionLocations, targetForStage } from './mixed.mjs';
 
 const card = { width: 156, height: 82, columnGap: 68, rowGap: 24, padding: 22 };
 const nodeName = (stage) => stage.name.trim() || '未命名阶段';
 const agentName = (stage) => stage.agentPreset?.name ?? '自定义 Agent';
+const configurationName = (stage, targets) => targetForStage(stage, targets)?.label ??
+  (stage.execution.configId ? '原配置' : '待选择配置');
 
 function placeAgentTooltip(tooltip, anchor, dialog, viewport) {
   const bounds = dialog.getBoundingClientRect();
@@ -131,7 +134,7 @@ function drawGraph(canvas, layout, edges, activeId, wire) {
 
 export function createStageGraph(React, { defaultModel, providerLabel, agentMemoryLabel, pluginTemplateLabel }) {
   const h = React.createElement;
-  return function StageGraph({ stages, edges, active, onSelect, onMove, onAdd, onConnect, moduleCatalog, disabled = false }) {
+  return function StageGraph({ stages, edges, active, onSelect, onMove, onAdd, onConnect, moduleCatalog, targets, disabled = false }) {
     const graphId = React.useId();
     const viewport = React.useRef(null);
     const board = React.useRef(null);
@@ -330,13 +333,17 @@ export function createStageGraph(React, { defaultModel, providerLabel, agentMemo
 
     function renderAgentDetails() {
       if (!detailDialog) return null;
-      const { provider, model, agent } = detailStage;
+      const { provider, model, agent, execution } = detailStage;
       const servers = (agent?.mcpServers ?? []).map(({ id }) => id);
       const templates = (agent?.plugins ?? []).map((template) => pluginTemplateLabel(template, moduleCatalog));
       const hasResources = servers.length > 0 || templates.length > 0;
       return createPortal(h('div', { ref: tooltip, id: tooltipId, role: 'tooltip', className: 'vc-workflow-agent-tooltip' },
-        h('strong', null, agentName(detailStage)),
+        h('strong', null, execution ? nodeName(detailStage) : agentName(detailStage)),
         h('dl', null,
+          execution && h(React.Fragment, null,
+            h('dt', null, '执行位置'), h('dd', null, executionLocations[execution.location]),
+            h('dt', null, '执行配置'), h('dd', null, configurationName(detailStage, targets)),
+            h('dt', null, '阶段上下文'), h('dd', null, executionContexts[execution.context])),
           h('dt', null, '执行工具'), h('dd', null, providerLabel(provider)),
           h('dt', null, '模型'), h('dd', null, model || defaultModel(provider)),
           hasResources && h(React.Fragment, null,
@@ -370,7 +377,10 @@ export function createStageGraph(React, { defaultModel, providerLabel, agentMemo
       h('canvas', { ref: canvas, className: 'vc-workflow-wires', 'aria-hidden': true }),
       h('ol', { className: 'vc-workflow-graph-list', 'aria-label': '工作流阶段' }, stages.map((stage, index) => {
         const name = nodeName(stage);
-        const agent = agentName(stage);
+        const { execution } = stage;
+        const agent = execution ? configurationName(stage, targets) : agentName(stage);
+        const context = execution ? `${executionLocations[execution.location]} · ${execution.context === 'blind' ? '盲审' : '独立'}`
+          : agentMemoryLabel(stage.agent);
         const providerId = `${graphId}-${stage.id}-provider`;
         const agentId = `${graphId}-${stage.id}-agent`;
         const memoryId = `${graphId}-${stage.id}-memory`;
@@ -425,7 +435,7 @@ export function createStageGraph(React, { defaultModel, providerLabel, agentMemo
           h('span', { id: providerId, className: 'vc-workflow-node-provider', role: 'img', 'aria-label': providerLabel(stage.provider) },
             menuIcon(h, stage.provider === 'claude' ? 'claude-sdk' : stage.provider)),
           h('span', { id: agentId, className: 'vc-workflow-node-agent-name' }, agent)),
-        h('span', { id: memoryId, className: 'vc-workflow-node-memory', 'data-memory': stage.agent?.memory }, agentMemoryLabel(stage.agent))),
+        h('span', { id: memoryId, className: 'vc-workflow-node-memory', 'data-memory': execution ? 'isolated' : stage.agent?.memory }, context)),
         port(stage, index, true), port(stage, index, false));
       })))), renderAgentDetails());
   };

@@ -1,4 +1,7 @@
 import { exactFields, maxWorkflowChatLength, validateWorkflowDraft, validateWorkflowProjectId, workflowText, workflowUuid } from './state.mjs';
+import { mixedStagePrompt, validateMixedInput, validateMixedTask } from './mixed-context.mjs';
+
+export { validateMixedInput } from './mixed-context.mjs';
 
 const targetIdPattern = /^[a-f0-9]{64}$/;
 const activeStates = new Set(['pending', 'running', 'stopping']);
@@ -17,6 +20,19 @@ const rejectedBeforeSend = new Set([
   'runtime_unavailable', 'auth_required', 'invalid_profile', 'profile_not_found', 'session_conflict', 'browse_only',
 ]);
 const rejectedBeforeStop = new Set(['bridge_not_ready', 'relay_required', 'workbench_browse_only', 'target_changed']);
+const mixedPreflightRejected = new Set([
+  'mixed_preflight', 'mixed_route_changed', 'auth_required', 'relay_required', 'workbench_browse_only', 'browse_only',
+  'runtime_unavailable', 'workflow_stage_changed', 'workflow_file_access_changed', 'workflow_modules_unavailable',
+  'workflow_attachment_unavailable',
+]);
+const mixedReceiptBlocked = new Map([
+  ['auth_required', '账号未通过校验'],
+  ['rate_limited', '模型服务达到速率限制'],
+  ['quota_exceeded', '模型额度不足'],
+  ['relay_required', 'VPS 出口或 SSH 中继检查未通过'],
+  ['egress_mismatch', 'VPS 出口与配置不符'],
+  ['execution_unclassified', '执行端返回失败，无法确认具体原因'],
+]);
 
 function validTarget(value) {
   return typeof value === 'string' && targetIdPattern.test(value);
@@ -60,19 +76,23 @@ function validateRun(value) {
   const invalid = () => new Error('保存的工作流运行记录无效。');
   const version = value?.version;
   const legacy = version === 1;
-  const scoped = version === 4;
+  const mixed = version === 5;
+  const scoped = version === 4 || mixed;
   const withProject = version === 3 || scoped;
   const fields = ['version', 'id', 'workflow', 'task', 'phase', 'rows', 'message'];
   if (!legacy) fields.push('stopRequested');
   if (withProject) fields.push('projectId');
   if (scoped) fields.push('workflowId');
-  if (![1, 2, 3, 4].includes(version) || !exactFields(value, ...fields) || (!legacy && typeof value.stopRequested !== 'boolean') ||
+  if (mixed) fields.push('mixed');
+  if (![1, 2, 3, 4, 5].includes(version) || !exactFields(value, ...fields) || (!legacy && typeof value.stopRequested !== 'boolean') ||
       (scoped && value.workflowId !== null && !workflowUuid(value.workflowId)) ||
+      (mixed && value.workflowId === null) ||
       !workflowUuid(value.id) || !phases.has(value.phase) || !Array.isArray(value.rows) ||
       typeof value.message !== 'string' || value.message.length > 500) throw invalid();
   if (legacy !== exactFields(value.workflow, 'name', 'stages')) throw invalid();
   const workflow = validateWorkflowDraft(value.workflow);
   if (workflow.stages.length !== value.rows.length || (!withProject && workflow.stages.some(({ agent }) => agent)) ||
+      (!mixed && workflow.stages.some(({ execution }) => execution)) ||
       ((!scoped || value.workflowId === null) && workflow.stages.some(({ fileAccess }) => fileAccess))) throw invalid();
   const ids = new Set([value.id.toLowerCase()]);
   const rows = Array.from(value.rows, (row, i) => {
@@ -93,6 +113,10 @@ function validateRun(value) {
     phase: value.phase, rows, message: value.message, stopRequested: value.stopRequested };
   if (withProject) result.projectId = validateWorkflowProjectId(value.projectId);
   if (scoped) result.workflowId = value.workflowId?.toLowerCase() ?? null;
+  if (mixed) {
+    result.mixed = validateMixedInput(workflow, value.mixed);
+    validateMixedTask(workflow, result.task);
+  }
   if (legacy) {
     const open = rows.findIndex((row) => row.state !== 'complete');
     const state = rows[open]?.state;
@@ -126,6 +150,12 @@ export function readWorkflowRun(raw) {
   return validateRun(value);
 }
 
+export function readLegacyWorkflowRun(raw) {
+  const run = readWorkflowRun(raw);
+  if (run?.version === 5) throw new Error('混合工作流须从桌面主机的专用回执读取。');
+  return run;
+}
+
 function boundedText(value, limit) {
   if (value.length <= limit) return value;
   if (limit === 0) return '';
@@ -133,6 +163,7 @@ function boundedText(value, limit) {
 }
 
 export function workflowStagePrompt(run, index, pluginInstructions = '', scoped = false) {
+  if (run.version === 5) return mixedStagePrompt(run, index, dependencies(run.workflow)[index], pluginInstructions, scoped);
   const stage = run.workflow.stages[index];
   const prompt = `工作流步骤 ${index + 1} / ${run.rows.length}\n任务\n${run.task}\n\n当前步骤指令\n${stage.instruction}` +
     (pluginInstructions ? `\n\n${pluginInstructions}` : '') +
@@ -265,16 +296,17 @@ export function createWorkflowRunner({ initialRun = null, resolveRoute, readMode
     });
   }
 
-  async function routeFor(stage, signal, dispatch, pinned = null) {
+  async function routeFor(stage, signal, dispatch, pinned = null, routePin = null) {
     let route;
     try {
       signal.throwIfAborted();
-      route = await abortable(resolveRoute(stage.provider, signal, { dispatch, pinned }), signal);
+      route = await abortable(resolveRoute(stage.provider, signal, { dispatch, pinned, ...(routePin === null ? {} : { stage, routePin }) }), signal);
     } catch (error) {
       signal.throwIfAborted();
       throw new RouteError(`无法确认步骤「${stage.name}」的连接。`, { cause: error });
     }
-    if (!validTarget(route?.targetId) || route.settings?.provider !== stage.provider || (pinned !== null && route.targetId !== pinned)) {
+    if (!validTarget(route?.targetId) || route.settings?.provider !== stage.provider ||
+        (pinned !== null && route.targetId !== pinned) || (routePin !== null && route.routePin !== routePin)) {
       throw routeUnavailable(stage);
     }
     return route;
@@ -304,14 +336,14 @@ export function createWorkflowRunner({ initialRun = null, resolveRoute, readMode
     return abortable(rpc(op, { settings: route.settings, targetId: row.targetId, sessionId: row.sessionId, ...payload }, signal), signal);
   }
 
-  async function observe(index, op, signal, sendRoute = null) {
+  async function observe(index, op, signal, sendRoute = null, sendPrompt = null) {
     const stage = run.workflow.stages[index];
     const row = run.rows[index];
     let turn;
     let problem = '无法确认原步骤记录。请继续查询原步骤。';
     try {
-      const route = sendRoute ?? await routeFor(stage, signal, false, row.targetId);
-      const payload = op === 'send' ? { turnId: row.turnId, prompt: workflowStagePrompt(run, index),
+      const route = sendRoute ?? await routeFor(stage, signal, false, row.targetId, run.mixed?.routePins[index]);
+      const payload = op === 'send' ? { turnId: row.turnId, prompt: sendPrompt ?? workflowStagePrompt(run, index),
         ...(stage.model ? { model: stage.model } : {}), workflowStage: { runId: run.id } } : {};
       turn = matchingTurn(await request(op, route, row, signal, payload), row);
       if (op === 'get' && turn && (turn.state === 'unknown' || activeStates.has(turn.state))) {
@@ -319,6 +351,13 @@ export function createWorkflowRunner({ initialRun = null, resolveRoute, readMode
       }
     } catch (error) {
       signal.throwIfAborted();
+      if (op === 'send' && run.version === 5 && (mixedPreflightRejected.has(error?.code) ||
+          (error?.beforeDispatch === true && mixedReceiptBlocked.has(error?.code)))) {
+        // Only a confirmed pre-dispatch rejection permits a retry with the original receipt IDs.
+        const reason = rejectionMessage(error);
+        await saveRow(index, { state: 'waiting' }, reason);
+        return reason;
+      }
       if (op === 'send' && rejectedBeforeSend.has(error?.code)) {
         await saveRow(index, { state: 'failed' }, rejectionMessage(error));
         return;
@@ -329,6 +368,14 @@ export function createWorkflowRunner({ initialRun = null, resolveRoute, readMode
     if (!turn || turn.state === 'unknown') {
       await saveRow(index, { state: run.stopRequested ? row.state : 'unknown' }, problem);
       return problem;
+    }
+    const receiptBlock = run.version === 5 && turn.state === 'failed' &&
+      mixedReceiptBlocked.get(turn.errorCode ?? turn.error?.code ?? turn.code);
+    if (receiptBlock && !run.stopRequested) {
+      // The original turn exists. Preserve the binding and query it on resume, never replay it.
+      const reason = receiptBlock + '。请核对原步骤回执，或停止本次运行。';
+      await saveRow(index, { state: 'unknown', reply: boundedText(turn.reply, maxWorkflowChatLength) }, reason);
+      return reason;
     }
     const state = run.stopRequested && !terminalStates.has(turn.state) ? row.state : turn.state;
     await saveRow(index, { state, reply: boundedText(turn.reply, maxWorkflowChatLength) },
@@ -341,8 +388,10 @@ export function createWorkflowRunner({ initialRun = null, resolveRoute, readMode
     if (row.state === 'waiting') {
       const stage = run.workflow.stages[index];
       let route;
+      let prompt;
       try {
-        route = await routeFor(stage, signal, true, row.targetId);
+        if (run.version === 5) prompt = workflowStagePrompt(run, index);
+        route = await routeFor(stage, signal, true, row.targetId, run.mixed?.routePins[index]);
         await checkModel(stage, route, signal);
         if (!dispatchAllowed(route)) throw routeUnavailable(stage);
       } catch (error) {
@@ -356,7 +405,7 @@ export function createWorkflowRunner({ initialRun = null, resolveRoute, readMode
         await saveRow(index, { state: 'waiting' });
         return signal.aborted ? pauseMessage : routeUnavailable(stage).message;
       }
-      const problem = await observe(index, 'send', signal, route);
+      const problem = await observe(index, 'send', signal, route, prompt);
       if (problem) return problem;
     } else {
       const problem = await observe(index, row.state === 'stopping' ? 'refresh' : 'get', signal);
@@ -416,7 +465,7 @@ export function createWorkflowRunner({ initialRun = null, resolveRoute, readMode
     if (row.state === 'stopping') return observe(index, 'refresh', signal);
     let route;
     try {
-      route = await routeFor(run.workflow.stages[index], signal, false, row.targetId);
+      route = await routeFor(run.workflow.stages[index], signal, false, row.targetId, run.mixed?.routePins[index]);
     } catch (error) {
       signal.throwIfAborted();
       return error.message;
@@ -488,20 +537,30 @@ export function createWorkflowRunner({ initialRun = null, resolveRoute, readMode
 
   notify();
   return {
-    async start(draft, input, projectId = null, expectedTarget = null, workflowId = null) {
+    async start(draft, input, projectId = null, expectedTarget = null, workflowId = null, mixed = null) {
       if (run && !terminalStates.has(run.phase)) throw new Error('请先处理尚未结束的工作流运行。');
       const workflow = validateWorkflowDraft(draft);
       const task = workflowText(input, 4000, '运行任务');
+      if (mixed === null && workflow.stages.some(({ execution }) => execution)) {
+        throw new Error('显式绑定执行配置的工作流须从混合工作流入口启动。');
+      }
+      if (mixed !== null) {
+        if (!workflowUuid(workflowId) || expectedTarget !== null) throw new Error('混合工作流须从保存的版本启动。');
+        mixed = validateMixedInput(workflow, mixed);
+        validateMixedTask(workflow, task);
+      }
       if ((workflowId !== null && !workflowUuid(workflowId)) ||
           (workflowId === null && workflow.stages.some(({ fileAccess }) => fileAccess))) {
         throw new Error('请先保存文件授权，再运行工作流。');
       }
-      const metadata = { version: 4, projectId: validateWorkflowProjectId(projectId), workflowId: workflowId?.toLowerCase() ?? null };
+      const metadata = { version: mixed === null ? 4 : 5, projectId: validateWorkflowProjectId(projectId),
+        workflowId: workflowId?.toLowerCase() ?? null, ...(mixed === null ? {} : { mixed }) };
       return begin(async (signal) => {
         const routes = [];
-        for (const stage of workflow.stages) {
+        for (const [index, stage] of workflow.stages.entries()) {
           const fileTarget = stage.fileAccess?.targetId;
-          const route = await routeFor(stage, signal, true, fileTarget ?? expectedTarget ?? stage.agent?.mcpServers[0]?.targetId ?? null);
+          const route = await routeFor(stage, signal, true, fileTarget ?? expectedTarget ?? stage.agent?.mcpServers[0]?.targetId ?? null,
+            mixed?.routePins[index]);
           if ((expectedTarget && expectedTarget !== route.targetId) ||
               stage.agent?.mcpServers.some((server) => server.targetId !== route.targetId)) throw routeUnavailable(stage);
           await checkModel(stage, route, signal);
@@ -546,6 +605,7 @@ export function createWorkflowRunner({ initialRun = null, resolveRoute, readMode
       disposed = true;
       active?.controller.abort();
       control?.controller.abort();
+      return Promise.allSettled([active?.done, control?.done, writes]);
     },
   };
 }

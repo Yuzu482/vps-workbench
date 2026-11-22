@@ -10,7 +10,7 @@ import {
   readMemoryExtractionChange,
 } from '../extensions/state.mjs';
 import { readWorkflows, workflowKey, workflowRunKey } from '../workflow-engine/state.mjs';
-import { readWorkflowRun } from '../workflow-engine/runner.mjs';
+import { readLegacyWorkflowRun } from '../workflow-engine/runner.mjs';
 import { withWorkspaceAccess } from './access.mjs';
 import { changedWorkflowFileAccess, changedWorkflowStage, prepareWorkflowStage } from './workflow-stage.mjs';
 
@@ -92,7 +92,7 @@ function replaceTurnMemory(body, memory, mcpServers) {
 }
 
 export function createProjectMemoryBridge({ data, backend, extractor, access, onChange = () => {}, onError = () => {},
-  pollInterval = 2000, pollLimit = 80, readRun = () => readWorkflowRun(data.preference(workflowRunKey) ?? null),
+  pollInterval = 2000, pollLimit = 80, readRun = () => readLegacyWorkflowRun(data.preference(workflowRunKey) ?? null),
   readSavedWorkflow = (id) => readWorkflows(data.preference(workflowKey) ?? null).find((workflow) => workflow.id === id),
   journalKey = memoryJournalKey, prepareStage = prepareWorkflowStage, locationName = 'VPS', scopedPersonal = false }) {
   let journal;
@@ -338,7 +338,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
       if (!result) throw new Error('memory_extraction_target_unavailable');
       return result;
     },
-    async request(incoming, { isLive = () => true } = {}) {
+    async request(incoming, { isLive = () => true, workflowRun = readRun, pinnedRelay } = {}) {
       if (Object.hasOwn(incoming, 'workflowFiles')) return changedWorkflowStage;
       let { projectMemory, workflowStage, ...body } = incoming;
       let workflow;
@@ -346,7 +346,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
       if (Object.hasOwn(incoming, 'workflowStage')) {
         if (!canExecute()) return disabled;
         if (!isLive() || projectMemory !== undefined) return changedWorkflowStage;
-        workflow = prepareStage(incoming, workflowStage, readRun, state(), isProject, readSavedWorkflow);
+        workflow = prepareStage(incoming, workflowStage, workflowRun, state(), isProject, readSavedWorkflow);
         if (!workflow.ok) return workflow;
         if (access().workspace === 'isolated' && workflow.fileAccess?.paths.length) return changedWorkflowFileAccess;
         if (workflow.fileAccess?.attachments.length) {
@@ -447,7 +447,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
         }
       }
       if (workflow) {
-        const latest = prepareStage(incoming, workflowStage, readRun, state(), isProject, readSavedWorkflow);
+        const latest = prepareStage(incoming, workflowStage, workflowRun, state(), isProject, readSavedWorkflow);
         const stillBound = latest.ok && latest.prompt === workflow.prompt && latest.memory === workflow.memory &&
           latest.projectId === workflow.projectId &&
            JSON.stringify(latest.fileAccess) === JSON.stringify(workflow.fileAccess) &&
@@ -466,7 +466,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
         body = withWorkspaceAccess(body, access());
         current = true;
       }
-      const packet = await backend.request(body, { current });
+      const packet = await backend.request(body, { current, ...(pinnedRelay !== undefined && { pinnedRelay }) });
       if (staged && packet?.ok === false && rejectedBeforeSend.has(packet.code)) await settle(staged);
       if (['send', 'get', 'refresh'].includes(body.op)) observe(body, packet);
       return packet;

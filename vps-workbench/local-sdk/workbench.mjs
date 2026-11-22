@@ -9,7 +9,7 @@ import { canonicalLocalDirectory } from '../desktop/codex-runtime.mjs';
 import { readWorkflowArtifacts } from '../desktop/workflow-artifacts.mjs';
 import { changedWorkflowFileAccess, changedWorkflowStage, prepareWorkflowStage } from '../desktop/workflow-stage.mjs';
 import { conversationIsolated, extensionPreferenceKey, extensionsForTurn, readExtensions } from '../extensions/state.mjs';
-import { readWorkflowRun } from '../workflow-engine/runner.mjs';
+import { readLegacyWorkflowRun } from '../workflow-engine/runner.mjs';
 import { exactFields, localWorkflowRunKey, maxWorkflowAttachmentBytes, readWorkflows, workflowKey, workflowUuid } from '../workflow-engine/state.mjs';
 import { localBackends, usesLocalControls } from './providers.mjs';
 
@@ -145,7 +145,7 @@ const designInstructions = [
 ].join('\n');
 
 export function createLocalWorkbench({ service, runtimeAvailable, access, data, backend = 'codex',
-  readRun = () => readWorkflowRun(data.preference(localWorkflowRunKey) ?? null),
+  readRun = () => readLegacyWorkflowRun(data.preference(localWorkflowRunKey) ?? null),
   readSavedWorkflow = (id) => readWorkflows(data.preference(workflowKey) ?? null).find((workflow) => workflow.id === id),
   onChange, onError, pollInterval }) {
   const allowed = () => access().mode === 'execute';
@@ -157,9 +157,9 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data, 
   const authRequired = () => ({ ok: false, code: 'auth_required', message: `请先核对本机 ${label} 的账号配置。` });
   const providerFeedback = (value) => backend !== 'codex' && value?.message ? { ...value,
     message: value.code === 'auth_required' ? authRequired().message : value.message.replaceAll('Codex', label) } : value;
-  const workflowSession = (body) => {
+  const workflowSession = (body, workflowRun = readRun) => {
     try {
-      return readRun()?.rows.some(({ targetId, sessionId, turnId }) => targetId === body.targetId &&
+      return workflowRun()?.rows.some(({ targetId, sessionId, turnId }) => targetId === body.targetId &&
         sessionId === body.sessionId && (body.turnId === undefined || turnId === body.turnId)) === true;
     } catch { return false; }
   };
@@ -224,7 +224,8 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data, 
       });
       function currentStage() {
         if (!original?.incoming.workflowStage) return changedWorkflowStage;
-        const latest = prepareWorkflowStage(original.incoming, original.incoming.workflowStage, readRun, extensionState(),
+        if (!original.isLive()) return changedWorkflowStage;
+        const latest = prepareWorkflowStage(original.incoming, original.incoming.workflowStage, original.workflowRun, extensionState(),
           (id) => data.projects().some(({ workspaceId }) => workspaceId === id), readSavedWorkflow, false,
           ['submitted', 'pending', 'running']);
         if (!latest.ok) return latest;
@@ -304,8 +305,8 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data, 
     return result;
   }
 
-  async function artifact(request) {
-    const packet = await dispatch({ ...request, op: 'get', turnId: undefined });
+  async function artifact(request, workflowRun = readRun) {
+    const packet = await dispatch({ ...request, op: 'get', turnId: undefined }, workflowSession(request, workflowRun));
     const reply = packet.session?.turns.find(({ id }) => id === request.turnId)?.reply;
     if (!reply) return { ok: true, files: [], truncated: false };
     const path = '阶段结果.md';
@@ -326,12 +327,15 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data, 
   });
 
   return {
-    async request(body) {
+    async request(body, { workflowRun = readRun, isLive = () => true } = {}) {
       if (!validRequest(body, backend)) return bad;
       if (body.op === 'workflow-artifacts') return readWorkflowArtifacts(body,
-        { readRun, backend: { request: artifact } });
+        { readRun: workflowRun, backend: { request: (packet) => artifact(packet, workflowRun) }, isAllowed: isLive });
       if (['send', 'stop', 'steer', 'approval'].includes(body.op) && !allowed()) return denied;
-      if (body.op !== 'send') return memory && !['steer', 'approval'].includes(body.op) ? memory.request(body) : dispatch(body);
+      if (body.op !== 'send') {
+        if (workflowRun !== readRun) return dispatch(body, workflowSession(body, workflowRun));
+        return memory && !['steer', 'approval'].includes(body.op) ? memory.request(body) : dispatch(body);
+      }
       if (!(typeof runtimeAvailable === 'function' ? runtimeAvailable() : runtimeAvailable)) return unavailable();
       if (!service.status().credentialConfigured) return authRequired();
       const profile = profileFor(body.settings);
@@ -348,8 +352,8 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data, 
         const configured = extensionsForTurn(state, { targetId: body.targetId, projectId, isolated });
         if (configured) incoming.extensions = configured;
       }
-      const result = Promise.resolve().then(() => memory ? memory.request(incoming) : dispatch(incoming));
-      requests.set(body.turnId, { signature, result, incoming });
+      const result = Promise.resolve().then(() => memory ? memory.request(incoming, { workflowRun, isLive }) : dispatch(incoming));
+      requests.set(body.turnId, { signature, result, incoming, workflowRun, isLive });
       try { return await result; }
       finally { requests.delete(body.turnId); }
     },

@@ -5,12 +5,12 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { memoryJournalKey, openAppData } from './data.mjs';
 import { extensionPreferenceKey } from '../extensions/state.mjs';
-import { workflowKey } from '../workflow-engine/state.mjs';
+import { localWorkflowRunKey, mixedWorkflowRunKey, workflowKey, workflowRunKey } from '../workflow-engine/state.mjs';
 import { agentPresetKey, legacyAgentPresetKey } from '../agent-presets/state.mjs';
 import { accessPreference, readAccess, validAccess } from './access.mjs';
 import { importWorkbenchSnapshot } from './migrate.mjs';
 import { agyHashVariable, agyPathVariable, canonicalLocalDirectory, claudeKeyVariable, localCredentialVariable,
-  localMemoryJournalKey, openLocalCredentials, startWorkbenchServer } from './server.mjs';
+  localMemoryJournalKey, openLocalCredentials, readLegacyWorkflowRun, startWorkbenchServer } from './server.mjs';
 
 const localApiKey = process.env[localCredentialVariable];
 const localAgentOptions = { claudeKey: process.env[claudeKeyVariable], agyPath: process.env[agyPathVariable], agyHash: process.env[agyHashVariable] };
@@ -186,14 +186,19 @@ async function start() {
   ipcMain.handle('workbench:set-preference', (event, key, value) => {
     trustedRenderer(event);
     if ([accessPreference, extensionPreferenceKey, memoryJournalKey, localMemoryJournalKey, workflowKey, agentPresetKey,
-      legacyAgentPresetKey].includes(key)) {
+      legacyAgentPresetKey, mixedWorkflowRunKey].includes(key)) {
       throw new Error('use_dedicated_settings');
     }
+    if ([localWorkflowRunKey, workflowRunKey].includes(key)) readLegacyWorkflowRun(value);
     return data.setPreference(key, value);
   });
   ipcMain.handle('workbench:workflows', (event, change) => {
     trustedRenderer(event);
     return data.changeWorkflows(change);
+  });
+  ipcMain.handle('workbench:mixed-workflow', (event, body) => {
+    trustedRenderer(event);
+    return runtime.requestMixedWorkflow(body);
   });
   ipcMain.handle('workbench:workflow-attachments', (event, files) => {
     trustedRenderer(event);

@@ -8,7 +8,7 @@ const unreadable = { ok: false, code: 'workflow_output_unavailable', message: 'æ
 const maxPreviewBytes = 1024 * 1024;
 
 function matchesRun(body, run) {
-  if (run?.version !== 4 || run.id !== body.workflowRunId || !validWorkflowArtifactQuery(body)) return false;
+  if (![4, 5].includes(run?.version) || run.id !== body.workflowRunId || !validWorkflowArtifactQuery(body)) return false;
   const index = run.rows.findIndex(({ state, targetId, sessionId, turnId }) =>
     finished.has(state) && targetId === body.targetId && sessionId === body.sessionId && turnId === body.turnId);
   return index >= 0 && run.workflow.stages[index].provider === body.settings?.provider;
