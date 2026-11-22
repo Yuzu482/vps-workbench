@@ -24,6 +24,7 @@ import { createStreamingMarkdownParser, stabilizeStreamingRecord } from './strea
 import { useWorkflowControls } from './workflow-controls.mjs';
 import { SetupGuide } from './setup-guide.mjs';
 import { setupConnectionKey } from './setup-state.mjs';
+import { VpsConnectionChecks, useVpsConnectionChecks } from './connection-panel.mjs';
 import { createLocalWorkspace } from '../local-ui/index.mjs';
 
 const h = React.createElement;
@@ -144,6 +145,7 @@ try {
     editText: native.edit, saveConversationPreference: saveLocalPreference, saveModelParameters: saveLocalPreference,
     ExtensionSettings, extensionsForTurn, automaticMemoryPolicy, conversationIsolated, projectMemoryNotes,
     AgentPresetSettings, WorkflowPanel, useWorkflows: useWorkflowControls, SetupGuide, setupConnectionKey,
+    VpsConnectionChecks, useVpsConnectionChecks,
     onThemeReveal: (element, progress) => element.dispatchEvent(
       new CustomEvent('workbench:theme-reveal', { detail: progress })),
   });
@@ -240,7 +242,7 @@ try {
           saveRun: saveWorkflowRun, saveAttachments: saveWorkflowAttachments, error: workflowError } }) : null,
       visited.has('local-sdk') ? h(LocalWorkspace, { native, active: !sshVisible, access, accessPending, changeAccess,
         newConversation: localNew, onNewChat: startChat, defaultLocation: newLocation,
-        appearance, sendKey: appearance.sendKey }) : null);
+        appearance, sendKey: appearance.sendKey, savePreference: saveLocalPreference }) : null);
   }
   root.render(h(DesktopApp));
 } catch {

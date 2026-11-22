@@ -338,8 +338,8 @@ input, button, textarea, select { font: inherit; }
 [data-vps-chat] .vc-setup-scroll { display: grid; align-content: start; gap: 15px; }
 [data-vps-chat] .vc-setup-group { display: grid; gap: 7px; min-width: 0; }
 [data-vps-chat] .vc-setup-overview { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
-[data-vps-chat] .vc-setup-overview h3 { margin: 0; font-size: 14px; }
-[data-vps-chat] .vc-setup-overview p, [data-vps-chat] .vc-setup-example p, [data-vps-chat] .vc-setup-step p {
+[data-vps-chat] .vc-setup-overview :is(h3, h4) { margin: 0; font-size: 14px; }
+[data-vps-chat] .vc-setup-overview p, [data-vps-chat] .vc-setup-example p, :is([data-vps-chat], [data-local-sdk]) .vc-setup-step p {
   margin: 0; font-size: 13px; color: var(--vc-muted); overflow-wrap: anywhere;
 }
 [data-vps-chat] .vc-setup-overview span { color: var(--vc-accent); font-weight: 650; white-space: nowrap; }
@@ -353,25 +353,27 @@ input, button, textarea, select { font: inherit; }
 }
 [data-vps-chat] .vc-setup-provider[data-picked=true] { background: var(--vc-tint); border-color: var(--vc-accent); }
 [data-vps-chat] .vc-setup-provider input { margin: 0; accent-color: var(--vc-accent); }
-[data-vps-chat] .vc-setup-steps { display: grid; gap: 7px; list-style: none; padding: 0; margin: 0; }
-[data-vps-chat] .vc-setup-step {
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-steps { display: grid; gap: 7px; list-style: none; padding: 0; margin: 0; }
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-step {
   display: grid; align-content: start; gap: 6px; padding: 9px 11px;
   border: 1px solid var(--vc-line); border-radius: 10px; background: var(--vc-canvas);
 }
-[data-vps-chat] .vc-setup-step-header { display: flex; align-items: center; gap: 8px; min-height: 20px; font-size: 13px; }
-[data-vps-chat] .vc-setup-marker {
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-step-header { display: flex; align-items: center; gap: 8px; min-height: 20px; font-size: 13px; }
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-marker {
   display: grid; place-items: center; width: 16px; height: 16px; flex: none;
   border: 1px solid var(--vc-line); border-radius: 50%; color: inherit; font-size: 11px;
 }
-[data-vps-chat] .vc-setup-status { margin-inline-start: auto; font-size: 12px; color: var(--vc-muted); }
-[data-vps-chat] .vc-setup-step[data-state=checking] { border-color: var(--vc-accent); }
-[data-vps-chat] .vc-setup-step[data-state=passed] :is(.vc-setup-marker, .vc-setup-status) { color: var(--vc-accent); }
-[data-vps-chat] .vc-setup-step:is([data-state=confirm], [data-state=failed]) { border-color: var(--vc-accent); }
-[data-vps-chat] .vc-setup-step[data-state=failed] .vc-setup-marker { background: var(--vc-accent); color: var(--vc-on-accent); }
-[data-vps-chat] .vc-setup-step > p { padding-inline-start: 24px; }
-[data-vps-chat] .vc-setup-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; margin-inline-start: 24px; }
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-status { margin-inline-start: auto; font-size: 12px; color: var(--vc-muted); white-space: nowrap; }
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-step:is([data-state=checking], [data-state=confirm], [data-state=failed]) { border-color: var(--vc-accent); }
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-step[data-state=passed] :is(.vc-setup-marker, .vc-setup-status) { color: var(--vc-accent); }
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-step[data-state=failed] .vc-setup-marker { background: var(--vc-accent); color: var(--vc-on-accent); }
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-step > p { padding-inline-start: 24px; }
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; margin-inline-start: 24px; }
+[data-vps-chat] .vc-connection-checks > .vc-setup-actions { margin-inline-start: 0; }
+[data-vps-chat] .vc-connection-checks { margin-block: 8px 13px; }
+[data-local-sdk] .local-connection-checks { margin-block: 8px 14px; }
 [data-vps-chat] .vc-setup-agent-actions { margin-inline-start: 0; }
-[data-vps-chat] .vc-setup-actions small, [data-vps-chat] .vc-setup-actions label { color: var(--vc-muted); font-size: 12px; }
+:is([data-vps-chat], [data-local-sdk]) .vc-setup-actions small, [data-vps-chat] .vc-setup-actions label { color: var(--vc-muted); font-size: 12px; }
 [data-vps-chat] .vc-setup-actions label { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
 [data-vps-chat] .vc-setup-actions select {
   max-width: 100%; min-height: 31px; padding: 3px 6px; color: var(--vc-ink); background: var(--vc-surface);

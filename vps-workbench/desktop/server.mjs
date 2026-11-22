@@ -8,6 +8,7 @@ import { createStandaloneSubscriptionHost, SUBSCRIPTION_PREFIX } from '../termin
 import { accessDenied, defaultAccess, permitsChat, permitsTerminal, withWorkspaceAccess } from './access.mjs';
 import { createProjectMemoryBridge } from './project-memory.mjs';
 import { readSetupPreset, setupConnectionKey } from './setup-state.mjs';
+import { runSetupTrial } from './setup-trial.mjs';
 import { readWorkflowRun } from '../workflow-engine/runner.mjs';
 import { workflowRunKey } from '../workflow-engine/state.mjs';
 import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
@@ -60,6 +61,9 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     extractor: makeBridge({ ...bridgeOptions, root: join(workbenchRoot, 'project-memory') }) }) : backend;
   const bridge = {
     request(body, options) {
+      if (body.op === 'setup-trial') {
+        return runSetupTrial(body, backend, () => permitsChat(access(), body.op) && (!options?.isLive || options.isLive()));
+      }
       if (data && body.op === 'workflow-artifacts') {
         return readWorkflowArtifacts(body, {
           readRun: () => readWorkflowRun(data.preference(workflowRunKey) ?? null), backend,

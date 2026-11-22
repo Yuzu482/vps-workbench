@@ -63,7 +63,7 @@ test('a fresh desktop connection diagnoses each setup step and runs the sample o
         reply = saved ? await readSetupPreset(saved, (settings) => fixture.chat({ op: 'list', settings })) : { ok: true, preset: null };
       } else if (packet.op === 'setup-check' && packet.kind === failure) {
         reply = { ok: false, code: `fixture_${failure}`, message: `检查失败 ${failure}` };
-      } else if (packet.op === 'models' && failure === 'model') {
+      } else if (packet.op === 'models' && failure === 'catalog') {
         reply = { ok: true, models: [] };
       } else reply = fixture.chat(packet);
       await route.fulfill({ status: 200, json: reply });
@@ -87,7 +87,7 @@ test('a fresh desktop connection diagnoses each setup step and runs the sample o
     assert.equal(await connect.isDisabled(), true);
     await guide.getByRole('checkbox', { name: /已核对/u }).check();
     await connect.click();
-    await step('SSH 连接').getByRole('alert').filter({ hasText: '检查失败 ssh' }).waitFor();
+    await step('SSH 连接与主机指纹').getByRole('alert').filter({ hasText: '检查失败 ssh' }).waitFor();
     assert.equal((await readPrefs())[setupConnectionKey], undefined);
     assert.equal(await sample.count(), 0);
 
@@ -98,9 +98,9 @@ test('a fresh desktop connection diagnoses each setup step and runs the sample o
     assert.deepEqual(JSON.parse((await readPrefs())[setupConnectionKey]), { settings, targetId });
     assert.equal(await sample.count(), 0);
 
-    failure = 'model';
+    failure = 'catalog';
     await runCheck.click();
-    await step('模型可用性').getByRole('alert').filter({ hasText: /未返回可选模型/u }).waitFor();
+    await step('模型目录').getByRole('alert').filter({ hasText: /未返回可选模型/u }).waitFor();
     assert.equal(await sample.count(), 0);
 
     failure = 'resources';
@@ -108,7 +108,7 @@ test('a fresh desktop connection diagnoses each setup step and runs the sample o
     await runCheck.click();
     await step('MCP 服务器').getByRole('alert').filter({ hasText: '检查失败 resources' }).waitFor();
     assert.deepEqual(packets.find(({ kind }) => kind === 'resources').mcpServers, [server.id]);
-    await guide.getByRole('region', { name: '基础接入检查', exact: true }).getByText('3 / 3 项通过', { exact: true }).waitFor();
+    await guide.getByRole('region', { name: '基础接入检查', exact: true }).getByText('4 / 4 项通过', { exact: true }).waitFor();
     assert.equal(await sample.isEnabled(), true);
 
     failure = '';

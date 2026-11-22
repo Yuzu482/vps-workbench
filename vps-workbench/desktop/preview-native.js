@@ -68,6 +68,11 @@
       return this.localSdkRequest({ ...config, op: 'register' });
     },
     async setPreference(name, value) {
+      if (name === 'dsh-vps-chat:setup-connection:v1') {
+        const response = await fetch('/__preview/connection', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ op: 'save-connection', value }) });
+        if (!response.ok) throw new Error('preview_connection_unavailable');
+      }
       if (name === 'dsh-vps-chat:workflow-run:v1' && value !== null) {
         const record = JSON.parse(value);
         const approvals = JSON.parse(state.preferences['dsh-vps-chat:workflows:v1'] ?? '[]');

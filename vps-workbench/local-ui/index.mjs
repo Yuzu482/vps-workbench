@@ -1,4 +1,7 @@
 import { localWorkspaceStyles } from './styles.mjs';
+import { ConnectionResult } from '../desktop/connection-panel.mjs';
+import { TrialActions, trialResult, useConnectionTrial } from '../desktop/connection-trial.mjs';
+import { trialPrompt, trialState } from '../desktop/setup-trial.mjs';
 
 const location = 'local-sdk';
 const backend = 'codex';
@@ -104,7 +107,7 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
 
   return function LocalWorkspace({
     native, active, access, accessPending, changeAccess, newConversation, sendKey, appearance,
-    onNewChat, defaultLocation,
+    onNewChat, defaultLocation, savePreference,
   }) {
     const [status, setStatus] = React.useState(null);
     const [statusError, setStatusError] = React.useState(false);
@@ -144,6 +147,18 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
     const session = record?.session;
     const draft = record?.draft ?? '';
     const browsing = access?.mode !== 'execute';
+    const trialTarget = profile && status?.runtimeAvailable && status.credentialConfigured && !statusError &&
+      { profileId: profile.id, targetId: profile.targetId, model: profile.model, effort: profile.effort };
+    const trial = useConnectionTrial({ storageKey: 'dsh-vps-chat:setup-trial:local-sdk:v1', savePreference,
+      async request(kind, { target: at, sessionId, turnId }) {
+        const packet = await native.localSdkRequest(requestBody({ ...at, sessionId },
+          kind === 'start' ? 'send' : 'refresh', { turnId, ...(kind === 'start' && { prompt: trialPrompt }) }));
+        if (packet?.ok !== true && ['auth_required', 'runtime_unavailable', 'invalid_directory', 'invalid_profile', 'browse_only']
+          .includes(packet?.code)) return 'failed';
+        return packet?.location === location && packet.targetId === at.targetId && packet.session?.profileId === at.profileId
+          ? trialState(packet, { sessionId, turnId }, 'completed') : 'unknown';
+      },
+    });
     const bound = Boolean(session || record?.history || record?.attempt);
     const runningTurn = session?.turns.findLast((turn) => pending.has(turn.state));
     const canSend = active && !accessPending && !browsing && profile && !statusError &&
@@ -531,8 +546,28 @@ export function createLocalWorkspace(React, { MarkdownReply, icon }) {
       h('div', { className: 'local-option-heading' },
         h('h2', { id: optionsId + '-title' }, '本机配置'),
         h(Button, { onClick: () => options.current.close() }, '关闭')),
-      h('p', { className: 'local-muted' }, statusLine, ' · ', h(Button, { disabled: statusBusy, onClick: () => void loadStatus() }, '刷新状态')),
-      h('p', { className: 'local-muted' }, '运行时和凭据状态来自本机配置。能否使用账户和网络以实际对话结果为准。'),
+      h(Button, { disabled: statusBusy, onClick: () => void loadStatus() }, statusBusy ? '检查中' : '测试本机配置'),
+      h('ol', { className: 'vc-setup-steps local-connection-checks' },
+        h(ConnectionResult, { id: 'runtime', label: '本机 SDK',
+          detail: '检查 Windows 上的 SDK 运行文件。', result: statusError
+            ? { state: 'failed', detail: '本机 SDK 状态读取失败。请重试。' } : status && {
+              state: status.runtimeAvailable ? 'passed' : 'failed',
+              detail: status.runtimeAvailable ? '已找到本机 Codex SDK 和运行文件。' : '当前安装缺少本机 Codex 运行文件。',
+            } }),
+        h(ConnectionResult, { id: 'account', label: '本机账号凭据',
+          detail: '检查本机进程的凭据配置。', result: status && !statusError ? {
+            state: status.credentialConfigured ? 'confirm' : 'failed',
+            detail: status.credentialConfigured ? '已配置本机 API 密钥，服务权限待试跑确认。' :
+              '请在启动工作台的本机环境中配置 VPS_WORKBENCH_LOCAL_CODEX_API_KEY。',
+          } : null }),
+        h(ConnectionResult, { id: 'model', label: '本机模型目录',
+          detail: '检查本机 SDK 支持的模型选项。', result: status && !statusError ? {
+            state: models.length ? 'passed' : 'failed',
+            detail: models.length ? `内置目录 · ${models.length} 个模型选项` : '当前本机 SDK 没有可选模型。',
+          } : null }),
+        h(ConnectionResult, { id: 'response', label: '实际模型响应', detail: '试跑使用所选配置的模型和本机网络。',
+          result: trialResult(trial, trialTarget) },
+        h(TrialActions, { trial, target: trialTarget, allowed: active && !browsing && !accessPending && !statusBusy }))),
       !bound && profiles?.length > 0 && h('label', null, '对话配置',
         h('select', { value: profile?.id ?? '',
           onChange: (event) => {

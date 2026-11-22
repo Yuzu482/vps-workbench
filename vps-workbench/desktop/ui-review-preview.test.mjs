@@ -7,6 +7,7 @@ import { readWorkflows, workflowKey } from '../workflow-engine/state.mjs';
 import { agentPresetKey, applyAgentPresetChange } from '../agent-presets/state.mjs';
 import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
 import { designExportMenu } from '../../remote-workbench/vps-chat/client/design-export-menu.js';
+import { setupConnectionKey } from './setup-state.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('../../dsh-terminal-workbench/client/browser-test/node_modules/playwright-core');
@@ -401,7 +402,7 @@ test('P4 keeps base failures blocking and runs the isolated sample despite optio
     if (packet.op === 'setup-check' && packet.kind === failure) {
       return route.fulfill({ json: { ok: false, code: `fixture_${failure}`, message: `夹具检查失败 ${failure}` } });
     }
-    if (packet.op === 'models' && failure === 'model') return route.fulfill({ json: { ok: true, models: [] } });
+    if (packet.op === 'models' && failure === 'catalog') return route.fulfill({ json: { ok: true, models: [] } });
     return route.continue();
   });
   await page.getByRole('button', { name: 'VPS 设置', exact: true }).click();
@@ -412,8 +413,9 @@ test('P4 keeps base failures blocking and runs the isolated sample despite optio
   const step = (region, name) => region.getByRole('listitem', { name, exact: true });
   const check = guide.getByRole('button', { name: /^(开始检查|重新检查)$/ });
   const example = guide.getByRole('button', { name: '运行示例工作流', exact: true });
-  for (const [kind, label, message] of [['ssh', 'SSH 连接', /夹具检查失败 ssh/], ['account', '账号登录', /夹具检查失败 account/],
-    ['model', '模型可用性', /未返回可选模型/]]) {
+  for (const [kind, label, message] of [['ssh', 'SSH 连接与主机指纹', /夹具检查失败 ssh/],
+    ['model', '预期 VPS 出口', /夹具检查失败 model/], ['account', '账号登录', /夹具检查失败 account/],
+    ['catalog', '模型目录', /未返回可选模型/]]) {
     failure = kind;
     await check.click();
     await step(base, label).getByRole('alert').getByText(message).waitFor();
@@ -424,7 +426,7 @@ test('P4 keeps base failures blocking and runs the isolated sample despite optio
   const selected = extras.getByLabel('检查额外 Agent');
   await selected.selectOption(mcpId);
   await check.click();
-  await base.getByText('3 / 3 项通过', { exact: true }).waitFor();
+  await base.getByText('4 / 4 项通过', { exact: true }).waitFor();
   await step(extras, 'MCP 服务器').getByRole('alert').getByText(/missing-fixture-mcp/).waitFor();
   await step(extras, '插件模板').getByText('已通过', { exact: true }).waitFor();
   assert.equal(await example.isEnabled(), true);
@@ -433,7 +435,7 @@ test('P4 keeps base failures blocking and runs the isolated sample despite optio
   assert.equal(await example.isEnabled(), true);
   await check.click();
   await step(extras, 'Agent 模型').getByRole('alert').getByText(/obsolete-agent-model/).waitFor();
-  await base.getByText('3 / 3 项通过', { exact: true }).waitFor();
+  await base.getByText('4 / 4 项通过', { exact: true }).waitFor();
   assert.equal(packets.filter(({ op }) => op === 'send').length, 0);
   await example.click();
   const workflow = page.getByRole('dialog', { name: '工作流', exact: true });
@@ -443,6 +445,122 @@ test('P4 keeps base failures blocking and runs the isolated sample despite optio
   assert.equal(sends.length, 2);
   assert.ok(sends.every((packet) => packet.settings.host === fixtureSettings.host && packet.settings.provider === 'codex' &&
     packet.targetId === targetId && packet.model === 'preview-codex' && !packet.extensions && !packet.projectMemory));
+});
+
+test('connection save, preflight and model trial report distinct evidence and keep the original VPS receipt', { timeout: 45_000 }, async (t) => {
+  const page = await openPreview(t);
+  const packets = [];
+  let failEgress = true;
+  let loseReply = true;
+  await page.route('**/dsh-vps-chat/api/rpc', async (route) => {
+    const packet = route.request().postDataJSON();
+    packets.push(packet);
+    if (packet.op === 'setup-check' && packet.kind === 'model' && failEgress) {
+      return route.fulfill({ json: { ok: false, code: 'setup_model_route', message: '夹具：预期出口未确认。' } });
+    }
+    if (packet.op === 'setup-trial' && packet.kind === 'start' && loseReply) {
+      loseReply = false;
+      const upstream = await route.fetch();
+      await upstream.dispose();
+      return route.abort();
+    }
+    return route.continue();
+  });
+  const settings = page.getByRole('dialog', { name: 'VPS 设置', exact: true });
+  async function open() {
+    await page.getByRole('button', { name: 'VPS 设置', exact: true }).click();
+    await settings.getByRole('button', { name: '连接', exact: true }).click();
+  }
+  const results = settings.getByRole('region', { name: 'VPS 连接检查', exact: true });
+  const testConnection = results.getByRole('button', { name: '测试连接', exact: true });
+  const step = (name) => results.getByRole('listitem', { name, exact: true });
+  const response = step('实际模型响应');
+  const launch = response.getByRole('button', { name: '试跑模型', exact: true });
+  const field = settings.getByLabel('SSH 私钥文件路径', { exact: true });
+  const save = settings.getByRole('button', { name: '保存连接配置', exact: true });
+
+  await open();
+  await field.fill('C:/Preview/replacement-key');
+  await settings.getByText('连接配置未保存', { exact: true }).waitFor();
+  assert.equal(await testConnection.isDisabled(), true);
+  await save.click();
+  await settings.getByText('连接配置已保存', { exact: true }).waitFor();
+  assert.equal(packets.some(({ op }) => op === 'setup-check' || op === 'setup-trial' || op === 'send'), false);
+  await response.getByText('未试跑', { exact: true }).waitFor();
+  assert.equal(await launch.isDisabled(), true);
+
+  await testConnection.click();
+  await step('预期 VPS 出口').getByRole('alert').filter({ hasText: '预期出口未确认' }).waitFor();
+  await step('SSH 连接与主机指纹').getByText('已通过', { exact: true }).waitFor();
+  await step('账号登录').getByText('待检查', { exact: true }).waitFor();
+  await step('预期 VPS 出口').getByRole('button', { name: '核对预期出口', exact: true }).click();
+  assert.equal(await settings.getByLabel('预期 VPS 出口 IPv4', { exact: true })
+    .evaluate((node) => node === document.activeElement), true);
+
+  failEgress = false;
+  await testConnection.click();
+  await results.getByText('预检通过', { exact: true }).waitFor();
+  for (const name of ['账号登录', '模型目录']) await step(name).getByText('已通过', { exact: true }).waitFor();
+  assert.equal(packets.some(({ op }) => op === 'setup-trial' || op === 'send'), false);
+  await launch.press('Enter');
+  await response.getByText('试跑结果待确认。请查询原回执。', { exact: true }).waitFor();
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByText('本机保存的 VPS · VPS 已配置', { exact: true }).waitFor();
+  await open();
+  assert.equal(await field.inputValue(), 'C:/Preview/replacement-key');
+  await response.getByRole('button', { name: '查询原回执', exact: true }).click();
+  await response.getByRole('button', { name: '试跑模型', exact: true }).waitFor();
+  await testConnection.click();
+  await response.getByText('已通过', { exact: true }).waitFor();
+  const starts = packets.filter(({ op, kind }) => op === 'setup-trial' && kind === 'start');
+  const inspections = packets.filter(({ op, kind }) => op === 'setup-trial' && kind === 'inspect');
+  assert.equal(starts.length, 1);
+  assert.ok(inspections.length > 0 && inspections.every(({ sessionId, turnId, targetId, settings }) =>
+    sessionId === starts[0].sessionId && turnId === starts[0].turnId && targetId === starts[0].targetId &&
+    settings.identityPath === starts[0].settings.identityPath));
+  await field.fill('C:/Preview/another-key');
+  await response.getByText('未试跑', { exact: true }).waitFor();
+  assert.equal(await launch.isDisabled(), true);
+  const saved = await page.evaluate(({ key, pref }) => JSON.parse(sessionStorage.getItem(key)).preferences[pref],
+    { key: previewStorageKey, pref: setupConnectionKey });
+  assert.equal(JSON.parse(saved).settings.identityPath, 'C:/Preview/replacement-key');
+});
+
+test('local setup checks credentials and runs only the explicitly selected SDK path', { timeout: 30_000 }, async (t) => {
+  const page = await openPreview(t, { seed(state) {
+    state.preferences['dsh-vps-chat:desktop-view-location:v1'] = 'local-sdk';
+  } });
+  const ssh = [];
+  const local = [];
+  await page.route('**/dsh-vps-chat/api/**', (route) => {
+    ssh.push(route.request().url());
+    return route.abort();
+  });
+  await page.route('**/__preview/local-sdk', (route) => {
+    if (route.request().method() === 'POST') local.push(route.request().postDataJSON());
+    return route.continue();
+  });
+  await page.getByRole('button', { name: '本机配置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '本机配置', exact: true });
+  await settings.getByRole('button', { name: '测试本机配置', exact: true }).click();
+  await settings.getByRole('listitem', { name: '本机 SDK', exact: true }).getByText('已通过', { exact: true }).waitFor();
+  await settings.getByRole('listitem', { name: '本机账号凭据', exact: true }).getByText('待确认', { exact: true }).waitFor();
+  const response = settings.getByRole('listitem', { name: '实际模型响应', exact: true });
+  const trial = response.getByRole('button', { name: '试跑模型', exact: true });
+  assert.equal(await trial.isDisabled(), true);
+  await settings.getByLabel('配置名称', { exact: true }).fill('隔离配置');
+  await settings.getByRole('button', { name: '选择工作目录并保存', exact: true }).click();
+  await response.getByText('未试跑', { exact: true }).waitFor();
+  assert.equal(local.some(({ op }) => op === 'send'), false);
+  await trial.click();
+  await response.getByText('已通过', { exact: true }).waitFor();
+  const send = local.find(({ op }) => op === 'send');
+  assert.equal(send.location, 'local-sdk');
+  assert.ok(send.sessionId.startsWith('local-'));
+  assert.ok(local.filter(({ op }) => op === 'refresh').every(({ profileId, sessionId, turnId, targetId }) =>
+    profileId === send.profileId && sessionId === send.sessionId && turnId === send.turnId && targetId === send.targetId));
+  assert.deepEqual(ssh, []);
 });
 
 for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 }]) {

@@ -15,6 +15,7 @@ import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
 import { importWorkbenchSnapshot } from './migrate.mjs';
 import { startWorkbenchServer } from './server.mjs';
 import { createSetupExample, setupConnectionKey, setupExampleTask } from './setup-state.mjs';
+import { trialPrompt, trialState } from './setup-trial.mjs';
 import { createStreamingMarkdownParser, stabilizeStreamingRecord } from './streaming-render.mjs';
 import {
   buildDesignContext, designStyleLevels, maxDesignContextText, readDesignProject, saveDesignProject, setDesignBoard,
@@ -683,15 +684,19 @@ test('setup checks are scoped to the verified route and saved connections are re
   headers['X-DSH-VPS-CHAT-Token'] = token;
   const rpc = (packet) => fetch(app.origin + '/dsh-vps-chat/api/rpc', { method: 'POST', headers, body: JSON.stringify(packet) });
   const ssh = { op: 'setup-check', kind: 'ssh', settings, targetId, mcpServers: [] };
+  const trial = { op: 'setup-trial', kind: 'start', settings, targetId, sessionId: randomUUID(), turnId: randomUUID() };
 
   for (const invalid of [
     { ...ssh, kind: 'run' }, { ...ssh, prompt: 'unexpected' }, { ...ssh, mcpServers: ['extra'] },
     { ...ssh, kind: 'resources', mcpServers: ['../unexpected'] },
     { ...ssh, kind: 'resources', mcpServers: ['fixture-status', 'fixture-status'] },
     { ...ssh, settings: { ...settings, hostKeyConfirmed: false } },
+    { ...trial, prompt: 'unexpected' }, { ...trial, kind: 'inspect', model: 'preview-codex' },
+    { ...trial, sessionId: trial.turnId }, { ...trial, targetId: 'local-' + trial.sessionId },
   ]) assert.equal((await rpc(invalid)).status, 400);
   access = { ...access, mode: 'browse' };
   assert.equal((await rpc(ssh)).status, 403);
+  assert.equal((await rpc(trial)).status, 403);
   assert.deepEqual(calls, []);
   access = { ...access, mode: 'execute' };
   assert.deepEqual(await (await rpc(ssh)).json(), { ok: true, targetId, status: 'connected' });
@@ -700,6 +705,20 @@ test('setup checks are scoped to the verified route and saved connections are re
   await data.setPreference(setupConnectionKey, JSON.stringify({ settings, targetId: 'c'.repeat(64) }));
   assert.equal((await (await rpc({ op: 'preset' })).json()).code, 'target_changed');
   assert.deepEqual(calls, ['setup-check', 'list', 'list']);
+  assert.equal((await (await rpc({ ...trial, kind: 'inspect' })).json()).status, 'unknown');
+  assert.equal(calls.at(-1), 'get');
+  const started = await (await rpc(trial)).json();
+  assert.equal(started.status, 'pending');
+  assert.equal(started.turnId, trial.turnId);
+  const fresh = await (await rpc({ ...trial, kind: 'inspect', turnId: randomUUID() })).json();
+  assert.equal(fresh.status, 'unknown');
+  assert.equal(calls.at(-1), 'get');
+  const incomplete = { ok: true, session: { id: trial.sessionId, turns: [
+    { id: trial.turnId, prompt: trialPrompt, state: 'running', reply: 'partial text' },
+  ] } };
+  assert.equal(trialState(incomplete, trial, 'complete'), 'pending');
+  assert.equal(trialState(incomplete, { ...trial, turnId: randomUUID() }, 'complete'), 'unknown');
+  assert.equal(calls.filter((op) => op === 'send').length, 1);
   const runner = createWorkflowRunner({
     resolveRoute: async () => ({ settings, targetId }),
     rpc: () => assert.fail('The sample must not dispatch to a changed target'),

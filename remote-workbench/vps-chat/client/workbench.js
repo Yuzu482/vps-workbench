@@ -32,7 +32,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
   parseStreamingMarkdown, stabilizeStreamingRecord, sidebarActions = false, ResourceLibrary, onThemeReveal,
   editText, saveConversationPreference, saveModelParameters,
   ExtensionSettings, extensionsForTurn, automaticMemoryPolicy, conversationIsolated, projectMemoryNotes,
-  AgentPresetSettings, WorkflowPanel, useWorkflows = () => null, SetupGuide, setupConnectionKey }) {
+  AgentPresetSettings, WorkflowPanel, useWorkflows = () => null, SetupGuide, setupConnectionKey,
+  VpsConnectionChecks, useVpsConnectionChecks = () => null }) {
   const h = React.createElement;
   const MarkdownReply = createMarkdownReply(React, CodeBlock, parseStreamingMarkdown);
   const DesignCanvas = createDesignCanvas(React);
@@ -479,6 +480,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const activeTool = showingSubscription ? subscriptionProvider : chatEnabled ? connection.provider : undefined;
     const activePreferences = { ...preferences, ...toolProfiles[activeTool] };
     const providerName = providers[connection?.provider ?? defaultSettings.provider].label;
+    const connectionDiagnostics = useVpsConnectionChecks({ rpc, readList, connection, scope,
+      model: toolProfiles[connection?.provider]?.model, remoteEnabled, visible, savePreference: saveConversationPreference });
     const rows = allRows[scope] ?? emptyList;
     const storedConversationOptions = React.useMemo(() => {
       if (!saveConversationPreference || !scope) return {};
@@ -1275,6 +1278,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
     function openAccount(actionId) {
       if (!remoteEnabled || !ready || providerSwitchLocked || !getAccountAction(actionId) || !connection.hostKeyConfirmed) return;
+      connectionDiagnostics?.clear();
       setAccountOpen({ actionId, settings: connection });
     }
 
@@ -1333,19 +1337,35 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         setSettingsError('');
         try {
           const list = readList(await rpc('list', { settings }, signal));
-          if (signal.aborted) return;
+          signal.throwIfAborted();
           const preferences = await readToolPreferences(settings, toolIds);
-          if (signal.aborted) return;
+          signal.throwIfAborted();
+          if (setupConnectionKey) {
+            await saveConversationPreference(setupConnectionKey, JSON.stringify({ settings, targetId: list.targetId }));
+            signal.throwIfAborted();
+            setToolPreferences({ ...preferences, ids: preferences.ids ?? [settings.provider] });
+            setToolProfiles(readToolProfiles(preferences.key, toolIds));
+            setSubscriptionOpen(false);
+            const name = '本机保存的 VPS';
+            if (list.targetId === scope) {
+              setConnection(settings);
+              setConnectionName(name);
+            } else activateConnection(settings, list, name);
+            return true;
+          }
           const ids = preferences.ids ?? (preferences.key === toolPreferences.key ? toolPreferences.ids : []);
           setToolPreferences({ ...preferences, ids });
           setToolProfiles(readToolProfiles(preferences.key, toolIds));
           setSubscriptionOpen(false);
           activateConnection(settings, list, list.targetId === scope ? connectionName : '');
           setSettingsOpen(ids.length ? false : 'tools');
+          return true;
         } catch (error) {
-          if (signal.aborted) return;
-          setSettingsError(errorText(error, '暂时无法读取会话。请检查连接设置和工作台服务。'));
-          setSettingsOpen('connection');
+          if (signal.aborted) return false;
+          setSettingsError(errorText(error, setupConnectionKey ? '连接配置未能保存。请检查本机设置后重试。' :
+            '暂时无法读取会话。请检查连接设置和工作台服务。'));
+          if (!setupConnectionKey) setSettingsOpen('connection');
+          return false;
         }
       });
     }
@@ -2328,6 +2348,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         setTab: (tab) => { setSettingsError(''); setSettingsOpen(tab); },
         error: settingsError, busy: providerSwitchLocked,
         close: () => setSettingsOpen(false), saveConnection: saveSettings, saveTools,
+        VpsConnectionChecks, connectionDiagnostics,
         openSetup: SetupGuide ? openSetup : undefined,
         preferences, updatePreferences, profiles: toolProfiles, updateTool, readModels: readSettingsModels,
         modelTools: remoteEnabled ? toolsWithModels : emptyList, openAccount, remoteEnabled,
@@ -2344,6 +2365,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       }),
       SetupGuide && setupOpen ? h(SetupGuide, {
         connection, connectionName, tools: chatTools, toolIds: toolPreferences.ids, toolProfiles,
+        trial: connectionDiagnostics?.trial,
         rpc, readList, remoteEnabled, accessPending, applyConnection: applySetupConnection, enableTool: enableSetupTool,
         onEnableExecution: access?.mode === 'browse' ? () => changeAccess({ ...access, mode: 'execute' }) : undefined,
         extensions: extensions?.state, agentPresets, selectedProject: projects.has(selectedProject) ? selectedProject : null,

@@ -1,5 +1,4 @@
 import React from 'react';
-import { readModelCatalog } from '../../remote-workbench/vps-chat/client/composer-controls.js';
 import { menuIcon } from '../../remote-workbench/vps-chat/client/menu-icons.js';
 import { afterPopupMotion } from '../../remote-workbench/vps-chat/client/menu-motion.js';
 import { connectionForm, connectionSettings, createConnectionFields, editConnectionForm } from '../../remote-workbench/vps-chat/client/settings-dialog.js';
@@ -7,27 +6,21 @@ import { resolveAgentPreset } from '../agent-presets/state.mjs';
 import { automaticMemoryPolicy } from '../extensions/state.mjs';
 import { workflowProviders } from '../workflow-engine/state.mjs';
 import { checkStageResources } from './workflow-stage.mjs';
-import { selectSetupModel } from './setup-state.mjs';
+import { checkVpsConnection, selectSetupModel, setupChecks } from './setup-state.mjs';
+import { ConnectionResult, setupAccountActions, vpsTrialTarget } from './connection-panel.mjs';
+import { TrialActions, trialResult } from './connection-trial.mjs';
 
 const h = React.createElement;
 const ConnectionFields = createConnectionFields(React);
-const steps = [
-  ['ssh', 'SSH 连接'],
-  ['account', '账号登录'],
-  ['model', '模型可用性'],
-];
+const steps = setupChecks.filter(([id]) => id !== 'response');
 const agentSteps = [
   ['agentModel', 'Agent 模型'],
   ['mcp', 'MCP 服务器'],
   ['plugins', '插件模板'],
   ['memory', '记忆范围'],
 ];
-const labels = { waiting: '待检查', checking: '检查中', passed: '已通过', failed: '需处理', confirm: '待确认' };
-const accountActions = { codex: 'codex-login', claude: 'claude-api-key', 'claude-sdk': 'claude-login', antigravity: 'antigravity-login' };
 const initialDetail = {
-  ssh: '核对 SSH 指纹，登录并检查远端项目目录。',
-  account: '使用所选执行端在 VPS 上的登录或 API 密钥。',
-  model: '核对模型选项与当前执行端的配置。',
+  ...Object.fromEntries(setupChecks.map(([id, , detail]) => [id, detail])),
   agentModel: '核对预设指定的模型。',
   mcp: '核对预设引用的 MCP 服务器。',
   plugins: '核对预设引用的插件模板。',
@@ -37,7 +30,7 @@ const button = (text, onClick, extra) => h('button', { type: 'button', className
 
 export function SetupGuide({ connection, connectionName, tools, toolIds, toolProfiles, rpc, readList,
   remoteEnabled, accessPending, applyConnection, enableTool, onEnableExecution, extensions, agentPresets,
-  selectedProject, openAccount, openSettings, onClose, workflow }) {
+  selectedProject, openAccount, openSettings, onClose, workflow, trial }) {
   const title = React.useId();
   const providerGroup = React.useId();
   const dialog = React.useRef(null);
@@ -143,71 +136,31 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
     setResults({});
     setManualTarget(null);
     setVerified(null);
-    let step = 'ssh';
     try {
-      updateStep(step, 'checking', '正在使用已核对的指纹连接 VPS…');
       const settings = editing ? connectionSettings(form, provider) : { ...connection, provider };
-      const list = readList(await rpc('list', { settings }, signal));
-      const { targetId, memoryTargetId } = list;
-      async function probe(kind, mcpServers = []) {
-        const reply = await rpc('setup-check', { settings, targetId, kind, mcpServers }, signal);
-        signal.throwIfAborted();
-        if (reply.targetId !== targetId) throw new Error('VPS 连接已变化，请重新检查。');
-        return reply.status;
-      }
-      if (await probe('ssh') !== 'connected') throw new Error('VPS 未确认 SSH 连接。');
-      if (editing) {
-        await applyConnection(settings, list, signal);
-        setEditing(false);
-      }
-      signal.throwIfAborted();
-      updateStep(step, 'passed', 'SSH 指纹、用户认证和远端项目目录已核对。');
-
-      step = 'account';
-      if (!editing && !toolIds.includes(provider)) {
-        updateStep(step, 'failed', '请先为当前 VPS 启用所选执行端。', 'tool_disabled');
+      const checked = await checkVpsConnection({ rpc, readList, settings, signal, updateStep,
+        accountConfirmedFor: confirmedTarget,
+        async prepareAccount(list) {
+          if (!editing) return toolIds.includes(provider);
+          await applyConnection(settings, list, signal);
+          setEditing(false);
+          return true;
+        },
+        selectModel(targetId) {
+          const saved = toolProfiles[provider]?.model;
+          return !useDefaultModel && saved?.targetId === targetId ? saved.id : '';
+        },
+      });
+      if (!checked?.model) {
+        setManualTarget(checked?.manualTarget ?? null);
         return;
       }
-      updateStep(step, 'checking', '正在检查 VPS 上的执行端和登录状态…');
-      const account = await probe('account');
-      if (account === 'manual' && confirmedTarget !== targetId) {
-        setManualTarget(targetId);
-        updateStep(step, 'confirm', '请在 VPS 登录 Antigravity。示例运行会核对当前账号是否能收到模型回复。');
-        return;
-      }
-      const accountDetails = {
-        signed_in: 'VPS 上的执行端已识别当前登录。',
-        key_configured: 'VPS 上已配置私有 API 密钥。服务权限将在示例运行时验证。',
-        manual: '已确认在 VPS 完成登录。服务权限将在示例运行时验证。',
-      };
-      if (!Object.hasOwn(accountDetails, account)) throw new Error('VPS 暂时无法确认账号状态。');
-      updateStep(step, 'passed', accountDetails[account]);
-
-      step = 'model';
-      updateStep(step, 'checking', '正在核对执行端的模型选项…');
-      let models = [];
-      let baseModel = { ok: true, model: '', name: 'VPS CLI 默认模型' };
-      if (provider !== 'codex' && await probe('model') !== 'model_route_ready') {
-        throw new Error('VPS 未确认此执行端的模型服务路由。');
-      }
-      if (workflowProviders[provider].models) {
-        models = readModelCatalog(await rpc('models', { settings, targetId }, signal));
-        signal.throwIfAborted();
-        if (models.length === 0) throw new Error('当前执行端未返回可选模型。请检查 VPS 执行环境。');
-        const saved = toolProfiles[provider]?.model;
-        const requested = !useDefaultModel && saved?.targetId === targetId ? saved.id : '';
-        baseModel = selectSetupModel(models, requested);
-        if (!baseModel.ok) {
-          updateStep(step, 'failed', baseModel.message, 'model_unavailable');
-          return;
-        }
-      }
-      updateStep(step, 'passed', `${baseModel.name} · 示例运行将验证实际响应。`);
-      setVerified({ provider, targetId, model: baseModel.model });
-      step = 'agent';
+      const { list: { targetId, memoryTargetId }, model: baseModel, models, probe } = checked;
+      setVerified({ provider, targetId, model: baseModel.model,
+        trialTarget: vpsTrialTarget(settings, checked, useDefaultModel ? undefined : toolProfiles[provider]?.model) });
       if (presetId) await checkAgent(models, targetId, memoryTargetId, baseModel, probe, signal);
     } catch (error) {
-      if (!signal.aborted) updateStep(step, 'failed', error?.message || '检查未完成，请重试。', error?.code);
+      if (!signal.aborted) updateStep('agent', 'failed', error?.message || 'Agent 检查未完成，请重试。', error?.code);
     } finally {
       if (pending.current === controller) pending.current = null;
       if (!signal.aborted) setBusy(false);
@@ -232,8 +185,9 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
   function login() {
     setVerified(null);
     setManualTarget(null);
-    setResults((current) => ({ ssh: current.ssh, account: { state: 'waiting', detail: '完成 VPS 登录后，回来重新检查。' } }));
-    openAccount(accountActions[provider]);
+    setResults((current) => ({ ssh: current.ssh, egress: current.egress,
+      account: { state: 'waiting', detail: '完成 VPS 登录后，回来重新检查。' } }));
+    openAccount(setupAccountActions[provider]);
   }
 
   const fixAccount = connection && results.ssh?.state === 'passed' && ['failed', 'confirm', 'waiting'].includes(results.account?.state);
@@ -245,13 +199,9 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
   const agentNeedsAttention = agentError || agentSteps.some(([id]) => results[id]?.state === 'failed');
 
   function stepCard(id, label, ...actions) {
-    const result = results[id];
-    const state = result?.state ?? 'waiting';
-    return h('li', { key: id, className: 'vc-setup-step', 'data-state': state, 'aria-label': label },
-      h('div', { className: 'vc-setup-step-header' },
-        h('span', { className: 'vc-setup-marker', 'aria-hidden': true }, state === 'passed' ? '✓' : state === 'failed' ? '!' : ''),
-        h('strong', null, label), h('span', { className: 'vc-setup-status' }, labels[state])),
-      h('p', { role: state === 'failed' ? 'alert' : undefined }, result?.detail ?? initialDetail[id]), ...actions);
+    const target = ready && verified.trialTarget;
+    const result = id === 'response' ? trialResult(trial, target) : results[id];
+    return h(ConnectionResult, { key: id, id, label, detail: initialDetail[id], result }, ...actions);
   }
 
   return h('dialog', { ref: dialog, className: 'vc-setup-guide vc-workbench-settings vc-popup-motion',
@@ -271,11 +221,12 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
         h('section', { className: 'vc-setup-group', 'aria-label': '基础接入检查' },
           h('div', { className: 'vc-setup-overview' }, h('h3', null, '基础接入检查'),
             h('span', { role: 'status' }, `${passedCount} / ${steps.length} 项通过`)),
-          h('ol', { className: 'vc-setup-steps' }, steps.map(([id, label]) => stepCard(id, label,
+          h('ol', { className: 'vc-setup-steps' }, setupChecks.map(([id, label]) => stepCard(id, label,
             id === 'ssh' && editing ? h('div', { className: 'vc-setup-fields' }, h(ConnectionFields, {
               form, busy: disabled, edit(key, value) { setForm((previous) => editConnectionForm(previous, key, value)); reset(); },
             }), connectionName && button('取消修改', () => { setEditing(false); reset(); }, { disabled })) : null,
-            id === 'ssh' && connection && !editing ? h('div', { className: 'vc-setup-actions' },
+            (id === 'ssh' && connection && !editing || id === 'egress' && results.egress?.state === 'failed' && !editing) ?
+              h('div', { className: 'vc-setup-actions' },
               h('small', null, connectionName || '当前 VPS'), button('编辑连接', editVps, { disabled })) : null,
             id === 'account' && fixAccount ? h('div', { className: 'vc-setup-actions' },
               enableProvider ? button('启用此执行端', () => void enable(), { disabled })
@@ -283,7 +234,9 @@ export function SetupGuide({ connection, connectionName, tools, toolIds, toolPro
               manualTarget && button('已在 VPS 登录，继续检查', () => void check(null, manualTarget), { disabled })) : null,
             id === 'model' && results.model?.code === 'model_unavailable' ? button('改用执行端默认模型', () => {
               setUseDefaultModel(true); reset();
-            }, { disabled }) : null)))),
+            }, { disabled }) : null,
+            id === 'response' && trial ? h(TrialActions, { trial, target: ready && verified.trialTarget,
+              allowed: !disabled && remoteEnabled }) : null)))),
         h('section', { className: 'vc-setup-group', 'aria-label': '额外 Agent 检查' },
           h('div', { className: 'vc-setup-overview' }, h('h3', null, '额外 Agent 检查'),
             h('small', { className: 'vc-settings-current' }, '可选')),

@@ -15,6 +15,8 @@ import { readWorkflows } from '../workflow-engine/state.mjs';
 import { decodeWorkflowAttachments } from './workflow-attachments.mjs';
 import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
 import { createPreviewLocalSdk } from '../preview/fixtures/local-sdk.mjs';
+import { readSetupPreset, setupConnectionKey } from './setup-state.mjs';
+import { runSetupTrial } from './setup-trial.mjs';
 
 const previewPort = 47823;
 const previewPrefix = '/__preview/';
@@ -210,6 +212,16 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
         return json(response, { ok: false, code: 'invalid_access' }, 400);
       }
     }
+    if (method === 'POST' && url === previewPrefix + 'connection' && request.headers.origin === origin) {
+      try {
+        const { op, value } = await readPacket(request);
+        if (op !== 'save-connection') throw new Error('invalid_preview_connection');
+        const saved = await readSetupPreset(value, (settings) => fixtures.chat({ op: 'list', settings }));
+        if (!saved.ok) throw new Error('invalid_preview_connection');
+        await data.setPreference(setupConnectionKey, value);
+        return json(response, { ok: true });
+      } catch { return json(response, { ok: false, code: 'invalid_preview_connection' }, 400); }
+    }
     if (method === 'POST' && request.headers.origin === origin && url === previewPrefix + 'extensions') {
       try {
         const change = await readPacket(request);
@@ -273,6 +285,12 @@ export async function startPreview({ port = previewPort, watch = true, log = () 
       try {
         const packet = await readPacket(request);
         if (!(isChat ? permitsChat : permitsTerminal)(access, packet.op)) return json(response, accessDenied, 403);
+        if (isChat && packet.op === 'preset' && data.preference(setupConnectionKey)) {
+          return json(response, await readSetupPreset(data.preference(setupConnectionKey), (settings) => chat.request({ op: 'list', settings })));
+        }
+        if (isChat && packet.op === 'setup-trial') {
+          return json(response, await runSetupTrial(packet, { request: fixtures.chat }, () => !closed && permitsChat(access, packet.op)));
+        }
         if (isChat && packet.op === 'workflow-artifacts') {
           return json(response, await readWorkflowArtifacts(packet, {
             readRun: () => workflowRuns.get(packet.workflowRunId), backend: { request: previewArtifacts },

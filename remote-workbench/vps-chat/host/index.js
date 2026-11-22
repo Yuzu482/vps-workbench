@@ -23,6 +23,7 @@ const operations = Object.freeze({
   list: ['op', 'settings'],
   models: ['op', 'settings', 'targetId'],
   'setup-check': ['op', 'settings', 'targetId', 'kind', 'mcpServers'],
+  'setup-trial': ['op', 'settings', 'targetId', 'kind', 'sessionId', 'turnId'],
   'workflow-artifacts': ['op', 'settings', 'targetId', 'sessionId', 'turnId', 'workflowRunId'],
   'model-options': ['op', 'settings', 'targetId'],
   get: ['op', 'settings', 'targetId', 'sessionId'],
@@ -157,6 +158,9 @@ function validRequest(value, { allowExtensions, allowProjectMemory, allowModelPa
         (mcpServers.length && (kind !== 'resources' || !['codex', 'antigravity'].includes(settings.provider))) ||
         !mcpServers.every((id) => typeof id === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(id))) return false;
   }
+  if (value.op === 'setup-trial' && (!allowSetupCheck || !Object.hasOwn(value.settings ?? {}, 'provider') ||
+      !['start', 'inspect'].includes(value.kind) || (value.kind === 'inspect' && (hasModel || hasEffort)) ||
+      value.sessionId === value.turnId)) return false;
   if (value.op === 'model-options' && !allowModelParameters) return false;
   if (history && !allowDesignBranches) return false;
   if (hasDesignBase && (!allowDesignBranches || !design ||
@@ -178,7 +182,7 @@ function validRequest(value, { allowExtensions, allowProjectMemory, allowModelPa
       !hasExactFields(value.workflowStage, ['runId']) || typeof value.workflowStage.runId !== 'string' ||
       !guid.test(value.workflowStage.runId))) return false;
   if (hasContext && (!design || !validDesignContext(value.designContext))) return false;
-  if (hasModel && (value.op !== 'send' || typeof value.model !== 'string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(value.model))) return false;
+  if (hasModel && (!['send', 'setup-trial'].includes(value.op) || typeof value.model !== 'string' || !/^[A-Za-z0-9_.:-]{1,100}$/.test(value.model))) return false;
   if (hasEffort && (!hasModel || typeof value.effort !== 'string' || !/^[A-Za-z0-9_-]{1,24}$/.test(value.effort))) return false;
   if (!hasExactFields(value, [
     ...fields, ...(design ? ['mode'] : []), ...(hasContext ? ['designContext'] : []),
@@ -206,7 +210,7 @@ function validRequest(value, { allowExtensions, allowProjectMemory, allowModelPa
   if (value.op !== 'list' && (typeof value.targetId !== 'string' || !/^[0-9a-f]{64}$/.test(value.targetId))) return false;
   if (!['list', 'models', 'model-options', 'setup-check'].includes(value.op) &&
       (typeof value.sessionId !== 'string' || !guid.test(value.sessionId))) return false;
-  if ((artifacts || historyTurn || ['send', 'stop', 'steer', 'approval'].includes(value.op)) &&
+  if ((artifacts || historyTurn || ['send', 'stop', 'steer', 'approval', 'setup-trial'].includes(value.op)) &&
       (typeof value.turnId !== 'string' || !guid.test(value.turnId))) return false;
   if (value.op === 'steer' && (typeof value.steerId !== 'string' || !guid.test(value.steerId))) return false;
   return !['send', 'steer'].includes(value.op) || (typeof value.prompt === 'string' &&
@@ -417,7 +421,7 @@ export function createHost({ port, root, bridge, accountEnabled = false, allowEx
       try {
         const packet = body.op === 'account-view'
           ? (account ? await account.prepare(body.targetId, body.action) : notReady)
-          : await bridge.request(body, body.workflowStage || body.op === 'workflow-artifacts' ? {
+          : await bridge.request(body, body.workflowStage || ['workflow-artifacts', 'setup-trial'].includes(body.op) ? {
             isLive: () => !disposed && !req.aborted && !res.destroyed,
           } : undefined);
         return respond(res, 200, packet);

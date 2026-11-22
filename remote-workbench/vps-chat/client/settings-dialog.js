@@ -74,7 +74,7 @@ export function createConnectionFields(React) {
       const { label, optional, ...attributes } = fields[key];
       return h('label', { key, className: 'vc-field' }, label, h('input', {
         ...attributes, value: form[key], required: !optional, disabled: busy, autoComplete: 'off',
-        spellCheck: false, maxLength: 2048, onChange: (event) => edit(key, event.target.value),
+        spellCheck: false, maxLength: 2048, 'data-connection-field': key, onChange: (event) => edit(key, event.target.value),
       }));
     }
     return h(React.Fragment, null,
@@ -256,7 +256,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
 
   function Session({ settings, tab, setTab, ready, name, tools, activeTool, savedTools, error, busy, close,
     saveConnection, saveTools, preferences, updatePreferences, profiles, updateTool, readModels, modelTools, openAccount,
-    remoteEnabled = true, extensionSettings, agentSettings }) {
+    remoteEnabled = true, extensionSettings, agentSettings, VpsConnectionChecks, connectionDiagnostics }) {
     const [form, setForm] = React.useState(() => connectionForm(settings));
     const [configured, setConfigured] = React.useState(savedTools);
     const scroll = React.useRef(null);
@@ -265,21 +265,31 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
     const savePage = tab === 'connection' || tab === 'tools';
     const preferenceKeys = tab === 'appearance' ? ['color', 'accent', 'textSize', 'width'] : ['sendKey', 'motion'];
     const canReset = preferenceKeys.some(key => preferences[key] !== defaultPreferences[key]);
+    const connectionDirty = JSON.stringify(form) !== JSON.stringify(connectionForm(settings));
+    const saveAllowed = form.hostKeyConfirmed && settingFields.every(({ key, optional }) => optional || form[key].trim()) &&
+      Number.isInteger(Number(form.port)) && Number(form.port) >= 1 && Number(form.port) <= 65535;
 
     React.useLayoutEffect(() => { scroll.current.scrollTop = 0; }, [tab]);
 
     function edit(key, value) {
+      connectionDiagnostics?.clear();
       setForm(previous => editConnectionForm(previous, key, value));
     }
 
-    function submit(event) {
+    async function submit(event) {
       event.preventDefault();
       if (busy || !savePage) return;
       if (tab === 'tools') {
         if (ready) saveTools(configured);
-      } else if (form.hostKeyConfirmed) {
-        saveConnection(connectionSettings(form));
+      } else if (saveAllowed) {
+        const next = connectionSettings(form);
+        if (await saveConnection(next)) setForm(connectionForm(next));
       }
+    }
+
+    function focusField(key) {
+      const input = scroll.current.querySelector(`[data-connection-field="${key}"]`);
+      if (input) input.focus();
     }
 
     const header = {
@@ -306,7 +316,13 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
           h('section', { key: tab, className: 'vc-settings-pane', 'aria-labelledby': panelId },
             h('h3', { id: panelId, 'aria-label': header[0] }, header[0], prefPage ? liveSave() : null),
             h('p', { className: 'vc-settings-intro' }, header[1]),
-            tab === 'connection' ? h(ConnectionSettings, { form, edit, busy }) : null,
+            tab === 'connection' ? h(React.Fragment, null,
+              VpsConnectionChecks && h('p', { className: 'vc-settings-current', role: 'status' },
+                connectionDirty ? '连接配置未保存' : !ready ? '连接尚未保存' :
+                  name === '本机保存的 VPS' ? '连接配置已保存' : '已载入 VPS 预设'),
+              VpsConnectionChecks && h(VpsConnectionChecks, { diagnostics: connectionDiagnostics, ready, dirty: connectionDirty,
+                busy, remoteEnabled, provider: form.provider, openAccount, focusField }),
+              h(ConnectionSettings, { form, edit, busy })) : null,
             tab === 'tools' ? h(ToolSettings, {
               tools, configured, setConfigured, profiles, preferences, updateTool, readModels, modelTools, activeTool, busy,
             }) : null,
@@ -335,10 +351,10 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
                 if (tab === 'tools') setConfigured(savedTools);
                 close();
               },
-            }, tab === 'tools' ? '放弃启用变更' : savePage ? '取消' : '完成'),
+            }, tab === 'tools' ? '放弃启用变更' : savePage && !VpsConnectionChecks ? '取消' : '完成'),
             savePage ? h('button', {
-              type: 'submit', className: 'vc-button vc-primary', disabled: busy || (tab === 'tools' ? !ready : !form.hostKeyConfirmed),
-            }, tab === 'tools' ? '保存启用变更' : busy ? '正在检查设置' : '使用此 VPS') : null))));
+              type: 'submit', className: 'vc-button vc-primary', disabled: busy || (tab === 'tools' ? !ready : !saveAllowed),
+            }, tab === 'tools' ? '保存启用变更' : VpsConnectionChecks ? '保存连接配置' : busy ? '正在检查设置' : '使用此 VPS') : null))));
   }
 
   return function SettingsDialog(props) {
