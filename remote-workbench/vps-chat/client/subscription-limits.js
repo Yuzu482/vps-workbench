@@ -22,18 +22,23 @@ export function readClaudeLimits(info) {
     })));
 }
 
-export function subscriptionRings(h, limits, details = false) {
+export function subscriptionWindows(limits) {
   const now = Date.now();
   return windows.map(([key, label]) => {
     const sample = limits?.[key];
     const available = sample && sample.resetsAt * 1000 > now;
     const remaining = available ? 100 - sample.usedPercent : 0;
     const percentage = Math.floor(remaining);
-    const caption = available ? `剩余 ${remaining > 0 && percentage === 0 ? '<1' : percentage}%` : '暂无数据';
+    const value = available ? (remaining > 0 && percentage === 0 ? '<1%' : `${percentage}%`) : '—';
+    const caption = available ? `剩余 ${value}` : '暂无数据';
     const reset = available ? new Date(sample.resetsAt * 1000).toLocaleString('zh-CN') : '';
-    return h('span', { key, className: 'vc-quota-window', title: reset ? `${label} · ${caption} · ${reset} 重置` : `${label} · ${caption}` },
-      h('span', { className: 'vc-quota-ring', style: { '--vc-quota-fill': `${remaining}%` },
-        role: 'img', 'aria-label': `${label}额度，${caption}` }, h('span', { 'aria-hidden': true }, available ? (remaining > 0 && percentage === 0 ? '<1%' : percentage + '%') : '—')),
-      details && h('span', { className: 'vc-quota-caption' }, label, ' · ', caption));
+    const title = reset ? `${label} · ${caption} · ${reset} 重置` : `${label} · ${caption}`;
+    return { key, label, remaining, value, caption, title };
   });
+}
+
+export function subscriptionRings(h, limits) {
+  return subscriptionWindows(limits).map(({ key, label, remaining, value, caption, title }) =>
+    h('span', { key, className: 'vc-quota-ring', title, style: { '--vc-quota-fill': `${remaining}%` },
+      role: 'img', 'aria-label': `${label}额度，${caption}` }, h('span', { 'aria-hidden': true }, value)));
 }

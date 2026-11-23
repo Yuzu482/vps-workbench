@@ -184,7 +184,44 @@ test('subscription rings distinguish exhausted, unavailable and weekly-only obse
   await summary.getByRole('img', { name: '5 小时额度，暂无数据', exact: true }).waitFor();
   await summary.getByRole('img', { name: '每周额度，剩余 0%', exact: true }).waitFor();
   await summary.press('Enter');
-  await page.getByRole('region', { name: 'Codex', exact: true }).getByText('每周 · 剩余 0%', { exact: true }).waitFor();
+  await page.getByRole('region', { name: 'Codex', exact: true })
+    .getByRole('group', { name: '每周额度，剩余 0%', exact: true }).getByText('0%', { exact: true }).waitFor();
+});
+
+test('subscription details fit the narrow view without scrolling and paginate extra profiles', { timeout: 30_000 }, async (t) => {
+  const page = await openPreview(t, { viewport: { width: 365, height: 480 } });
+  const trigger = page.getByRole('button', { name: /^订阅额度/ });
+  const details = page.getByRole('region', { name: '已配置的订阅额度', exact: true });
+  const fits = () => details.evaluate((element) => element.scrollHeight <= element.clientHeight + 1 &&
+    getComputedStyle(element).overflowY === 'clip');
+  await trigger.click();
+  await details.getByRole('region', { name: 'Codex', exact: true }).waitFor();
+  assert.equal(await details.getByRole('region').count(), 4);
+  assert.equal(await fits(), true);
+  await page.keyboard.press('Escape');
+
+  await page.route('**/__preview/local-sdk', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const response = await route.fetch();
+    const json = await response.json();
+    json.profiles = Array.from({ length: 5 }, (_, index) => ({
+      id: crypto.randomUUID(), targetId: String(index).repeat(64), backend: 'codex',
+      name: `配置 ${index + 1}`, directory: 'C:/fixture', model: 'preview-local-codex', effort: 'medium',
+    }));
+    return route.fulfill({ response, json });
+  });
+  await page.getByRole('button', { name: '本机 SDK', exact: true }).click();
+  await trigger.click();
+  await details.getByText('1 / 2', { exact: true }).waitFor();
+  assert.equal(await details.getByRole('region').count(), 4);
+  assert.equal(await fits(), true);
+  await details.getByRole('button', { name: '下一页', exact: true }).press('Enter');
+  await details.getByText('2 / 2', { exact: true }).waitFor();
+  await details.getByRole('region', { name: /配置 5/ }).waitFor();
+  assert.equal(await details.getByRole('region').count(), 1);
+  assert.equal(await fits(), true);
+  await details.getByRole('button', { name: '上一页', exact: true }).click();
+  await details.getByText('1 / 2', { exact: true }).waitFor();
 });
 
 test('a selected excerpt attaches to one draft and copied VPS links open the existing conversation or turn', { timeout: 40_000 }, async (t) => {

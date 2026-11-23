@@ -1,4 +1,4 @@
-import { readSubscriptionLimits, subscriptionRings } from './subscription-limits.js';
+import { readSubscriptionLimits, subscriptionRings, subscriptionWindows } from './subscription-limits.js';
 import { createMarkdownReply } from './markdown.js';
 import { createDesignCanvas } from './design-canvas.js';
 import { readVersionHistory, validDesignTurn } from './design-version-state.js';
@@ -48,6 +48,30 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     menuIcon(h, icon), running ? h('span', { className: 'vc-rail-shortcut-running', 'aria-hidden': true }) : null),
     h('span', { id: descriptionId, className: 'vc-rail-shortcut-tip', role: 'tooltip' },
       h('strong', { 'aria-hidden': true }, label), h('span', null, detail)));
+  }
+
+  function SubscriptionDetails({ id, entries, samples, scope }) {
+    const [page, setPage] = React.useState(0);
+    const perPage = 4;
+    const totalPages = Math.max(1, Math.ceil(entries.length / perPage));
+    const currentPage = Math.min(page, totalPages - 1);
+    return h('div', { id, className: 'vc-quota-subscriptions', popover: 'auto', role: 'region',
+      'aria-label': '已配置的订阅额度' },
+      entries.length ? h('div', { className: 'vc-quota-columns', 'aria-hidden': true },
+        h('span', null, '剩余额度'), h('span', null, '5 小时'), h('span', null, '每周')) : null,
+      ...entries.slice(currentPage * perPage, (currentPage + 1) * perPage).map(({ target, label, icon }) =>
+        h('section', { key: target, 'aria-label': label },
+          h('h2', null, menuIcon(h, icon), h('span', { title: label }, label)),
+          ...subscriptionWindows(samples[`${scope}:${target}`]).map(({ key, label: windowLabel, value, caption, title }) =>
+            h('span', { key, className: 'vc-quota-value', title, role: 'group',
+              'aria-label': `${windowLabel}额度，${caption}` }, value)))),
+      entries.length === 0 ? h('p', null, '尚未配置订阅执行端。') : null,
+      totalPages > 1 ? h('div', { className: 'vc-quota-pages' },
+        h('button', { type: 'button', className: 'vc-button', disabled: currentPage === 0,
+          onClick: () => setPage(currentPage - 1) }, '上一页'),
+        h('span', { role: 'status' }, `${currentPage + 1} / ${totalPages}`),
+        h('button', { type: 'button', className: 'vc-button', disabled: currentPage + 1 === totalPages,
+          onClick: () => setPage(currentPage + 1) }, '下一页')) : null);
   }
 
   const MarkdownReply = createMarkdownReply(React, CodeBlock, parseStreamingMarkdown);
@@ -2616,13 +2640,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         h('button', { type: 'button', className: 'vc-button vc-sidebar-quota', popoverTarget: quotaPopoverId,
           'aria-label': `订阅额度 · ${tools.find(({ id }) => id === activeTool)?.label ?? providerName}` },
           ...subscriptionRings(h, activeTool && subscriptionSamples[`${subscriptionScope}:${localSdk ? scope : activeTool}`])),
-        h('div', { id: quotaPopoverId, className: 'vc-quota-subscriptions', popover: 'auto', role: 'region',
-          'aria-label': '已配置的订阅额度', key: subscriptionScope },
-          subscriptionEntries.map(({ target, label, icon }) =>
-            h('section', { key: target, 'aria-label': label },
-              h('h2', null, menuIcon(h, icon), label),
-              ...subscriptionRings(h, subscriptionSamples[`${subscriptionScope}:${target}`], true))),
-          subscriptionEntries.length === 0 && h('p', null, '尚未配置订阅执行端。')),
+        h(SubscriptionDetails, { id: quotaPopoverId, key: subscriptionScope,
+          entries: subscriptionEntries, samples: subscriptionSamples, scope: subscriptionScope }),
         toolPicker,
         h('button', {
           type: 'button', className: 'vc-button vc-sidebar-settings', disabled: providerSwitchLocked,

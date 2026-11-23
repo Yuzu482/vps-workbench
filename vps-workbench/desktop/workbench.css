@@ -343,7 +343,6 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   min-block-size: 40px; padding: 0 3px;
 }
 #root .vc-sidebar-actions:has(.vc-quota-subscriptions:popover-open) .vc-sidebar-quota { background: var(--vc-tint); }
-.vc-quota-window { display: inline-flex; align-items: center; gap: 7px; }
 .vc-quota-ring {
   display: grid; place-items: center; flex: none; inline-size: 30px; block-size: 30px;
   padding: 2px; border-radius: 50%; box-sizing: border-box;
@@ -360,7 +359,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 }
 .vc-quota-subscriptions {
   position: fixed; inset: auto auto 62px 12px; margin: 0;
-  inline-size: min(240px, calc(100vw - 24px)); max-block-size: min(40vh, 320px); overflow: auto;
+  inline-size: min(300px, calc(100vw - 24px)); overflow: clip;
   box-sizing: border-box; padding: 6px; gap: 6px;
   border: 1px solid var(--vc-line); border-radius: 10px; background: var(--vc-rail);
   box-shadow: var(--vc-shadow); color: var(--vc-muted); font: inherit; font-size: 12px;
@@ -373,10 +372,26 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 @starting-style {
   .vc-quota-subscriptions:popover-open { opacity: 0; transform: translateY(5px); }
 }
-.vc-quota-subscriptions section {
-  display: grid; gap: 4px; padding: 7px 9px; border-radius: 8px; background: var(--vc-surface);
+.vc-quota-subscriptions :is(.vc-quota-columns, section) {
+  display: grid; grid-template-columns: minmax(0, 1fr) repeat(2, 52px); align-items: center;
+  gap: 6px; padding-inline: 8px;
 }
-.vc-quota-subscriptions h2 { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--vc-ink); font: inherit; font-weight: 650; }
+.vc-quota-columns { padding-block: 4px; font-size: 11px; }
+.vc-quota-columns > :not(:first-child), .vc-quota-value { text-align: center; }
+.vc-quota-subscriptions section {
+  min-block-size: 36px; border-radius: 7px; background: var(--vc-surface);
+}
+.vc-quota-subscriptions h2 {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  margin: 0; color: var(--vc-ink); font: inherit; font-weight: 650;
+}
+.vc-quota-subscriptions h2 > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vc-quota-value { color: var(--vc-ink); font-variant-numeric: tabular-nums; }
+.vc-quota-pages {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.vc-quota-pages .vc-button { min-block-size: 28px; padding-block: 3px; }
 .vc-quota-subscriptions p { margin: 6px; }
 #root .vc-rail-content .vc-sidebar-new {
   display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px;
