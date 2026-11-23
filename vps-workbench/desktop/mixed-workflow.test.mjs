@@ -304,3 +304,134 @@ test('archives are atomic and historical retries require the exact failed receip
   assert.deepEqual(artifacts, [{ runId: original.id, turnId: original.rows[0].turnId }]);
   assert.equal((await runtime.retry(original.id, 0)).code, 'mixed_retry_unconfirmed');
 });
+
+test('desktop runs both local text agents with Codex and VPS, then recovers the original receipt', { timeout: 25000 }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'workbench-mixed-text-'));
+  const workspace = join(root, 'registered');
+  await mkdir(workspace);
+  const fixtures = createPreviewFixtures();
+  const { settings, targetId, memoryTargetId } = fixtures.chat({ op: 'preset' }).preset;
+  const data = await openAppData(root);
+  await data.setPreference(setupConnectionKey, JSON.stringify({ settings, targetId }));
+  const localInputs = new Map(), remoteInputs = [], remoteReceipts = new Map(), remoteReads = [];
+  let overlapping = 0, peak = 0;
+  let app;
+  t.after(async () => { await app?.close(); await rm(root, { recursive: true, force: true }); });
+  const model = (id, effort) => ({ id, label: id, efforts: [effort], defaultEffort: effort });
+  const adapter = (backend, models) => ({
+    runtimeAvailable: true, credentialConfigured: () => true, models,
+    createThread(profile, prior, { workspace: scope, interaction, mcpServers }) {
+      assert.equal(prior ?? null, null);
+      assert.equal(scope, 'private');
+      assert.equal(interaction, undefined);
+      assert.ok(!mcpServers?.length);
+      return { async runStreamed(input) {
+        assert.equal(typeof input, 'string');
+        assert.ok(!localInputs.has(backend));
+        localInputs.set(backend, { input, profile });
+        return { events: (async function* () {
+          peak = Math.max(peak, ++overlapping);
+          try {
+            yield { type: 'thread.started', thread_id: randomUUID() };
+            await delay(150);
+            yield { type: 'item.completed', item: { type: 'agent_message', id: 'result', text: JSON.stringify({
+              conclusion: backend + ' result', evidence: backend + ' private detail', pending: backend + ' pending',
+            }) } };
+            yield { type: 'turn.completed' };
+          } finally { overlapping--; }
+        })() };
+      } };
+    },
+  });
+  const start = () => startWorkbenchServer({ webRoot: root, workbenchRoot: root, terminalRoot: root, runtimeRoot: root,
+    data, localStateRoot: join(root, 'sdk'), access: () => ({ mode: 'execute', workspace: 'default' }),
+    makeLocalRuntime: async () => adapter('codex', [model('fixture-codex', 'low')]),
+    makeLocalAgentRuntime: async ({ backend }) => adapter(backend, [model('default', 'default')]),
+    makeBridge: () => ({ request(body) {
+      if (body.op === 'send') {
+        remoteInputs.push(body);
+        remoteReceipts.set(body.sessionId, { ok: true, targetId: body.targetId, session: { id: body.sessionId,
+          turns: [{ id: body.turnId, state: 'complete', reply: 'VPS summary' }] } });
+        return { ok: false, code: 'bridge_uncertain' };
+      }
+      if (['refresh', 'get'].includes(body.op)) {
+        remoteReads.push(body);
+        return remoteReceipts.get(body.sessionId);
+      }
+      return fixtures.chat(body);
+    } }),
+  });
+  app = await start();
+  const request = (op, fields) => app.requestMixedWorkflow({ op, ...fields });
+  const profiles = new Map();
+  for (const backend of ['codex', 'claude-sdk', 'antigravity']) {
+    const registered = await app.registerLocalProfile({ backend, name: backend, directory: workspace,
+      model: backend === 'codex' ? 'fixture-codex' : 'default', effort: backend === 'codex' ? 'low' : 'default' });
+    assert.equal(registered.ok, true);
+    profiles.set(backend, registered.profile);
+  }
+  const stage = (id, provider, context = 'independent') => ({
+    id, provider, name: id, model: '', instruction: '只处理本阶段简报。',
+    execution: { location: profiles.has(provider) ? 'local-sdk' : 'ssh-vps',
+      configId: profiles.get(provider)?.id ?? memoryTargetId, context },
+  });
+  const stages = [stage('draft', 'codex'), stage('review', 'claude-sdk'), stage('audit', 'antigravity', 'blind'), { ...stage('summary', 'codex'), execution: { location: 'ssh-vps', configId: memoryTargetId, context: 'independent' } }];
+  const edges = [{ from: 'review', to: 'audit' }, ...stages.slice(0, 3).map(({ id: from }) => ({ from, to: 'summary' }))];
+  const id = randomUUID();
+  const save = (steps) => data.changeWorkflows({ op: 'save', id, revision: null, draft: { name: '四路文本混合', stages: steps, edges } });
+  for (const unsupported of [{ model: 'custom' }, {
+    agent: { mcpServers: [], plugins: [], memory: 'shared' },
+  }]) {
+    await assert.rejects(async () => save(stages.map((step) => step.id === 'review' ? { ...step, ...unsupported } : step)), /纯文本/);
+  }
+  await save(stages);
+  const { targets } = await request('targets');
+  for (const [backend, profile] of profiles) {
+    assert.deepEqual(targets.find(({ id }) => id === profile.id).providers, [backend]);
+  }
+  const wrong = { ...stages[1], execution: { ...stages[1].execution, configId: profiles.get('antigravity').id } };
+  assert.equal((await request('catalog', { stage: wrong })).ok, false);
+
+  const input = { workflowId: id, revision: 1, task: 'COMMON-TASK', criteria: 'COMMON-CRITERIA', constraints: 'COMMON-LIMIT',
+    evidence: [{ stageId: 'audit', id: 'source', text: 'ORIGINAL-BLIND-EVIDENCE' }],
+    transfers: stages.slice(0, 3).map(({ id: from }) => ({ from, to: 'summary', fields: ['conclusion'] })) };
+  const admission = await request('start', { input });
+  assert.equal(admission.ok, true, JSON.stringify(admission));
+  const settled = (phase) => until(async () => {
+    const { run, running } = await request('status');
+    return !running && run?.phase === phase && run;
+  });
+  const paused = await settled('paused');
+  assert.deepEqual(paused.rows.map(({ state }) => state), ['complete', 'complete', 'complete', 'unknown']);
+  assert.ok(peak >= 2);
+  assert.equal(localInputs.size, 3);
+  for (const [backend, { input: prompt, profile }] of localInputs) {
+    assert.equal(profile.id, profiles.get(backend).id);
+    assert.match(prompt, /COMMON-TASK[\s\S]*COMMON-CRITERIA[\s\S]*COMMON-LIMIT/u);
+    assert.doesNotMatch(prompt, /private detail|已启用的记忆/u);
+  }
+  assert.match(localInputs.get('antigravity').input, /ORIGINAL-BLIND-EVIDENCE/u);
+  assert.doesNotMatch(localInputs.get('antigravity').input, /claude-sdk result/u);
+  assert.doesNotMatch(localInputs.get('claude-sdk').input, /ORIGINAL-BLIND-EVIDENCE/u);
+  assert.equal(remoteInputs.length, 1);
+  for (const backend of profiles.keys()) assert.ok(remoteInputs[0].prompt.includes(backend + ' result'));
+  assert.doesNotMatch(remoteInputs[0].prompt, /private detail|ORIGINAL-BLIND-EVIDENCE/u);
+  const row = paused.rows[1], claude = profiles.get('claude-sdk');
+  const publicCall = (payload) => app.requestLocal({ op: 'workbench', location: 'local-sdk', backend: 'claude-sdk',
+    payload: { ...payload, settings: { location: 'local-sdk', provider: 'claude-sdk', profileId: claude.id }, targetId: row.targetId } });
+  assert.deepEqual((await publicCall({ op: 'list' })).sessions, []);
+  assert.equal((await publicCall({ op: 'get', sessionId: row.sessionId })).code, 'session_not_found');
+  assert.equal((await publicCall({ op: 'send', sessionId: randomUUID(), turnId: randomUUID(), model: 'default',
+    prompt: 'untrusted', workflowStage: { runId: paused.id } })).code, 'workflow_stage_changed');
+  assert.equal((await request('artifacts', { query: { runId: paused.id, stageIndex: 1 } })).code, 'mixed_text_only');
+  assert.equal(data.preference(localMemoryJournalKey), undefined);
+  assert.equal(data.preference(memoryJournalKey), undefined);
+  await app.close();
+  app = await start();
+  assert.equal((await request('resume')).ok, true);
+  const completed = await settled('complete');
+  assert.deepEqual(completed.rows.slice(0, 3), paused.rows.slice(0, 3));
+  assert.equal(completed.rows[3].turnId, paused.rows[3].turnId);
+  assert.equal(remoteInputs.length, 1);
+  assert.equal(remoteReads[0].sessionId, paused.rows[3].sessionId);
+});

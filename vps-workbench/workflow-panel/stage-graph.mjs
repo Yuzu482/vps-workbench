@@ -432,7 +432,7 @@ export function createStageGraph(React, { defaultModel, providerLabel, agentMemo
           h('strong', { title: name }, name),
           incoming > 1 && h('span', { className: 'vc-workflow-dependency-count', title: `${incoming} 个上游阶段` }, incoming)),
         h('span', { className: 'vc-workflow-node-agent' },
-          h('span', { id: providerId, className: 'vc-workflow-node-provider', role: 'img', 'aria-label': providerLabel(stage.provider) },
+          h('span', { id: providerId, className: 'vc-workflow-node-provider', role: 'img', 'aria-label': providerLabel(stage.provider, stage.execution?.location) },
             menuIcon(h, stage.provider === 'claude' ? 'claude-sdk' : stage.provider)),
           h('span', { id: agentId, className: 'vc-workflow-node-agent-name' }, agent)),
         h('span', { id: memoryId, className: 'vc-workflow-node-memory', 'data-memory': execution ? 'isolated' : stage.agent?.memory }, context)),

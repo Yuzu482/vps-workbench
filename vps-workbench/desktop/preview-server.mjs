@@ -14,7 +14,7 @@ import { applyExtensionChange, extensionPreferenceKey, readExtensions } from '..
 import { membershipKey, parseProjectMemberships } from '../../remote-workbench/vps-chat/client/project-folders.js';
 import { readWorkflowRun } from '../workflow-engine/runner.mjs';
 import { readWorkflows, workflowKey, workflowProviders } from '../workflow-engine/state.mjs';
-import { mixedLocalRoute, mixedVpsRoute, openMixedWorkflow, requestMixedWorkflow } from './mixed-workflow.mjs';
+import { mixedLocalRoute, mixedLocalTargets, mixedVpsRoute, openMixedWorkflow, requestMixedWorkflow } from './mixed-workflow.mjs';
 import { readModelCatalog } from '../../remote-workbench/vps-chat/client/model-catalog.js';
 import { decodeWorkflowAttachments } from './workflow-attachments.mjs';
 import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
@@ -154,7 +154,7 @@ export async function startPreview({ localAgents = false, localComponents = fals
   const savedWorkflow = (id) => readWorkflows(data.preference(workflowKey) ?? null).find((record) => record.id === id);
   const previewPreset = () => ({ ...fixtures.chat({ op: 'preset' }).preset, providers: Object.keys(workflowProviders) });
   const localPacket = (body, options) => localSdk().then((sdk) => sdk.request({ op: 'workbench', location: 'local-sdk',
-    backend: 'codex', payload: body }, options));
+    backend: body.settings.provider, payload: body }, options));
   let failedStage;
   function dispatchMixed(body, options) {
     if (mixedFailureStage && body.op === 'send' && !failedStage) {
@@ -176,15 +176,14 @@ export async function startPreview({ localAgents = false, localComponents = fals
   const mixed = openMixedWorkflow({ data, canExecute: () => access.mode === 'execute', pollInterval: 150,
     async targets() {
       const preset = previewPreset();
-      const profiles = (await localSdk()).status().profiles.filter(({ backend }) => backend === 'codex');
+      const records = (await localSdk()).workflowRecords;
       return { ok: true, targets: [{ id: preset.memoryTargetId, targetId: preset.memoryTargetId, location: 'ssh-vps',
-        label: preset.name, providers: preset.providers }, ...profiles.map(({ id, targetId, name }) =>
-        ({ id, targetId, label: name, location: 'local-sdk', providers: ['codex'] }))] };
+        label: preset.name, providers: preset.providers }, ...mixedLocalTargets(records)] };
     },
     async resolve(stage) {
       if (stage?.execution?.location === 'local-sdk') {
         const sdk = await localSdk();
-        return mixedLocalRoute(stage, { sdk: { runtimeAvailable: true }, service: { status: sdk.status } });
+        return mixedLocalRoute(stage, sdk.workflowRecords.get(stage.provider));
       }
       const preset = previewPreset();
       if (!preset.providers.includes(stage?.provider)) return null;

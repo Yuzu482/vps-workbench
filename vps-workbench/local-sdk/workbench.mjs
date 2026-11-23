@@ -10,7 +10,7 @@ import { readWorkflowArtifacts } from '../desktop/workflow-artifacts.mjs';
 import { changedWorkflowFileAccess, changedWorkflowStage, prepareWorkflowStage } from '../desktop/workflow-stage.mjs';
 import { conversationIsolated, extensionPreferenceKey, extensionsForTurn, readExtensions } from '../extensions/state.mjs';
 import { readLegacyWorkflowRun } from '../workflow-engine/runner.mjs';
-import { exactFields, localWorkflowRunKey, maxWorkflowAttachmentBytes, readWorkflows, workflowKey, workflowUuid } from '../workflow-engine/state.mjs';
+import { exactFields, isLocalTextStage, localWorkflowRunKey, maxWorkflowAttachmentBytes, readWorkflows, workflowKey, workflowUuid } from '../workflow-engine/state.mjs';
 import { localBackends, usesLocalControls } from './providers.mjs';
 
 export const localMemoryJournalKey = 'dsh-vps-chat:local-memory-journal:v1';
@@ -344,7 +344,35 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data, 
       const existing = requests.get(body.turnId);
       if (existing) return existing.signature === signature ? existing.result : conflicted;
       const { extensions: _ignored, ...incoming } = body;
-      if (incoming.workflowStage && !memory) return bad;
+      if (incoming.workflowStage && !memory) {
+        if (workflowRun === readRun || incoming.projectMemory !== undefined || !isLive()) return changedWorkflowStage;
+        function prepareTextStage() {
+          if (!isLive() || !allowed()) return changedWorkflowStage;
+          const readBoundRun = () => {
+            const run = workflowRun();
+            const index = run?.rows.findIndex((row) => row.targetId === body.targetId &&
+              row.sessionId === body.sessionId && row.turnId === body.turnId);
+            const stage = run?.workflow.stages[index];
+            return run?.version === 5 && isLocalTextStage(stage) && !stage.agent && !stage.agentPreset && !stage.fileAccess
+              ? run : null;
+          };
+          return prepareWorkflowStage(incoming, incoming.workflowStage, readBoundRun, {}, () => false,
+            readSavedWorkflow, false, ['submitted', 'pending', 'running']);
+        }
+        const stage = prepareTextStage();
+        if (!stage.ok) return stage;
+        const model = service.status().models.find(({ id }) => id === incoming.model);
+        if (!model || model.id !== 'default') return changedWorkflowStage;
+        // Keep these receipts on the same service, in a private, non-interactive session.
+        return normalized(await raw(incoming, profile, 'send', {
+          fingerprint: signature, model: model.id, effort: model.defaultEffort,
+          background: true, workspace: 'private', input: stage.prompt,
+          permittedResources: () => {
+            const latest = prepareTextStage();
+            return latest.ok && latest.prompt === stage.prompt;
+          },
+        }, { prompt: stage.prompt }), profile, body.sessionId);
+      }
       if (!incoming.workflowStage && memory) {
         const state = extensionState();
         const projectId = incoming.projectMemory?.projectId ?? '';

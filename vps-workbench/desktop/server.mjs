@@ -19,7 +19,7 @@ import { createLocalWorkbench } from '../local-sdk/workbench.mjs';
 import { isLocalBackend, localBackends } from '../local-sdk/providers.mjs';
 import { openLocalAgentRuntime } from './local-agent-runtime.mjs';
 import { createComponentInstaller, validComponentSelection } from './component-install.mjs';
-import { mixedLocalRoute, mixedVpsRoute, openMixedWorkflow, requestMixedWorkflow } from './mixed-workflow.mjs';
+import { mixedLocalRoute, mixedLocalTargets, mixedVpsRoute, openMixedWorkflow, requestMixedWorkflow } from './mixed-workflow.mjs';
 import { workflowProviders } from '../workflow-engine/state.mjs';
 import { readToolPreferences } from '../../remote-workbench/vps-chat/client/tool-preferences.js';
 import { readModelCatalog } from '../../remote-workbench/vps-chat/client/model-catalog.js';
@@ -81,8 +81,12 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
       const runtime = await makeLocalRuntime({ ...options, apiKey });
       return { ...runtime, workflowCredentialPin: createHash('sha256').update(apiKey ?? '').digest('hex') };
     }
-    return makeLocalAgentRuntime({ ...localAgentOptions, ...options, backend, personalSubscription: personalClaudeSubscription,
-      claudeKey: stored?.key ?? (stored?.state === 'unavailable' ? undefined : localAgentOptions?.claudeKey) });
+    const claudeKey = stored?.key ?? (stored?.state === 'unavailable' ? undefined : localAgentOptions?.claudeKey);
+    const settings = { ...localAgentOptions, ...options, backend, personalSubscription: personalClaudeSubscription, claudeKey };
+    const runtime = await makeLocalAgentRuntime(settings);
+    const identity = backend === 'claude-sdk' ? [claudeKey, settings.sdkEntry, settings.personalSubscription]
+      : [settings.agyPath, settings.agyHash];
+    return { ...runtime, workflowCredentialPin: createHash('sha256').update(JSON.stringify(identity)).digest('hex') };
   }
   if (localStateRoot) {
     for (const backend of Object.keys(localBackends)) {
@@ -197,15 +201,14 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
   }
   const mixed = data && openMixedWorkflow({ data, canExecute,
     async targets() {
-      const items = (local.get('codex')?.service.status().profiles ?? []).map(({ id, name, targetId }) =>
-        ({ id, targetId, label: name, location: 'local-sdk', providers: ['codex'] }));
+      const items = mixedLocalTargets(local);
       const vps = await vpsTarget().catch(() => null);
       if (vps) items.push({ id: vps.memoryTargetId, targetId: vps.memoryTargetId, label: vps.name,
         location: 'ssh-vps', providers: vps.providers });
       return { ok: true, targets: items };
     },
     async resolve(stage) {
-      if (stage?.execution?.location === 'local-sdk') return mixedLocalRoute(stage, local.get('codex'));
+      if (stage?.execution?.location === 'local-sdk') return mixedLocalRoute(stage, local.get(stage.provider));
       const vps = await vpsTarget();
       if (!vps?.providers.includes(stage?.provider)) return null;
       const settings = { ...vps.settings, provider: stage.provider };
@@ -214,7 +217,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     },
     async catalog(route) {
       const body = { op: 'models', settings: route.settings, targetId: route.targetId };
-      const packet = route.settings.location === 'local-sdk' ? await local.get('codex').workbench.request(body) :
+      const packet = route.settings.location === 'local-sdk' ? await local.get(route.settings.provider).workbench.request(body) :
         await backend.request(body, { current: true, pinnedRelay: route.pinnedRelay });
       if (packet?.ok !== true) throw new Error('无法读取所选执行配置的模型目录。');
       const models = readModelCatalog(packet);
@@ -223,7 +226,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     },
     async dispatch(op, payload, route, options) {
       const body = { op, ...payload };
-      if (route.settings.location === 'local-sdk') return artifactJournal.remember(body, await local.get('codex').workbench.request(body, options));
+      if (route.settings.location === 'local-sdk') return artifactJournal.remember(body, await local.get(route.settings.provider).workbench.request(body, options));
       if (op === 'workflow-artifacts') return artifactJournal.remember(body, await readWorkflowArtifacts(body, { readRun: options.workflowRun,
         backend: { request: (packet) => backend.request(packet, { current: true, pinnedRelay: route.pinnedRelay }) },
         isAllowed: options.isLive }));

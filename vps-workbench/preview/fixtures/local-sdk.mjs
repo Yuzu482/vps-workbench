@@ -34,7 +34,7 @@ export async function createPreviewLocalSdk(access, { runtimeAvailable = () => t
             '<body><h1 id="heading">' + title + '</h1><button data-dsh-go="' + (index ? 1 : 2) + '">切换画板</button></body></html>\n' +
             fence).join('\n\n');
         } else if (prompt.includes('交接格式：只返回一个 JSON 对象')) {
-          reply = JSON.stringify({ conclusion: '本机完成初稿。', evidence: '依据本地演示简报。', pending: '待审校。' });
+          reply = JSON.stringify({ conclusion: backend === 'codex' ? '本机完成初稿。' : localBackends[backend].label + ' 完成阶段。', evidence: '依据本地演示简报。', pending: '待审校。' });
         } else if (prompt.startsWith('提炼用户明确')) {
           reply = JSON.stringify({ memories: [{ title: '演示偏好', text: '这是本机提炼夹具生成的笔记。' }] });
         }
@@ -64,7 +64,9 @@ export async function createPreviewLocalSdk(access, { runtimeAvailable = () => t
     },
     });
     const workbench = createLocalWorkbench({ service, runtimeAvailable: () => runtimeAvailable(backend), backend, access, pollInterval: 100, ...options });
-    backends.set(backend, { service, workbench });
+    backends.set(backend, { service, workbench, sdk: {
+      get runtimeAvailable() { return runtimeAvailable(backend); },
+    } });
   }
   function status() {
     const providers = [...backends.values()].map(({ service }) => {
@@ -77,7 +79,7 @@ export async function createPreviewLocalSdk(access, { runtimeAvailable = () => t
     return { ...providers[0], providers, profiles: providers.flatMap(({ profiles }) => profiles) };
   }
   return {
-    status,
+    status, workflowRecords: backends,
     searchSnapshots: () => Array.from(backends.values()).flatMap(({ service }) => service.searchSnapshot()),
     async request(body, options) {
       const selected = backends.get(body?.backend ?? 'codex');

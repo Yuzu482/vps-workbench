@@ -1813,3 +1813,53 @@ test('design comparison aligns parent and child, shares zoom, and durably carrie
   await current.locator(`option:checked[value="${saved.id}"]`).waitFor({ state: 'attached' });
   assert.ok(!requests.includes('send'));
 });
+
+test('workflow editor binds local Claude and Antigravity configurations and runs their text branches', { timeout: 35_000 }, async (t) => {
+  const page = await openPreview(t, { previewOptions: { localAgents: true }, seed({ preferences }) {
+    preferences['dsh-vps-chat:desktop-view-location:v1'] = 'ssh-vps';
+  } });
+  const { id, claude, agy } = await page.evaluate(async (key) => {
+    const native = window.vpsWorkbench;
+    const { targets } = await native.mixedWorkflow({ op: 'targets' });
+    const claude = targets.find((item) => item.location === 'local-sdk' && item.providers.includes('claude-sdk')).id;
+    const agy = targets.find((item) => item.location === 'local-sdk' && item.providers.includes('antigravity')).id;
+    const vps = targets.find((item) => item.location === 'ssh-vps').id;
+    const stage = (id, name, provider, configId, location = 'local-sdk') => ({
+      id, name, provider, instruction: '完成此步骤并按简报交付。', model: '',
+      execution: { location, configId, context: 'independent' },
+    });
+    const record = { id: crypto.randomUUID(), revision: 1, name: '文本混合验收', stages: [
+      stage('draft', '本机初稿', 'claude-sdk', claude),
+      stage('review', '本机审校', 'antigravity', agy),
+      stage('collect', 'VPS 汇总', 'codex', vps, 'ssh-vps'),
+    ], edges: [{ from: 'draft', to: 'collect' }, { from: 'review', to: 'collect' }] };
+    await native.setPreference(key, JSON.stringify([record]));
+    return { id: record.id, claude, agy };
+  }, workflowKey);
+  await page.reload();
+  await page.getByRole('button', { name: '工作流', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: '工作流', exact: true });
+  await panel.getByLabel('已保存的工作流').selectOption(id);
+  const config = panel.getByRole('combobox', { name: /^执行配置/u });
+  const provider = panel.getByRole('combobox', { name: /^执行工具/u });
+  assert.equal(await config.inputValue(), claude);
+  await config.selectOption(agy);
+  assert.equal(await provider.inputValue(), 'antigravity');
+  assert.equal(await provider.locator('option:checked').textContent(), 'Antigravity ACP');
+  assert.equal(await panel.getByRole('button', { name: /读取第 .*阶段的模型目录/u }).count(), 0);
+  await config.selectOption(claude);
+  assert.equal(await provider.inputValue(), 'claude-sdk');
+  assert.equal(await provider.locator('option:checked').textContent(), 'Claude Agent SDK');
+  await panel.getByRole('button', { name: '保存工作流', exact: true }).click();
+  const brief = panel.getByRole('group', { name: '运行简报', exact: true });
+  await brief.getByLabel('运行任务', { exact: true }).fill('处理纯文本活动说明。');
+  await brief.getByLabel('验收标准', { exact: true }).fill('按确认的字段汇总结论。');
+  for (const field of await brief.getByRole('checkbox', { name: '结论', exact: true }).all()) await field.check();
+  for (const approval of await brief.getByRole('checkbox', { name: '确认传递所选字段', exact: true }).all()) await approval.check();
+  await brief.getByRole('button', { name: '开始运行', exact: true }).click();
+  await panel.getByText('工作流已完成。', { exact: true }).waitFor({ timeout: 15_000 });
+  const result = await page.evaluate(() => window.vpsWorkbench.mixedWorkflow({ op: 'status' }));
+  assert.deepEqual(result.run.rows.map(({ state }) => state), ['complete', 'complete', 'complete']);
+  assert.match(result.run.rows[0].reply, /Claude Agent SDK 完成阶段/u);
+  assert.match(result.run.rows[1].reply, /Antigravity ACP 完成阶段/u);
+});

@@ -1,3 +1,4 @@
+import { isLocalTextStage } from '../workflow-engine/state.mjs';
 import { mixedHandoffValues, mixedIncoming, mixedTransferLabels as transferFields } from '../workflow-engine/mixed-context.mjs';
 import { simulateMixedWorkflow } from '../workflow-engine/mixed-preview.mjs';
 
@@ -158,7 +159,8 @@ export function createMixedRunBrief(React, { button, field, note, actions, provi
           const label = routeLabel(stage, targets);
           return h('li', { key: stage.id },
             h('strong', null, `第 ${index + 1} 阶段 · ${stageName(stage)}`),
-            note(stage.execution ? [label, providerLabel(stage.provider), stage.model || defaultModel(stage.provider),
+            note(stage.execution ? [label, providerLabel(stage.provider, stage.execution.location),
+              isLocalTextStage(stage) ? '账号默认模型 · 纯文本' : stage.model || defaultModel(stage.provider),
               executionContexts[stage.execution.context]].join(' · ') : label),
             stageFiles(h, stage, note));
         })),

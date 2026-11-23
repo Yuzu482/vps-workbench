@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { confirmedFailedReceipt, createWorkflowRunner, readWorkflowRun, validateMixedInput } from '../workflow-engine/runner.mjs';
-import { exactFields, mixedWorkflowHistoryKey, mixedWorkflowRunKey, readWorkflows, validateWorkflowDraft, workflowKey, workflowText } from '../workflow-engine/state.mjs';
+import { exactFields, isLocalTextStage, mixedWorkflowHistoryKey, mixedWorkflowRunKey, readWorkflows, validateWorkflowDraft, workflowKey, workflowText } from '../workflow-engine/state.mjs';
 import { archiveMixedRun, readMixedRunHistory } from './mixed-run-history.mjs';
 
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -113,6 +113,7 @@ export function openMixedWorkflow({ data, canExecute, targets, resolve, catalog,
       const stage = snapshot?.workflow.stages[stageIndex];
       const row = snapshot?.rows[stageIndex];
       if (!stage || !row || !canExecute()) return forbidden;
+      if (isLocalTextStage(stage)) return problem('mixed_text_only', '此阶段的交付物为文本回复。');
       const route = await resolve(stage);
       const isAllowed = () => findRun(runId)?.rows[stageIndex]?.turnId === row.turnId &&
         canExecute() && route?.routePin === snapshot.mixed.routePins[stageIndex] &&
@@ -148,7 +149,7 @@ export function openMixedWorkflow({ data, canExecute, targets, resolve, catalog,
           const models = await catalog(route);
           const model = stage.model || route.defaultModel || models.find((item) => item.isDefault)?.id;
           if (!model || !models.some(({ id }) => id === model)) return problem('mixed_preflight',
-            `阶段「${stage.name}」没有可固定的模型。请读取目录并明确选择一个模型。`);
+            `阶段「${stage.name}」没有可用的模型。请读取目录并明确选择一个模型。`);
           stage.model = model;
           routes.push(route);
         }
@@ -225,15 +226,24 @@ export async function requestMixedWorkflow(mixed, body) {
   return problem('invalid_request', '混合工作流操作不可用。');
 }
 
-export function mixedLocalRoute(stage, codex) {
-  if (stage?.execution?.location !== 'local-sdk' || stage.provider !== 'codex' || !codex?.sdk.runtimeAvailable) return null;
-  const profile = codex.service.status().profiles.find(({ id }) => id === stage.execution.configId);
+export function mixedLocalTargets(records) {
+  return Array.from(records).flatMap(([backend, { sdk, service }]) => sdk.runtimeAvailable
+    ? service.status().profiles.map(({ id, name, targetId }) =>
+      ({ id, targetId, label: name, location: 'local-sdk', providers: [backend] }))
+    : []);
+}
+
+export function mixedLocalRoute(stage, record) {
+  if (stage?.execution?.location !== 'local-sdk' || !record?.sdk.runtimeAvailable) return null;
+  const status = record.service.status();
+  if (stage.provider !== status.backend) return null;
+  const profile = status.profiles.find(({ id }) => id === stage.execution.configId);
   if (!profile) return null;
-  const routePin = hash(['local-sdk', profile, codex.sdk.workflowCredentialPin]);
+  const routePin = hash(['local-sdk', profile, record.sdk.workflowCredentialPin]);
   return { routePin, targetId: profile.targetId, defaultModel: profile.model,
-    settings: { location: 'local-sdk', provider: 'codex', profileId: profile.id },
-    isCurrent: () => codex.sdk.runtimeAvailable && hash(['local-sdk',
-      codex.service.status().profiles.find(({ id }) => id === profile.id), codex.sdk.workflowCredentialPin]) === routePin };
+    settings: { location: 'local-sdk', provider: stage.provider, profileId: profile.id },
+    isCurrent: () => record.sdk.runtimeAvailable && hash(['local-sdk',
+      record.service.status().profiles.find(({ id }) => id === profile.id), record.sdk.workflowCredentialPin]) === routePin };
 }
 
 export function mixedVpsRoute(stage, preset, currentPreset, reply, readRelay) {

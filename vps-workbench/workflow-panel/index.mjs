@@ -1,10 +1,11 @@
+import { localBackends, isLocalBackend } from '../local-sdk/providers.mjs';
 import { afterPopupMotion } from '../../remote-workbench/vps-chat/client/menu-motion.js';
 import { createAgentModulesEditor } from '../agent-presets/settings.mjs';
 import { resolveAgentPreset } from '../agent-presets/state.mjs';
 import { createRunArtifacts } from './run-artifacts.mjs';
 import { createStageFileAccessEditor } from './file-access.mjs';
 import { createMixedRunBrief, createMixedStageDetails, executionContexts, executionLocations, getMixedStartReason, targetForStage } from './mixed.mjs';
-import { linearWorkflowEdges, validateWorkflowDraft, validateWorkflowEdges, workflowProviders } from '../workflow-engine/state.mjs';
+import { linearWorkflowEdges, validateWorkflowDraft, validateWorkflowEdges, workflowProviders, isLocalTextStage } from '../workflow-engine/state.mjs';
 import { createStageGraph } from './stage-graph.mjs';
 import { workflowPanelStyles } from './styles.mjs';
 
@@ -16,7 +17,8 @@ const rowStates = {
 };
 const artifactRowStates = new Set(['complete', 'failed', 'stopped']);
 const defaultModel = (provider) => provider === 'antigravity' ? 'VPS CLI 默认模型' : '默认模型';
-const providerLabel = (provider) => workflowProviders[provider]?.label ?? provider;
+const providerLabel = (provider, location) => (location === 'local-sdk' ? localBackends[provider]?.label : null) ??
+  workflowProviders[provider]?.label ?? provider;
 const blankStage = (id) => ({ id, name: '', provider: 'codex', model: '', instruction: '' });
 const blankDraft = () => ({ name: '', stages: [blankStage('s1')], edges: [] });
 const asDraft = ({ name, stages, edges }) => ({ name, stages, edges });
@@ -127,14 +129,16 @@ export function createWorkflowPanel(React, { icon } = {}) {
     const locationTargets = mixed?.targets?.filter(({ location }) => location === execution?.location) ?? [];
     const target = targetForStage(stage, locationTargets);
     const allowed = execution ? target?.providers ?? [] : available;
-    const providers = execution?.location === 'local-sdk' ? ['codex'] : Object.keys(workflowProviders);
+    const local = execution?.location === 'local-sdk';
+    const textOnly = isLocalTextStage(stage);
+    const providers = local ? (target ? [...new Set([...allowed, stage.provider])] : Object.keys(localBackends)) : Object.keys(workflowProviders);
     const connected = allowed.includes(stage.provider) && (!execution || mixed?.canExecute !== false);
     const blind = execution?.context === 'blind';
     const matchingScope = execution?.location === 'local-sdk' ? fileEditor.localSdk && target?.targetId && target.targetId === fileEditor.catalogScope
       : !fileEditor.localSdk && target?.id === moduleCatalog?.codexTargetId;
-    const canEditGrants = !blind && Boolean(!execution || (target && matchingScope));
+    const canEditGrants = !blind && !textOnly && Boolean(!execution || (target && matchingScope));
     const models = catalog?.models ?? [];
-    const supportsModels = workflowProviders[stage.provider]?.models;
+    const supportsModels = !textOnly && workflowProviders[stage.provider]?.models;
     const savedModel = stage.model && !models.some(({ id }) => id === stage.model);
     const missingCatalogModel = savedModel && catalog?.status === 'ready';
     const setValue = (key) => (event) => onChange({ ...stage, [key]: event.target.value });
@@ -151,7 +155,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
         onChange(next);
         return;
       }
-      const provider = location === 'local-sdk' ? 'codex' : stage.provider;
+      const provider = location === 'local-sdk' && !isLocalBackend(stage.provider) ? 'codex' : stage.provider;
       onChange({ ...stage, provider, model: '', execution: { location, configId: '', context: execution?.context ?? 'independent' } });
     }
 
@@ -173,7 +177,12 @@ export function createWorkflowPanel(React, { icon } = {}) {
           h('option', { value: '' }, '沿用当前工作区'),
           Object.entries(executionLocations).map(([value, label]) => h('option', { key: value, value }, label)))),
         execution && field('执行配置', h('select', { value: execution.configId, required: true,
-          onChange: (event) => onChange({ ...stage, model: '', execution: { ...execution, configId: event.target.value } }) },
+          onChange: (event) => {
+            const configId = event.target.value;
+            const selected = locationTargets.find(({ id }) => id === configId);
+            const provider = local ? selected?.providers[0] ?? stage.provider : stage.provider;
+            onChange({ ...stage, provider, model: '', execution: { ...execution, configId } });
+          } },
           h('option', { value: '', disabled: true }, locationTargets.length ? '选择已登记的配置' : '没有已登记的配置'),
           execution.configId && !target && h('option', { value: execution.configId, disabled: true }, '原配置不可用'),
           locationTargets.map(({ id, label }) => h('option', { key: id, value: id }, label)))),
@@ -186,7 +195,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
         field('执行工具', h('select', { value: stage.provider, onChange: (event) =>
           onChange({ ...stage, provider: event.target.value, model: '' }) },
         providers.map((provider) => h('option', { key: provider, value: provider },
-          providerLabel(provider) + (allowed.includes(provider) ? '' : '（未启用）')))))),
+          providerLabel(provider, execution?.location) + (allowed.includes(provider) ? '' : '（未启用）')))))),
       supportsModels ? h('div', { className: 'vc-workflow-model' },
         field('模型', h('select', { value: stage.model, onChange: setValue('model') },
           h('option', { value: '' }, defaultModel(stage.provider)),
@@ -197,7 +206,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
         button(catalog?.status === 'ready' ? '刷新模型' : '读取模型', () => load(stage), {
           'aria-label': `读取第 ${number} 阶段的模型目录`,
           disabled: !connected || catalog?.status === 'loading',
-        })) : note(defaultModel(stage.provider)),
+        })) : note(textOnly ? '使用账号默认模型。此节点接收纯文本，使用独立会话和工作目录。' : defaultModel(stage.provider)),
       execution && mixed?.canExecute === false ? note('仅浏览模式下无法读取模型目录或运行阶段。')
         : !connected && note(execution && !target ? '请选择此阶段的已登记执行配置。' : '执行工具尚未启用。可以保存工作流，启用后可运行。'),
       catalog?.status === 'loading' && note('正在读取模型目录…', 'status'),
@@ -208,7 +217,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
       canEditGrants && h(StageFileAccessEditor, { ...fileEditor, stage, connected }),
       !canEditGrants && (stage.agent || stage.agentPreset || stage.fileAccess) && h('div', { className: 'vc-workflow-dependencies' },
         h('h4', null, '现有资源授权'),
-        note(blind ? '保存盲审阶段前须清除以下授权。' : '切换主工作区至此配置后可编辑授权。'),
+        note(textOnly ? '保存此纯文本阶段前须清除以下授权。' : blind ? '保存盲审阶段前须清除以下授权。' : '切换主工作区至此配置后可编辑授权。'),
         stage.agent && note(agentSummary(stage.agent)),
         stage.fileAccess && note(`${stage.fileAccess.paths.length} 个文件路径 · ${stage.fileAccess.attachments.length} 个附件`),
         actions((stage.agent || stage.agentPreset) && button('清除 Agent 资源及预设', clearAgent),
@@ -303,7 +312,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
             h('div', { className: 'vc-workflow-title-row' },
               h('strong', null, `第 ${index + 1} 阶段 · ${name}`),
               h('span', null, rowStates[row?.state] ?? row?.state ?? rowStates.waiting)),
-            note(`${providerLabel(stage.provider)} · ${stage.model || defaultModel(stage.provider)}`),
+            note(`${providerLabel(stage.provider, stage.execution?.location)} · ${isLocalTextStage(stage) ? '账号默认模型' : stage.model || defaultModel(stage.provider)}`),
             stage.execution && note(`${executionLocations[stage.execution.location]} · ${target?.label ?? '原配置'} · ${executionContexts[stage.execution.context]}`),
             stage.agent && note(agentSummary(run.mixed ? { ...stage.agent, memory: 'isolated' } : stage.agent)),
             run.mixed && h(MixedStageDetails, { run, index }),
@@ -318,7 +327,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
               'aria-label': `第 ${index + 1} 阶段输出目录`, tabIndex: 0 },
               h('span', { className: 'vc-workflow-note' }, '输出目录'),
               h('code', null, `~/.remote-ssh-chat/workflow-outputs/${row.turnId}`)),
-            [4, 5].includes(run.version) && row?.turnId && artifactRowStates.has(row.state) && typeof readArtifacts === 'function' &&
+            !isLocalTextStage(stage) && [4, 5].includes(run.version) && row?.turnId && artifactRowStates.has(row.state) && typeof readArtifacts === 'function' &&
               h(RunArtifacts, { key: `${run.id ?? ''}:${row.turnId}`, run, index, readArtifacts }),
             row?.reply && h('pre', { className: 'vc-workflow-text', tabIndex: 0,
               'aria-label': `第 ${index + 1} 阶段输出` }, row.reply));
