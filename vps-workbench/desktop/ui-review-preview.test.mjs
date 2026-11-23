@@ -1707,18 +1707,34 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     assert.equal(primary.height, 40);
     assert.ok(primary.width > boxes[0].width && primary.y > viewport.height - 160);
     assert.equal(primary.x, boxes[0].x);
-    const label = await newChat.getByText('新建对话', { exact: true }).boundingBox();
-    assert.ok(Math.abs(label.x + label.width / 2 - (primary.x + primary.width / 2)) < 0.5);
-    assert.ok(Math.abs(label.y + label.height / 2 - (primary.y + primary.height / 2)) < 0.5);
-    const provider = await footer.getByRole('button', { name: '切换 VPS 执行端', exact: true }).boundingBox();
+    const providerButton = footer.getByRole('button', { name: '切换 VPS 执行端', exact: true });
+    const settingsButton = footer.getByRole('button', { name: '设置', exact: true });
+    const provider = await providerButton.boundingBox();
     assert.ok(viewport.width > 620 ? primary.y + primary.height <= provider.y : primary.x + primary.width <= provider.x);
+    for (const button of [newChat, providerButton, settingsButton]) {
+      await assertWithinViewport(button);
+      const { horizontal, vertical, height } = await button.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const icon = element.firstElementChild.getBoundingClientRect();
+        const label = document.createRange();
+        label.selectNodeContents(element.querySelector('.vc-sidebar-new-label, .vc-tool-label') ?? element.lastChild);
+        const text = label.getBoundingClientRect();
+        return {
+          horizontal: (icon.left + text.right - bounds.left - bounds.right) / 2,
+          vertical: (text.top + text.bottom - bounds.top - bounds.bottom) / 2,
+          height: bounds.height,
+        };
+      });
+      assert.ok(Math.abs(horizontal) < 1);
+      assert.ok(Math.abs(vertical) < 2);
+      assert.equal(height, 40);
+    }
     const fills = (button) => button.evaluate((element) => {
       const style = getComputedStyle(element);
       return { border: style.borderTopColor, background: style.backgroundColor };
     });
     const clear = 'rgba(0, 0, 0, 0)';
-    for (const button of [...entries, footer.getByRole('button', { name: '设置', exact: true }),
-      footer.getByRole('button', { name: '切换 VPS 执行端', exact: true })]) {
+    for (const button of [...entries, settingsButton, providerButton]) {
       assert.deepEqual(await fills(button), { border: clear, background: clear });
     }
     assert.equal((await fills(newChat)).border, clear);
