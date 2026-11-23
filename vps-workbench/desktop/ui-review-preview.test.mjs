@@ -1688,6 +1688,16 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
   test(`P5 keeps workspace, board and resource controls distinct at ${viewport.width}×${viewport.height}`, { timeout: 30_000 }, async (t) => {
     const page = await openPreview(t, { viewport });
     await page.getByText('本地演示 · VPS 已配置', { exact: true }).waitFor();
+    const first = await sidebarButton(page, '新聊天');
+    await first.waitFor();
+    const rail = page.getByRole('complementary', { name: 'VPS 对话列表' });
+    const entries = [first, ...['项目资源库', '工作流', '设计工作台'].map((name) => rail.getByRole('button', { name, exact: true }))];
+    const boxes = await Promise.all(entries.map((entry) => entry.boundingBox()));
+    assert.ok(boxes.every(({ x, width, height }) => x === boxes[0].x && width === boxes[0].width && height === 34));
+    assert.deepEqual(boxes.slice(1).map(({ y }, index) => y - boxes[index].y - boxes[index].height), [4, 4, 4]);
+    const last = boxes.at(-1);
+    const heading = await page.getByRole('navigation', { name: '会话记录', exact: true }).getByRole('heading').boundingBox();
+    assert.equal(heading.y - (last.y + last.height), 10);
     await (await sidebarButton(page, '纸间书店')).click();
     await (await sidebarButton(page, '纸间书店 · 网站设计，设计会话')).click();
     const closeRail = page.getByRole('button', { name: '收起会话侧栏', exact: true });
