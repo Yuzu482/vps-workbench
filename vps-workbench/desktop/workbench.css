@@ -339,23 +339,22 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   background: var(--vc-canvas); border-top: 1px solid var(--vc-line);
 }
 #root .vc-sidebar-actions .vc-sidebar-quota {
-  display: flex; flex: none; align-items: center; justify-content: center; gap: 6px;
-  min-block-size: 40px; padding: 0 3px;
+  display: grid; flex: none; place-items: center;
+  min-inline-size: 38px; min-block-size: 40px; padding: 0;
 }
 #root .vc-sidebar-actions:has(.vc-quota-subscriptions:popover-open) .vc-sidebar-quota { background: var(--vc-tint); }
+.vc-quota-meter { display: grid; place-items: center; inline-size: 26px; block-size: 26px; }
 .vc-quota-ring {
-  display: grid; place-items: center; flex: none; inline-size: 30px; block-size: 30px;
-  padding: 2px; border-radius: 50%; box-sizing: border-box;
+  grid-area: 1 / 1; inline-size: 26px; block-size: 26px; border-radius: 50%;
   background: conic-gradient(var(--vc-accent) var(--vc-quota-fill), var(--vc-line-strong) 0);
-  color: var(--vc-ink); font-size: 10px; font-variant-numeric: tabular-nums;
+  mask-image: radial-gradient(closest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
 }
-.vc-sidebar-quota .vc-quota-ring {
-  inline-size: 24px; block-size: 24px; padding: 1.5px;
-  font-size: 9px; letter-spacing: -.2px;
+.vc-quota-ring[data-window="weekly"] {
+  inline-size: 17px; block-size: 17px;
+  background: conic-gradient(color-mix(in srgb, var(--vc-accent) 55%, var(--vc-ink)) var(--vc-quota-fill), var(--vc-line) 0);
 }
-.vc-quota-ring > span {
-  display: grid; place-items: center; inline-size: 100%; block-size: 100%;
-  border-radius: inherit; background: var(--vc-rail);
+.vc-quota-ring[data-available="false"] {
+  border: 1px dashed var(--vc-line-strong); background: none; mask-image: none;
 }
 .vc-quota-subscriptions {
   position: fixed; inset: auto auto 62px 12px; margin: 0;
@@ -443,7 +442,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 #root .vc-rail-shortcut > .vc-button[aria-current="page"] { color: var(--vc-accent); }
 @media (width > 620px) {
   #root > :is([data-vps-chat], [data-local-sdk]) {
-    --desktop-actions-height: 178px;
+    --desktop-actions-height: 150px;
     --desktop-history-width: 0px;
     grid-template-columns: 52px var(--desktop-history-width) minmax(0, 1fr);
     transition: grid-template-columns var(--desktop-sidebar-motion) cubic-bezier(.25,.72,.32,1);
@@ -468,9 +467,6 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   #root > :is([data-vps-chat], [data-local-sdk]) > .vc-sidebar-actions {
     grid-column: 1; flex-direction: column; align-items: stretch; justify-content: flex-end;
     padding-inline: 6px; background: var(--vc-rail); border-inline-end: 1px solid var(--vc-line);
-  }
-  #root > :is([data-vps-chat], [data-local-sdk]) .vc-sidebar-quota {
-    flex-direction: column; min-block-size: 66px;
   }
   #root > :is([data-vps-chat], [data-local-sdk]) .vc-quota-subscriptions {
     inset: auto auto 104px 58px;

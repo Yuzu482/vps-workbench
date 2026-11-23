@@ -1,4 +1,4 @@
-import { readSubscriptionLimits, subscriptionRings, subscriptionWindows } from './subscription-limits.js';
+import { readSubscriptionLimits, subscriptionMeter, subscriptionWindows } from './subscription-limits.js';
 import { createMarkdownReply } from './markdown.js';
 import { createDesignCanvas } from './design-canvas.js';
 import { readVersionHistory, validDesignTurn } from './design-version-state.js';
@@ -2639,7 +2639,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       sidebarActions ? h('div', { className: 'vc-sidebar-actions', role: 'group', 'aria-label': localSdk ? '本机操作' : 'VPS 操作' },
         h('button', { type: 'button', className: 'vc-button vc-sidebar-quota', popoverTarget: quotaPopoverId,
           'aria-label': `订阅额度 · ${tools.find(({ id }) => id === activeTool)?.label ?? providerName}` },
-          ...subscriptionRings(h, activeTool && subscriptionSamples[`${subscriptionScope}:${localSdk ? scope : activeTool}`])),
+          subscriptionMeter(h, activeTool && subscriptionSamples[`${subscriptionScope}:${localSdk ? scope : activeTool}`])),
         h(SubscriptionDetails, { id: quotaPopoverId, key: subscriptionScope,
           entries: subscriptionEntries, samples: subscriptionSamples, scope: subscriptionScope }),
         toolPicker,

@@ -1893,10 +1893,10 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     const rings = quotaToggle.getByRole('img');
     assert.equal(await rings.count(), 2);
     const [fiveHour, weekly] = await Promise.all([rings.nth(0).boundingBox(), rings.nth(1).boundingBox()]);
-    assert.ok([fiveHour, weekly].every(({ width, height }) => width === 24 && height === 24));
+    assert.deepEqual([fiveHour.width, weekly.width], [26, 17]);
+    assert.ok(Math.abs(fiveHour.x + fiveHour.width / 2 - weekly.x - weekly.width / 2) < 0.5);
+    assert.ok(Math.abs(fiveHour.y + fiveHour.height / 2 - weekly.y - weekly.height / 2) < 0.5);
     assert.ok(quotaBounds.height >= 40);
-    assert.ok(wide ? fiveHour.x === weekly.x && weekly.y >= fiveHour.y + fiveHour.height
-      : fiveHour.y === weekly.y && weekly.x >= fiveHour.x + fiveHour.width);
     await quotaToggle.getByRole('img', { name: '5 小时额度，暂无数据', exact: true }).waitFor();
     await quotaToggle.getByRole('img', { name: '每周额度，暂无数据', exact: true }).waitFor();
     await quotaToggle.press('Enter');
