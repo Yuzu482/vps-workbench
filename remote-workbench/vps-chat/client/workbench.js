@@ -50,12 +50,12 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       h('strong', { 'aria-hidden': true }, label), h('span', null, detail)));
   }
 
-  function SubscriptionDetails({ id, entries, samples, scope }) {
+  function SubscriptionDetails({ entries, samples, scope }) {
     const [page, setPage] = React.useState(0);
     const perPage = 4;
     const totalPages = Math.max(1, Math.ceil(entries.length / perPage));
     const currentPage = Math.min(page, totalPages - 1);
-    return h('div', { id, className: 'vc-quota-subscriptions', popover: 'auto', role: 'region',
+    return h('div', { className: 'vc-quota-subscriptions', role: 'region',
       'aria-label': '已配置的订阅额度' },
       entries.length ? h('div', { className: 'vc-quota-columns', 'aria-hidden': true },
         h('span', null, '剩余额度'), h('span', null, '5 小时'), h('span', null, '每周')) : null,
@@ -535,7 +535,6 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const rpc = localSdk ? local.request : sshRpc;
     const viewId = React.useId();
     const historyPanelId = sidebarActions ? `desktop-history-${viewId}` : undefined;
-    const quotaPopoverId = `desktop-quota-${viewId}`;
     const workbench = React.useRef(null);
     const body = React.useRef(null);
     const editor = React.useRef(null);
@@ -2308,13 +2307,14 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const currentProjectTitle = selectedProject
       ? projects.get(selectedProject) ?? (workspaceSnapshot.phase === 'pending' ? '正在读取项目' : '项目不可用')
       : '未归类';
-    const toolPicker = localSdk && configuredTools.length <= 1 ? h('div', { className: 'vc-tool-picker' },
-      h('div', { className: 'vc-tool-summary', title: local.profile?.name },
-        h('span', { className: 'vc-tool-badge' }, menuIcon(h, providers[providerId].icon)), h('span', { className: 'vc-tool-label' }, providerName)))
-      : ready && configuredTools.length ? h(ProviderPicker, {
-      value: activeTool, tools: configuredTools, disabled: providerSwitchLocked, active,
+    const toolPicker = sidebarActions || (ready && configuredTools.length) ? h(ProviderPicker, {
+      value: activeTool, tools: configuredTools, disabled: !ready || providerSwitchLocked, active,
       ariaLabel: localSdk ? '切换本机执行端' : undefined,
       select: changeProvider, closeOnSelect: crossesSubscriptionView, docked: sidebarActions,
+      decorateIcon: sidebarActions ? (icon) => subscriptionMeter(h,
+        activeTool && subscriptionSamples[`${subscriptionScope}:${localSdk ? scope : activeTool}`], icon) : undefined,
+      details: sidebarActions ? h(SubscriptionDetails, { key: subscriptionScope, entries: subscriptionEntries,
+        samples: subscriptionSamples, scope: subscriptionScope }) : null,
     }) : null;
     const accessProvider = showingSubscription ? subscriptionProvider : connection?.provider;
     const accessButton = access ? h(AccessTrigger, { access, provider: accessProvider, localSdk,
@@ -2637,11 +2637,6 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           onClick: () => openSettings('accounts'),
         }, '账号管理'))),
       sidebarActions ? h('div', { className: 'vc-sidebar-actions', role: 'group', 'aria-label': localSdk ? '本机操作' : 'VPS 操作' },
-        h('button', { type: 'button', className: 'vc-button vc-sidebar-quota', popoverTarget: quotaPopoverId,
-          'aria-label': `订阅额度 · ${tools.find(({ id }) => id === activeTool)?.label ?? providerName}` },
-          subscriptionMeter(h, activeTool && subscriptionSamples[`${subscriptionScope}:${localSdk ? scope : activeTool}`])),
-        h(SubscriptionDetails, { id: quotaPopoverId, key: subscriptionScope,
-          entries: subscriptionEntries, samples: subscriptionSamples, scope: subscriptionScope }),
         toolPicker,
         h('button', {
           type: 'button', className: 'vc-button vc-sidebar-settings', disabled: providerSwitchLocked,

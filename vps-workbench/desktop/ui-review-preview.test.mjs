@@ -180,7 +180,7 @@ test('subscription rings distinguish exhausted, unavailable and weekly-only obse
   });
   await (await sidebarButton(page, '纸间书店')).click();
   await (await sidebarButton(page, '纸间书店 · 周末发布清单')).click();
-  const summary = page.getByRole('button', { name: /^订阅额度/ });
+  const summary = page.getByRole('button', { name: '切换 VPS 执行端', exact: true });
   await summary.getByRole('img', { name: '5 小时额度，暂无数据', exact: true }).waitFor();
   await summary.getByRole('img', { name: '每周额度，剩余 0%', exact: true }).waitFor();
   await summary.press('Enter');
@@ -190,11 +190,12 @@ test('subscription rings distinguish exhausted, unavailable and weekly-only obse
 
 test('subscription details fit the narrow view without scrolling and paginate extra profiles', { timeout: 30_000 }, async (t) => {
   const page = await openPreview(t, { viewport: { width: 365, height: 480 } });
-  const trigger = page.getByRole('button', { name: /^订阅额度/ });
+  const vpsTrigger = page.getByRole('button', { name: '切换 VPS 执行端', exact: true });
+  const localTrigger = page.getByRole('button', { name: '切换本机执行端', exact: true });
   const details = page.getByRole('region', { name: '已配置的订阅额度', exact: true });
   const fits = () => details.evaluate((element) => element.scrollHeight <= element.clientHeight + 1 &&
     getComputedStyle(element).overflowY === 'clip');
-  await trigger.click();
+  await vpsTrigger.click();
   await details.getByRole('region', { name: 'Codex', exact: true }).waitFor();
   assert.equal(await details.getByRole('region').count(), 4);
   assert.equal(await fits(), true);
@@ -211,11 +212,14 @@ test('subscription details fit the narrow view without scrolling and paginate ex
     return route.fulfill({ response, json });
   });
   await page.getByRole('button', { name: '本机 SDK', exact: true }).click();
-  await trigger.click();
+  await localTrigger.click();
   await details.getByText('1 / 2', { exact: true }).waitFor();
   assert.equal(await details.getByRole('region').count(), 4);
   assert.equal(await fits(), true);
-  await details.getByRole('button', { name: '下一页', exact: true }).press('Enter');
+  const next = details.getByRole('button', { name: '下一页', exact: true });
+  await page.keyboard.press('Tab');
+  assert.equal(await next.evaluate((button) => document.activeElement === button), true);
+  await page.keyboard.press('Enter');
   await details.getByText('2 / 2', { exact: true }).waitFor();
   await details.getByRole('region', { name: /配置 5/ }).waitFor();
   assert.equal(await details.getByRole('region').count(), 1);
@@ -1881,32 +1885,33 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     const newChat = (wide ? shortcuts : rail).getByRole('button', { name: '新建对话', exact: true });
     for (const button of [newChat, footer.getByRole('button', { name: '设置', exact: true }),
       footer.getByRole('button', { name: '切换 VPS 执行端', exact: true })]) await assertWithinViewport(button);
-    assert.equal(await footer.getByRole('button').count(), 3);
+    assert.equal(await footer.getByRole('button').count(), 2);
     const providerButton = footer.getByRole('button', { name: '切换 VPS 执行端', exact: true });
     const settingsButton = footer.getByRole('button', { name: '设置', exact: true });
-    const quotaToggle = footer.getByRole('button', { name: /^订阅额度/ });
-    await assertWithinViewport(quotaToggle);
-    const quotaBounds = await quotaToggle.boundingBox();
-    const providerBounds = await providerButton.boundingBox();
-    assert.ok(wide ? quotaBounds.y + quotaBounds.height <= providerBounds.y
-      : quotaBounds.x + quotaBounds.width <= providerBounds.x);
-    const rings = quotaToggle.getByRole('img');
+    const rings = providerButton.getByRole('img');
     assert.equal(await rings.count(), 2);
     const [fiveHour, weekly] = await Promise.all([rings.nth(0).boundingBox(), rings.nth(1).boundingBox()]);
-    assert.deepEqual([fiveHour.width, weekly.width], [26, 17]);
+    assert.deepEqual([fiveHour.width, weekly.width], [34, 24]);
     assert.ok(Math.abs(fiveHour.x + fiveHour.width / 2 - weekly.x - weekly.width / 2) < 0.5);
     assert.ok(Math.abs(fiveHour.y + fiveHour.height / 2 - weekly.y - weekly.height / 2) < 0.5);
-    assert.ok(quotaBounds.height >= 40);
-    await quotaToggle.getByRole('img', { name: '5 小时额度，暂无数据', exact: true }).waitFor();
-    await quotaToggle.getByRole('img', { name: '每周额度，暂无数据', exact: true }).waitFor();
-    await quotaToggle.press('Enter');
-    const quota = footer.getByRole('region', { name: '已配置的订阅额度', exact: true });
-    await assertWithinViewport(quota);
+    const logo = await providerButton.locator('.vc-quota-meter > .vc-menu-icon').boundingBox();
+    assert.equal(logo.width, 16);
+    assert.ok(Math.abs(fiveHour.x + fiveHour.width / 2 - logo.x - logo.width / 2) < 0.5);
+    assert.ok(Math.abs(fiveHour.y + fiveHour.height / 2 - logo.y - logo.height / 2) < 0.5);
+    await providerButton.getByRole('img', { name: '5 小时额度，暂无数据', exact: true }).waitFor();
+    await providerButton.getByRole('img', { name: '每周额度，暂无数据', exact: true }).waitFor();
+    await providerButton.press('Enter');
+    const menu = footer.getByRole('dialog', { name: '执行端与订阅额度', exact: true });
+    await assertWithinViewport(menu);
+    await menu.getByRole('listbox').getByRole('option', { name: 'Codex', selected: true }).waitFor();
+    const quota = menu.getByRole('region', { name: '已配置的订阅额度', exact: true });
     await quota.getByRole('region', { name: 'Codex', exact: true }).waitFor();
     assert.equal(await quota.getByRole('region', { name: 'Claude API', exact: true }).count(), 0);
     await page.keyboard.press('Escape');
-    await quota.waitFor({ state: 'hidden' });
-    assert.equal(await quotaToggle.evaluate((button) => button === document.activeElement), true);
+    await menu.waitFor({ state: 'hidden' });
+    assert.equal(await providerButton.evaluate((button) => button === document.activeElement), true);
+    await providerButton.blur();
+    await page.mouse.move(viewport.width - 3, 8);
     const fills = (button) => button.evaluate((element) => {
       const style = getComputedStyle(element);
       return { border: style.borderTopColor, background: style.backgroundColor };
@@ -1963,6 +1968,10 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     await board.press('Enter');
     const detail = library.getByRole('region', { name: '纸间书店 · 首页', exact: true });
     const source = detail.getByRole('button', { name: '打开来源会话', exact: true });
+    await page.waitForFunction((element) => {
+      const { top, bottom } = element.getBoundingClientRect();
+      return top >= 0 && bottom <= innerHeight;
+    }, await source.elementHandle());
     await assertWithinViewport(source);
     await page.keyboard.press('Escape');
     await library.waitFor({ state: 'hidden' });

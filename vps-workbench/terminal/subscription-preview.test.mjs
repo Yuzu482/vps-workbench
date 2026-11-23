@@ -109,7 +109,7 @@ async function openTerminalPreview(t, { width = 1280, height = 720, reducedMotio
   await page.getByText('本地演示 · VPS 已配置', { exact: true }).waitFor();
   async function choose(name) {
     await page.getByRole('button', { name: '切换 VPS 执行端', exact: true })
-      .and(page.locator('[aria-disabled=false]')).click();
+      .and(page.locator('[data-switch-locked=false]')).click();
     await page.getByRole('option', { name, exact: true }).click();
   }
   const terminal = page.getByRole('region', { name: terminalLabel, exact: true });

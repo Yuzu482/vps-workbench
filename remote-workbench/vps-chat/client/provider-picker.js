@@ -5,7 +5,7 @@ import { readToolPreferences as readStoredToolPreferences } from './tool-prefere
 export const readToolPreferences = (settings, knownTools) =>
   readStoredToolPreferences(settings, knownTools, (key) => workbenchStorage.getItem(key));
 
-function positionPalette(palette, button, count, openingIndex, docked) {
+function positionPalette(palette, button, count, openingIndex, docked, integrated) {
   const workbench = button.closest('[data-vps-chat]');
   const bounds = workbench.getBoundingClientRect();
   const inlineRail = docked && window.matchMedia('(width > 620px)').matches;
@@ -17,7 +17,7 @@ function positionPalette(palette, button, count, openingIndex, docked) {
   const start = Math.max(0, bounds.left) + (inlineRail ? 0 : 6);
   const end = Math.min(window.innerWidth, bounds.right) - 6;
   const slot = Math.min(inlineRail ? 36 : 40, Math.max(24, (end - start - padding * 2) / count));
-  const width = count * slot + padding * 2;
+  const width = integrated ? Math.min(320, end - start) : count * slot + padding * 2;
   const center = reveal.left + reveal.width / 2;
   const align = padding + (Math.min(openingIndex, count - 1) + .5) * slot;
   const preferredLeft = docked && !inlineRail ? anchor.left : center - align;
@@ -31,6 +31,10 @@ function positionPalette(palette, button, count, openingIndex, docked) {
   palette.style.setProperty('--vc-reveal-end', (width - revealStart - revealWidth) + 'px');
   palette.style.setProperty('--vc-tool-left', left + 'px');
   palette.style.setProperty('--vc-tool-top', top + 'px');
+  if (integrated) {
+    palette.style.setProperty('--vc-tool-width', width + 'px');
+    palette.style.setProperty('--vc-tool-bottom', (window.innerHeight - top - height) + 'px');
+  }
   if (!docked) {
     const reserved = Math.max(anchor.width, left + width + 4 - anchor.left);
     button.parentElement.style.setProperty('--vc-tool-reserved', reserved + 'px');
@@ -39,19 +43,22 @@ function positionPalette(palette, button, count, openingIndex, docked) {
 
 export function createProviderPicker(React) {
   const h = React.createElement;
-  return function ProviderPicker({ value, tools, disabled, active, select, closeOnSelect, docked = false, ariaLabel = '切换 VPS 执行端' }) {
+  return function ProviderPicker({ value, tools, disabled, active, select, closeOnSelect, docked = false, ariaLabel = '切换 VPS 执行端', decorateIcon, details }) {
     const id = React.useId();
     const button = React.useRef(null);
     const palette = React.useRef(null);
+    const optionRow = React.useRef(null);
     const openingIndex = React.useRef(0);
     const optionPositions = React.useRef(new Map());
     const [open, setOpen] = React.useState(false);
     const current = tools.find((tool) => tool.id === value);
     const options = docked && current ? [current, ...tools.filter((tool) => tool !== current)] : tools;
     const selected = options.indexOf(current);
+    const integrated = Boolean(details);
 
     function focusOption(index) {
-      palette.current.children[index + 1]?.focus({ preventScroll: true });
+      const row = integrated ? optionRow.current : palette.current;
+      (row?.children[index + 1] ?? palette.current).focus({ preventScroll: true });
     }
 
     function closePalette(restoreFocus, instant = false) {
@@ -66,10 +73,10 @@ export function createProviderPicker(React) {
 
     function openPalette(index = Math.max(0, selected)) {
       const panel = palette.current;
-      if (disabled || !active || options.length === 0 || panel.matches(':popover-open')) return;
+      if (!active || (!integrated && (disabled || options.length === 0)) || panel.matches(':popover-open')) return;
       delete panel.dataset.instantClose;
       openingIndex.current = Math.max(0, selected);
-      positionPalette(panel, button.current, tools.length, openingIndex.current, docked);
+      positionPalette(panel, button.current, Math.max(1, tools.length), openingIndex.current, docked, integrated);
       panel.inert = false;
       panel.showPopover({ source: button.current });
       setOpen(true);
@@ -95,7 +102,7 @@ export function createProviderPicker(React) {
       if (!open) return undefined;
       const panel = palette.current;
       const anchor = button.current;
-      const update = () => positionPalette(panel, anchor, tools.length, openingIndex.current, docked);
+      const update = () => positionPalette(panel, anchor, Math.max(1, tools.length), openingIndex.current, docked, integrated);
       const observer = new ResizeObserver(update);
       observer.observe(anchor.closest(docked ? '.vc-sidebar-actions' : '.vc-header'));
       window.addEventListener('resize', update);
@@ -103,7 +110,7 @@ export function createProviderPicker(React) {
         window.removeEventListener('resize', update);
         observer.disconnect();
       };
-    }, [open, tools.length, docked]);
+    }, [open, tools.length, docked, integrated]);
 
     React.useLayoutEffect(() => {
       if (docked && open && selected >= 0 && palette.current.matches(':popover-open')) focusOption(selected);
@@ -119,7 +126,7 @@ export function createProviderPicker(React) {
         const duration = Number.parseFloat(motion.getPropertyValue('--vc-popup-duration'));
         const easing = motion.getPropertyValue('--vc-motion-curve').trim() || 'ease-out';
         for (let index = 0; index < length; index++) {
-          const option = panel.children[index + 1];
+          const option = (integrated ? optionRow.current : panel).children[index + 1];
           const left = option.offsetLeft;
           const before = previous.get(option);
           const inMotion = before?.animation?.playState === 'running';
@@ -136,11 +143,11 @@ export function createProviderPicker(React) {
         if (!next.has(option)) animation?.cancel();
       }
       optionPositions.current = next;
-    }, [docked, open, value, options.length]);
+    }, [docked, open, value, options.length, integrated]);
 
     function onPaletteKey(event) {
       if (event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return;
-      if (event.key === 'Tab') {
+      if (!integrated && event.key === 'Tab') {
         closePalette(true);
         return;
       }
@@ -149,38 +156,18 @@ export function createProviderPicker(React) {
         ArrowRight: (index + 1) % tools.length, ArrowLeft: (index - 1 + tools.length) % tools.length,
         Home: 0, End: tools.length - 1,
       };
-      if (event.key !== 'Escape' && !Object.hasOwn(steps, event.key)) return;
+      if (event.key !== 'Escape' &&
+          (!tools.length || (integrated && event.target.dataset.index === undefined) || !Object.hasOwn(steps, event.key))) return;
       event.preventDefault();
       event.stopPropagation();
       if (event.key === 'Escape') closePalette(true);
       else focusOption(steps[event.key]);
     }
 
-    const icon = menuIcon(h, current?.icon ?? 'model');
-    return h('span', { className: 'vc-tool-picker' },
-      h('button', {
-        ref: button, type: 'button', className: 'vc-tool-trigger',
-        'aria-label': ariaLabel, 'aria-description': current?.label ?? '请选择执行端',
-        'aria-controls': id, 'aria-haspopup': 'listbox', 'aria-expanded': open, 'aria-disabled': disabled,
-        'data-provider': current?.id ?? '', title: current?.label ?? '选择执行端',
-        onClick: () => openPalette(),
-        onKeyDown: (event) => {
-          if (event.key !== 'ArrowDown' && event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
-          if (event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing || disabled) return;
-          event.preventDefault();
-          openPalette(selected < 0 && event.key === 'ArrowLeft' ? tools.length - 1 : Math.max(0, selected));
-        },
-      }, docked ? h(React.Fragment, null,
-        h('span', { className: 'vc-tool-badge' }, icon),
-        h('span', { className: 'vc-tool-label' }, current?.label ?? '选择执行端'),
-        h('span', { className: 'vc-tool-caret', 'aria-hidden': true })) : icon),
-      h('div', {
-        ref: palette, id, popover: 'auto', className: 'vc-tool-palette', role: 'listbox',
-        'aria-label': '已配置的 VPS 执行端', 'aria-orientation': 'horizontal', onKeyDown: onPaletteKey,
-        'data-docked': docked, 'data-selected': selected >= 0, style: { '--vc-selected-index': Math.max(0, selected) },
-      },
-      h('span', { className: 'vc-tool-highlight', 'aria-hidden': true }),
-      options.map((tool, index) => h('button', {
+    const listbox = { role: 'listbox', 'aria-label': '已配置的 VPS 执行端', 'aria-orientation': 'horizontal' };
+    const optionItems = [
+      h('span', { key: 'highlight', className: 'vc-tool-highlight', 'aria-hidden': true }),
+      ...options.map((tool, index) => h('button', {
         key: tool.id, type: 'button', role: 'option', tabIndex: -1, className: 'vc-tool-option',
         'aria-label': tool.label, 'aria-selected': index === selected, 'aria-disabled': disabled,
         'data-index': index, 'data-tool-theme': tool.id, title: tool.label,
@@ -196,7 +183,36 @@ export function createProviderPicker(React) {
           if (closeOnSelect?.(tool.id)) closePalette(true, true);
           select(tool.id, origin);
         },
-      }, menuIcon(h, tool.icon)))));
+      }, menuIcon(h, tool.icon))),
+    ];
+    const icon = menuIcon(h, current?.icon ?? 'model');
+    return h('span', { className: 'vc-tool-picker' },
+      h('button', {
+        ref: button, type: 'button', className: 'vc-tool-trigger',
+        'aria-label': ariaLabel, 'aria-description': current?.label ?? '请选择执行端',
+        'aria-controls': id, 'aria-haspopup': integrated ? 'dialog' : 'listbox', 'aria-expanded': open,
+        'aria-disabled': disabled && !integrated, 'data-switch-locked': disabled,
+        'data-provider': current?.id ?? '', title: current?.label ?? '选择执行端',
+        onClick: () => openPalette(),
+        onKeyDown: (event) => {
+          if (event.key !== 'ArrowDown' && event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+          if (event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing || (disabled && !integrated)) return;
+          event.preventDefault();
+          openPalette(selected < 0 && event.key === 'ArrowLeft' ? tools.length - 1 : Math.max(0, selected));
+        },
+      }, docked ? h(React.Fragment, null,
+        h('span', { className: 'vc-tool-badge' }, decorateIcon ? decorateIcon(icon) : icon),
+        h('span', { className: 'vc-tool-label' }, current?.label ?? '选择执行端'),
+        h('span', { className: 'vc-tool-caret', 'aria-hidden': true })) : icon),
+      h('div', {
+        ref: palette, id, popover: 'auto', className: 'vc-tool-palette', onKeyDown: onPaletteKey,
+        ...(integrated ? { role: 'dialog', 'aria-label': '执行端与订阅额度', tabIndex: -1, 'data-integrated': '' } : listbox),
+        'data-docked': docked, 'data-selected': selected >= 0, style: { '--vc-selected-index': Math.max(0, selected) },
+      },
+      ...(integrated ? [
+        h('div', { ...listbox, ref: optionRow, className: 'vc-tool-option-row' }, ...optionItems),
+        details,
+      ] : optionItems)));
   };
 }
 
@@ -235,6 +251,22 @@ export const providerPickerCss = `
     [data-vps-chat] .vc-tool-palette:popover-open {
       clip-path:inset(0 var(--vc-reveal-end,0px) 0 var(--vc-reveal-start,0px) round 999px); opacity:0;
     }
+  }
+  [data-vps-chat] .vc-tool-palette[data-integrated] {
+    inset:auto auto var(--vc-tool-bottom,0) var(--vc-tool-left,0);
+    width:var(--vc-tool-width,320px); height:auto; row-gap:4px; border-radius:12px;
+    grid-auto-flow:row; grid-auto-columns:minmax(0,1fr);
+    clip-path:inset(calc(100% - 42px) var(--vc-reveal-end,0px) 0 var(--vc-reveal-start,0px) round 12px);
+  }
+  [data-vps-chat] .vc-tool-palette[data-integrated]:popover-open {clip-path:inset(-18px round 12px)}
+  @starting-style {
+    [data-vps-chat] .vc-tool-palette[data-integrated]:popover-open {
+      clip-path:inset(calc(100% - 42px) var(--vc-reveal-end,0px) 0 var(--vc-reveal-start,0px) round 12px);
+    }
+  }
+  [data-vps-chat] .vc-tool-option-row {
+    display:grid; grid-row:2; grid-auto-flow:column; grid-auto-columns:var(--vc-tool-slot);
+    justify-content:start; height:32px;
   }
   [data-vps-chat] .vc-tool-highlight {
     position:absolute; inset:4px auto 4px 6px; z-index:-1;

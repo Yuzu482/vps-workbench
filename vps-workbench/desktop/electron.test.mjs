@@ -125,7 +125,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
         const rail = element.parentElement.querySelector('.vc-rail').getBoundingClientRect();
         const logo = element.querySelector('.vc-tool-badge img');
         return Math.abs(dock.left - root.left) < 1 && Math.abs(dock.bottom - root.bottom) < 1 &&
-          logo?.naturalWidth > 0 && logo.clientWidth >= 24 &&
+          logo?.naturalWidth > 0 && logo.clientWidth >= 16 &&
           (vertical ? picker.bottom <= settings.top && dock.right <= main.left + 1
             : rail.bottom <= dock.top + 1 && picker.right <= settings.left && main.bottom <= dock.top + 1);
       }, stacked));

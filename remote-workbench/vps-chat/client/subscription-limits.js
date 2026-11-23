@@ -37,10 +37,10 @@ export function subscriptionWindows(limits) {
   });
 }
 
-export function subscriptionMeter(h, limits) {
+export function subscriptionMeter(h, limits, icon) {
   const readings = subscriptionWindows(limits);
   return h('span', { className: 'vc-quota-meter', title: readings.map(({ title }) => title).join('\n') },
     ...readings.map(({ key, label, available, remaining, caption }) =>
       h('span', { key, className: 'vc-quota-ring', 'data-window': key, 'data-available': available,
-        style: { '--vc-quota-fill': `${remaining}%` }, role: 'img', 'aria-label': `${label}额度，${caption}` })));
+        style: { '--vc-quota-fill': `${remaining}%` }, role: 'img', 'aria-label': `${label}额度，${caption}` })), icon);
 }

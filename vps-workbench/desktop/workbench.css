@@ -338,41 +338,27 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   display: flex; align-items: center; gap: 6px; min-width: 0; padding: 8px 12px 9px;
   background: var(--vc-canvas); border-top: 1px solid var(--vc-line);
 }
-#root .vc-sidebar-actions .vc-sidebar-quota {
-  display: grid; flex: none; place-items: center;
-  min-inline-size: 38px; min-block-size: 40px; padding: 0;
-}
-#root .vc-sidebar-actions:has(.vc-quota-subscriptions:popover-open) .vc-sidebar-quota { background: var(--vc-tint); }
-.vc-quota-meter { display: grid; place-items: center; inline-size: 26px; block-size: 26px; }
+.vc-quota-meter { display: grid; place-items: center; inline-size: 34px; block-size: 34px; }
 .vc-quota-ring {
-  grid-area: 1 / 1; inline-size: 26px; block-size: 26px; border-radius: 50%;
+  grid-area: 1 / 1; inline-size: 34px; block-size: 34px; border-radius: 50%;
   background: conic-gradient(var(--vc-accent) var(--vc-quota-fill), var(--vc-line-strong) 0);
   mask-image: radial-gradient(closest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
 }
 .vc-quota-ring[data-window="weekly"] {
-  inline-size: 17px; block-size: 17px;
+  inline-size: 24px; block-size: 24px;
   background: conic-gradient(color-mix(in srgb, var(--vc-accent) 55%, var(--vc-ink)) var(--vc-quota-fill), var(--vc-line) 0);
 }
 .vc-quota-ring[data-available="false"] {
   border: 1px dashed var(--vc-line-strong); background: none; mask-image: none;
 }
+#root .vc-tool-badge:has(.vc-quota-meter) { inline-size: 34px; block-size: 34px; background: transparent; }
+#root .vc-tool-badge .vc-quota-meter > .vc-menu-icon { grid-area: 1 / 1; inline-size: 16px; block-size: 16px; }
 .vc-quota-subscriptions {
-  position: fixed; inset: auto auto 62px 12px; margin: 0;
-  inline-size: min(300px, calc(100vw - 24px)); overflow: clip;
-  box-sizing: border-box; padding: 6px; gap: 6px;
-  border: 1px solid var(--vc-line); border-radius: 10px; background: var(--vc-rail);
-  box-shadow: var(--vc-shadow); color: var(--vc-muted); font: inherit; font-size: 12px;
-  opacity: 0; transform: translateY(5px);
-  transition: opacity var(--vc-popup-duration) var(--vc-motion-curve),
-    transform var(--vc-popup-duration) var(--vc-motion-curve),
-    display var(--vc-popup-duration) allow-discrete, overlay var(--vc-popup-duration) allow-discrete;
-}
-.vc-quota-subscriptions:popover-open { display: grid; opacity: 1; transform: none; }
-@starting-style {
-  .vc-quota-subscriptions:popover-open { opacity: 0; transform: translateY(5px); }
+  display: grid; grid-row: 1; gap: 4px; padding: 4px 2px; overflow: clip;
+  color: var(--vc-muted); font-size: 12px;
 }
 .vc-quota-subscriptions :is(.vc-quota-columns, section) {
-  display: grid; grid-template-columns: minmax(0, 1fr) repeat(2, 52px); align-items: center;
+  display: grid; grid-template-columns: minmax(0, 1fr) repeat(2, 48px); align-items: center;
   gap: 6px; padding-inline: 8px;
 }
 .vc-quota-columns { padding-block: 4px; font-size: 11px; }
@@ -401,7 +387,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 #root .vc-sidebar-new .vc-menu-icon { width: 18px; height: 18px; }
 .vc-sidebar-new-label { line-height: 1.25; }
 #root .vc-sidebar-actions .vc-tool-picker { inline-size: 100%; min-inline-size: 0; flex: 0 1 auto; }
-#root .vc-sidebar-actions :is(.vc-tool-trigger, .vc-tool-summary) {
+#root .vc-sidebar-actions .vc-tool-trigger {
   position: relative; display: flex; align-items: center; justify-content: center; gap: 6px;
   width: 100%; height: 40px; padding: 0 18px; border-radius: 8px;
   background: color-mix(in srgb, var(--vc-accent) 15%, var(--vc-surface));
@@ -442,7 +428,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 #root .vc-rail-shortcut > .vc-button[aria-current="page"] { color: var(--vc-accent); }
 @media (width > 620px) {
   #root > :is([data-vps-chat], [data-local-sdk]) {
-    --desktop-actions-height: 150px;
+    --desktop-actions-height: 104px;
     --desktop-history-width: 0px;
     grid-template-columns: 52px var(--desktop-history-width) minmax(0, 1fr);
     transition: grid-template-columns var(--desktop-sidebar-motion) cubic-bezier(.25,.72,.32,1);
@@ -468,10 +454,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
     grid-column: 1; flex-direction: column; align-items: stretch; justify-content: flex-end;
     padding-inline: 6px; background: var(--vc-rail); border-inline-end: 1px solid var(--vc-line);
   }
-  #root > :is([data-vps-chat], [data-local-sdk]) .vc-quota-subscriptions {
-    inset: auto auto 104px 58px;
-  }
-  #root .vc-sidebar-actions :is(.vc-tool-trigger, .vc-tool-summary, .vc-sidebar-settings) {
+  #root .vc-sidebar-actions :is(.vc-tool-trigger, .vc-sidebar-settings) {
     position: relative; display: grid; place-items: center; padding: 0;
   }
   .vc-sidebar-actions :is(.vc-tool-label, .vc-sidebar-settings-label) {
