@@ -3,6 +3,7 @@ param(
     [Parameter(ParameterSetName = 'Build')][switch]$StageOnly,
     [Parameter(ParameterSetName = 'Build')][switch]$OnDemandRuntimes,
     [Parameter(ParameterSetName = 'Install', Mandatory)][string]$StagedDirectory,
+    [Parameter(ParameterSetName = 'Package', Mandatory)][string]$PackageDirectory,
     [Parameter(ParameterSetName = 'Build')][string]$ElectronZip,
     [Parameter(ParameterSetName = 'Build')][string]$CompatibilityArchive,
     [Parameter(ParameterSetName = 'Build')][string]$SubscriptionArchive,
@@ -50,9 +51,12 @@ function Get-LocalWorkbenchProcesses {
         if ($process.HasExited) { continue }
         $path = $process.Path
         $root = $releases + [IO.Path]::DirectorySeparatorChar
-        if (!$path -or !$path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -or
-            $path.Substring($root.Length) -notmatch '^VPS-Workbench-[A-Za-z0-9.-]+-win-x64\\VPS Workbench\.exe$') {
+        if (!$path -or !$path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+            if ($PackageDirectory -and $env:VPS_WORKBENCH_DATA_DIR) { continue }
             throw 'A VPS Workbench executable outside the local releases directory is running. Close that copy first.'
+        }
+        if ($path.Substring($root.Length) -notmatch '^VPS-Workbench-[A-Za-z0-9.-]+-win-x64\\VPS Workbench\.exe$') {
+            throw 'Unexpected running VPS Workbench executable in the local release directory.'
         }
         $process
     }
@@ -73,6 +77,19 @@ try {
         if ((Split-Path -Parent $staged) -ne $releases -or (Split-Path -Leaf $staged) -cnotmatch $stagePattern) {
             throw 'Use the staging directory returned by Sync-Local.ps1 -StageOnly'
         }
+    } elseif ($PackageDirectory) {
+        $source = [IO.Path]::GetFullPath($PackageDirectory)
+        Assert-RealDirectory $source
+        $packageRevision = Read-WebRevision $source
+        if ($ExpectedWebRevision -and $packageRevision -cne $ExpectedWebRevision) {
+            throw 'The Windows update does not match its expected revision'
+        }
+        $unsafe = Get-ChildItem -LiteralPath $source -Force -Recurse | Where-Object {
+            $_.Attributes -band [IO.FileAttributes]::ReparsePoint
+        } | Select-Object -First 1
+        if ($unsafe) { throw 'The Windows update contains an unexpected link' }
+        $staged = Join-Path $releases ('.vps-workbench-' + $version + '-stage-' + [guid]::NewGuid().ToString('N'))
+        Copy-Item -LiteralPath $source -Destination $staged -Recurse
     } else {
         $staged = Join-Path $releases ('.vps-workbench-' + $version + '-stage-' + [guid]::NewGuid().ToString('N'))
         & (Join-Path $PSScriptRoot 'Build.ps1') -OutputDirectory $staged -ElectronZip $ElectronZip `
@@ -86,6 +103,21 @@ try {
     if ($StageOnly) {
         [pscustomobject]@{ StagedDirectory = $staged; Version = $version; WebRevision = $revision }
         return
+    }
+
+    if ($PackageDirectory) {
+        $versionParts = $version.Split('-', 2)
+        $baseVersion = [version]$versionParts[0]
+        $preview = if ($versionParts.Count -gt 1 -and $versionParts[1] -match '^dev\.(\d+)$') { [int]$Matches[1] } else { [int]::MaxValue }
+        foreach ($existing in Get-ChildItem -LiteralPath $releases -Directory) {
+            if ($existing.Name -match '^VPS-Workbench-(\d+\.\d+\.\d+)(?:-dev\.(\d+))?-win-x64$') {
+                $current = [version]$Matches[1]
+                $currentPreview = if ($Matches.ContainsKey(2)) { [int]$Matches[2] } else { [int]::MaxValue }
+                if ($current -gt $baseVersion -or ($current -eq $baseVersion -and $currentPreview -gt $preview)) {
+                    throw 'A newer VPS Workbench is already installed'
+                }
+            }
+        }
     }
 
     $previousRelease = $null
