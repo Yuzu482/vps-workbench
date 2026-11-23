@@ -109,7 +109,7 @@ test('a selected excerpt attaches to one draft and copied VPS links open the exi
   await quote.waitFor({ state: 'hidden' });
   assert.deepEqual(sends.map(({ prompt }) => readQuotedPrompt(prompt)),
     [{ prompt: '根据这段资料写一条提醒。', quote: excerpt }]);
-  await page.getByRole('button', { name: '新聊天', exact: true }).click();
+  await page.getByRole('button', { name: '新建对话', exact: true }).click();
   await openCopiedLink(page, chatLink);
   await paragraph.waitFor();
   await openCopiedLink(page, turnLink);
@@ -1266,9 +1266,11 @@ test('local and VPS chat share the conversation, sidebar and settings styles at 
         const shell = page.locator(`#root > ${selector}`);
         await locations.getByRole('button', { name: label, exact: true }).click();
         await shell.getByText(ready, { exact: true }).waitFor();
-        const newChat = shell.getByRole('button', { name: '新聊天', exact: true });
+        const newChat = shell.getByRole('button', { name: '新建对话', exact: true });
+        const railShortcut = shell.getByRole('button', { name: '项目资源库', exact: true });
         if (compact) await toggle.click();
         await newChat.waitFor();
+        await railShortcut.waitFor();
         await page.mouse.move(viewport.width - 2, 1);
         styles.push(await shell.evaluate((root) => [
           '.vc-header', '.vc-welcome :is(h1,h2)', '.vc-rail', '.vc-new', '.vc-sidebar-actions',
@@ -1280,14 +1282,15 @@ test('local and VPS chat share the conversation, sidebar and settings styles at 
 
         if (compact) {
           if (label === '本机 SDK') {
-            await newChat.focus();
+            await railShortcut.focus();
             await page.keyboard.press('Escape');
             await page.waitForFunction(() => {
               const toggle = document.querySelector('.desktop-sidebar-button');
               return toggle === document.activeElement && toggle.getAttribute('aria-expanded') === 'false';
             });
           } else await toggle.click();
-          await newChat.waitFor({ state: 'hidden' });
+          await railShortcut.waitFor({ state: 'hidden' });
+          await assertWithinViewport(newChat);
         }
 
         assert.equal(await shell.evaluate((root) => {
@@ -1688,24 +1691,32 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
   test(`P5 keeps workspace, board and resource controls distinct at ${viewport.width}×${viewport.height}`, { timeout: 30_000 }, async (t) => {
     const page = await openPreview(t, { viewport });
     await page.getByText('本地演示 · VPS 已配置', { exact: true }).waitFor();
-    const first = await sidebarButton(page, '新聊天');
+    const first = await sidebarButton(page, '项目资源库');
     await first.waitFor();
     const rail = page.getByRole('complementary', { name: 'VPS 对话列表' });
-    const entries = [first, ...['项目资源库', '工作流', '设计工作台'].map((name) => rail.getByRole('button', { name, exact: true }))];
+    const entries = [first, ...['工作流', '设计工作台'].map((name) => rail.getByRole('button', { name, exact: true }))];
     const boxes = await Promise.all(entries.map((entry) => entry.boundingBox()));
     assert.ok(boxes.every(({ y, width, height }) => y === boxes[0].y && Math.abs(width - boxes[0].width) < 1 && height === 38));
     assert.ok(boxes.slice(1).every(({ x }, index) => Math.abs(x - boxes[index].x - boxes[index].width - 6) < 0.5));
     const shortcuts = rail.getByRole('group', { name: '工作台快捷入口', exact: true });
-    assert.deepEqual(await shortcuts.getByRole('button').allTextContents(), ['', '', '', '']);
+    assert.deepEqual(await shortcuts.getByRole('button').allTextContents(), ['', '', '']);
+    const footer = page.getByRole('group', { name: 'VPS 操作', exact: true });
+    const newChat = footer.getByRole('button', { name: '新建对话', exact: true });
+    await assertWithinViewport(newChat);
+    const primary = await newChat.boundingBox();
+    assert.ok(primary.height > boxes[0].height && primary.width > boxes[0].width && primary.y > viewport.height - 160);
+    assert.equal(primary.x, boxes[0].x);
+    const provider = await footer.getByRole('button', { name: '切换 VPS 执行端', exact: true }).boundingBox();
+    assert.ok(viewport.width > 620 ? primary.y + primary.height <= provider.y : primary.x + primary.width <= provider.x);
     assert.equal(await shortcuts.getByRole('tooltip').count(), 0);
-    await entries[1].hover();
+    await first.hover();
     await shortcuts.getByRole('tooltip').getByText('浏览项目里的画板、图片和代码块。', { exact: true }).waitFor();
     await page.mouse.move(viewport.width - 3, 8);
     await shortcuts.getByRole('tooltip').waitFor({ state: 'hidden' });
     await first.focus();
     await page.keyboard.press('Tab');
     assert.equal(await entries[1].evaluate((button) => document.activeElement === button), true);
-    await shortcuts.getByRole('tooltip').getByText('项目资源库', { exact: true }).waitFor();
+    await shortcuts.getByRole('tooltip').getByText('工作流', { exact: true }).waitFor();
     const heading = await page.getByRole('navigation', { name: '会话记录', exact: true }).getByRole('heading').boundingBox();
     assert.equal(heading.y - (boxes[0].y + boxes[0].height), 10);
     await page.keyboard.press('Escape');

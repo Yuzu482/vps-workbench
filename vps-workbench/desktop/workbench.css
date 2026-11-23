@@ -328,6 +328,12 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   display: flex; align-items: center; gap: 6px; min-width: 0; padding: 8px 12px 9px;
   background: var(--vc-canvas); border-top: 1px solid var(--vc-line);
 }
+#root .vc-sidebar-actions .vc-sidebar-new {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  flex: none; width: auto; min-inline-size: 108px; height: 46px; padding-inline: 12px;
+  border-radius: 10px;
+}
+#root .vc-sidebar-new .vc-menu-icon { width: 18px; height: 18px; }
 #root .vc-sidebar-actions .vc-tool-picker { inline-size: 190px; min-inline-size: 0; flex: 0 1 auto; }
 #root .vc-sidebar-actions :is(.vc-tool-trigger, .vc-tool-summary) {
   grid-template-columns: 32px minmax(0, 1fr) 11px; align-items: center; justify-items: stretch; gap: 8px;
@@ -363,7 +369,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   #root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail { grid-area: 1 / 1 / 2 / 2; }
   .vc-rail-content { inline-size: 215px; }
   #root:not([data-sidebar-collapsed="true"]) > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) {
-    --desktop-actions-height: 104px;
+    --desktop-actions-height: 156px;
   }
   #root:not([data-sidebar-collapsed="true"]) > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) > .vc-main {
     grid-area: 1 / 2 / -1 / -1;

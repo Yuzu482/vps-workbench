@@ -2488,9 +2488,6 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       },
         sidebarActions ? h('div', { className: 'vc-rail-content' },
           h('div', { className: 'vc-rail-shortcuts', role: 'group', 'aria-label': '工作台快捷入口' },
-            h(SidebarShortcut, { className: 'vc-new vc-primary', icon: 'new-chat', label: '新聊天',
-              detail: '创建一段新的对话。', onClick: onNewChat ?? startNewChat,
-              disabled: !onNewChat && (!chatEnabled || Boolean(working)) }),
             ResourceLibrary ? h(SidebarShortcut, { className: 'vc-resource-entry', icon: 'library', label: '项目资源库',
               detail: '浏览项目里的画板、图片和代码块。', 'aria-haspopup': 'dialog', onClick: () => setResourcesOpen(true) }) : null,
             workflows ? h(SidebarShortcut, { className: 'vc-resource-entry', icon: 'fork', label: '工作流',
@@ -2540,6 +2537,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           onClick: () => openSettings('accounts'),
         }, '账号管理'))),
       sidebarActions ? h('div', { className: 'vc-sidebar-actions', role: 'group', 'aria-label': localSdk ? '本机操作' : 'VPS 操作' },
+        h('button', {
+          type: 'button', className: 'vc-button vc-new vc-sidebar-new vc-primary', onClick: onNewChat ?? startNewChat,
+          disabled: !onNewChat && (!chatEnabled || Boolean(working)),
+        }, menuIcon(h, 'new-chat'), '新建对话'),
         toolPicker,
         h('button', {
           type: 'button', className: 'vc-button vc-sidebar-settings', disabled: providerSwitchLocked,
