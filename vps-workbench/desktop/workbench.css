@@ -327,11 +327,13 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   background: var(--vc-canvas); border-top: 1px solid var(--vc-line);
 }
 #root .vc-sidebar-actions .vc-sidebar-new {
-  display: flex; justify-content: center; align-items: center; gap: 6px;
+  position: relative; display: flex; justify-content: center; align-items: center;
   flex: none; width: auto; min-inline-size: 108px; height: 40px; padding: 0 8px;
   border-radius: 8px;
 }
-#root .vc-sidebar-new .vc-menu-icon { width: 16px; height: 16px; }
+#root .vc-sidebar-new .vc-menu-icon {
+  position: absolute; inset-inline-start: 6px; width: 16px; height: 16px;
+}
 .vc-sidebar-new-label { text-align: center; line-height: 1.25; }
 #root .vc-sidebar-actions .vc-tool-picker { inline-size: 100%; min-inline-size: 0; flex: 0 1 auto; }
 #root .vc-sidebar-actions :is(.vc-tool-trigger, .vc-tool-summary) {
@@ -392,6 +394,23 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
     grid-column: 1; flex-direction: column; align-items: stretch; justify-content: flex-end;
     background: var(--vc-rail); border-inline-end: 1px solid var(--vc-line);
   }
+  #root .vc-sidebar-actions {
+    --vc-footer-icon-column: 44px;
+  }
+  #root .vc-sidebar-actions :is(.vc-sidebar-new, .vc-tool-trigger, .vc-tool-summary, .vc-sidebar-settings) {
+    display: grid; grid-template-columns: var(--vc-footer-icon-column) minmax(0, 1fr);
+    align-items: center; justify-items: start; gap: 0; padding: 0;
+    border: 1px solid transparent; text-align: start;
+  }
+  #root .vc-sidebar-actions .vc-tool-trigger {
+    grid-template-columns: var(--vc-footer-icon-column) minmax(0, 1fr) 18px;
+  }
+  #root .vc-sidebar-actions .vc-sidebar-new {
+    grid-template-columns: var(--vc-footer-icon-column) minmax(0, 1fr) var(--vc-footer-icon-column);
+  }
+  #root .vc-sidebar-actions :is(.vc-menu-icon, .vc-tool-badge):first-child,
+  #root .vc-sidebar-new-label { justify-self: center; }
+  #root .vc-sidebar-new .vc-menu-icon { position: static; }
   #root[data-sidebar-collapsed="true"] > :is([data-vps-chat], [data-local-sdk]) { --desktop-sidebar-width: 0px; }
   #root[data-sidebar-collapsed="true"] > :is([data-vps-chat], [data-local-sdk]) > .vc-rail {
     opacity: 0; transform: translateX(-10px); visibility: hidden; pointer-events: none;

@@ -1711,24 +1711,28 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     const settingsButton = footer.getByRole('button', { name: '设置', exact: true });
     const provider = await providerButton.boundingBox();
     assert.ok(viewport.width > 620 ? primary.y + primary.height <= provider.y : primary.x + primary.width <= provider.x);
+    const iconCenters = [];
     for (const button of [newChat, providerButton, settingsButton]) {
       await assertWithinViewport(button);
-      const { horizontal, vertical, height } = await button.evaluate((element) => {
+      const { iconCenter, textOffsetX, textOffsetY, height } = await button.evaluate((element) => {
         const bounds = element.getBoundingClientRect();
         const icon = element.firstElementChild.getBoundingClientRect();
         const label = document.createRange();
         label.selectNodeContents(element.querySelector('.vc-sidebar-new-label, .vc-tool-label') ?? element.lastChild);
         const text = label.getBoundingClientRect();
         return {
-          horizontal: (icon.left + text.right - bounds.left - bounds.right) / 2,
-          vertical: (text.top + text.bottom - bounds.top - bounds.bottom) / 2,
+          iconCenter: (icon.left + icon.right) / 2,
+          textOffsetX: (text.left + text.right - bounds.left - bounds.right) / 2,
+          textOffsetY: (text.top + text.bottom - bounds.top - bounds.bottom) / 2,
           height: bounds.height,
         };
       });
-      assert.ok(Math.abs(horizontal) < 1);
-      assert.ok(Math.abs(vertical) < 2);
+      iconCenters.push(iconCenter);
+      if (button === newChat) assert.ok(Math.abs(textOffsetX) < 1);
+      assert.ok(Math.abs(textOffsetY) < 2);
       assert.equal(height, 40);
     }
+    if (viewport.width > 620) assert.ok(iconCenters.every((x) => Math.abs(x - iconCenters[0]) < 1));
     const fills = (button) => button.evaluate((element) => {
       const style = getComputedStyle(element);
       return { border: style.borderTopColor, background: style.backgroundColor };
