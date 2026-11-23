@@ -292,9 +292,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   padding: 0; border-radius: 8px;
 }
 #root .vc-rail-shortcut .vc-menu-icon { width: 18px; height: 18px; }
-#root .vc-resource-entry { background: var(--vc-surface); }
 #root .vc-resource-entry .vc-menu-icon { color: var(--vc-accent); }
-#root .vc-playground-entry[aria-current="page"] { color: var(--vc-accent); background: var(--vc-tint); }
 .vc-rail-shortcut-running {
   position: absolute; inset-block-start: 6px; inset-inline-end: 6px; width: 6px; height: 6px;
   border-radius: 50%; background: var(--vc-accent);
@@ -342,11 +340,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   background: color-mix(in srgb, var(--vc-accent) 15%, var(--vc-surface));
   color: var(--vc-ink); text-align: start; font-weight: 650;
 }
-#root .vc-sidebar-actions .vc-tool-trigger { border: 1px solid transparent; }
 #root .vc-sidebar-actions .vc-tool-summary { display: grid; grid-template-columns: 32px minmax(0, 1fr); }
-#root .vc-sidebar-actions .vc-tool-trigger:is(:hover, [aria-expanded="true"]):not([aria-disabled="true"]) {
-  background: color-mix(in srgb, var(--vc-accent) 24%, var(--vc-surface));
-}
 .vc-tool-badge {
   display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px;
   background: var(--vc-surface); color: var(--vc-accent);
@@ -362,24 +356,24 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   border-radius: 9px; text-align: start;
 }
 #root .vc-sidebar-settings .vc-menu-icon { width: 18px; height: 18px; color: var(--vc-muted); }
-/* Give standalone action buttons a quiet outline without changing their dimensions. */
+/* Reveal the action area through the existing hover and selection fills. */
 #root :is(.vc-rail-shortcut, .vc-sidebar-actions, .vc-dialog-actions, .vc-welcome,
           .vc-workflow-actions, .vc-canvas-actions, .vc-playground-controls, .vc-playground-actions) > .vc-button:not(.vc-primary),
 #root .vc-sidebar-actions .vc-tool-trigger {
-  border-color: color-mix(in srgb, var(--vc-line-strong) 38%, var(--vc-line));
+  border-color: transparent;
+  background: transparent;
 }
 #root :is(.vc-rail-shortcut, .vc-sidebar-actions, .vc-dialog-actions, .vc-welcome,
-          .vc-workflow-actions, .vc-canvas-actions, .vc-playground-controls, .vc-playground-actions) > .vc-button:not(.vc-primary):not(:disabled):is(:hover, :focus-visible),
-#root .vc-sidebar-actions .vc-tool-trigger:not([aria-disabled="true"]):is(:hover, :focus-visible) {
-  border-color: var(--vc-line-strong);
+          .vc-workflow-actions, .vc-canvas-actions, .vc-playground-controls, .vc-playground-actions) > .vc-button:not(.vc-primary, :disabled, [aria-disabled="true"]):is(:hover, :focus-visible):where(:not([aria-current="page"])),
+#root .vc-sidebar-actions .vc-tool-trigger:not([aria-disabled="true"], [aria-expanded="true"]):is(:hover, :focus-visible) {
+  background: var(--vc-hover);
 }
 #root .vc-rail-shortcut > .vc-button[aria-current="page"],
 #root .vc-sidebar-actions .vc-tool-trigger[aria-expanded="true"] {
-  border-color: color-mix(in srgb, var(--vc-accent) 65%, var(--vc-line));
+  background: var(--vc-tint);
 }
-#root .vc-sidebar-actions .vc-sidebar-new {
-  border-color: color-mix(in srgb, var(--vc-accent) 80%, var(--vc-on-accent));
-}
+#root .vc-rail-shortcut > .vc-button[aria-current="page"] { color: var(--vc-accent); }
+#root .vc-sidebar-actions .vc-sidebar-new { border-color: transparent; }
 @media (width > 620px) {
   #root > :is([data-vps-chat], [data-local-sdk]) {
     grid-template-columns: var(--desktop-sidebar-width, 216px) minmax(0, 1fr);

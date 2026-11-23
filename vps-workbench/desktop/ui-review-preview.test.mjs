@@ -1712,27 +1712,29 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     assert.ok(Math.abs(label.y + label.height / 2 - (primary.y + primary.height / 2)) < 0.5);
     const provider = await footer.getByRole('button', { name: '切换 VPS 执行端', exact: true }).boundingBox();
     assert.ok(viewport.width > 620 ? primary.y + primary.height <= provider.y : primary.x + primary.width <= provider.x);
-    const outline = (button) => button.evaluate((element) => {
+    const fills = (button) => button.evaluate((element) => {
       const style = getComputedStyle(element);
-      return { color: style.borderTopColor, width: style.borderTopWidth };
+      return { border: style.borderTopColor, background: style.backgroundColor };
     });
-    for (const button of [...entries, newChat, footer.getByRole('button', { name: '设置', exact: true }),
+    const clear = 'rgba(0, 0, 0, 0)';
+    for (const button of [...entries, footer.getByRole('button', { name: '设置', exact: true }),
       footer.getByRole('button', { name: '切换 VPS 执行端', exact: true })]) {
-      const { color, width } = await outline(button);
-      assert.equal(width, '1px');
-      assert.doesNotMatch(color, /transparent|rgba\([^)]*, 0\)$/u);
+      assert.deepEqual(await fills(button), { border: clear, background: clear });
     }
-    const resting = await outline(first);
+    assert.equal((await fills(newChat)).border, clear);
+    assert.notEqual((await fills(newChat)).background, clear);
     assert.equal(await shortcuts.getByRole('tooltip').count(), 0);
     await first.hover();
-    assert.notEqual((await outline(first)).color, resting.color);
     await shortcuts.getByRole('tooltip').getByText('浏览项目里的画板、图片和代码块。', { exact: true }).waitFor();
+    assert.notEqual((await fills(first)).background, clear);
     await page.mouse.move(viewport.width - 3, 8);
     await shortcuts.getByRole('tooltip').waitFor({ state: 'hidden' });
+    assert.equal((await fills(first)).background, clear);
     await first.focus();
     await page.keyboard.press('Tab');
     assert.equal(await entries[1].evaluate((button) => document.activeElement === button), true);
     await shortcuts.getByRole('tooltip').getByText('工作流', { exact: true }).waitFor();
+    assert.notEqual((await fills(entries[1])).background, clear);
     const heading = await page.getByRole('navigation', { name: '会话记录', exact: true }).getByRole('heading').boundingBox();
     assert.equal(heading.y - (boxes[0].y + boxes[0].height), 10);
     await page.keyboard.press('Escape');
@@ -1751,6 +1753,9 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     const canvas = page.getByRole('region', { name: '设计工作台', exact: true });
     await canvas.getByRole('heading', { name: '设计工作台', exact: true }).waitFor();
     await assertWithinViewport(canvas.getByRole('button', { name: '适应全部画板', exact: true }));
+
+    const selectedShortcut = page.locator('.vc-playground-entry[aria-current="page"]');
+    assert.notEqual((await fills(selectedShortcut)).background, clear);
 
     const entry = await sidebarButton(page, '项目资源库');
     await entry.press('Enter');
