@@ -346,28 +346,32 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data, 
       const { extensions: _ignored, ...incoming } = body;
       if (incoming.workflowStage && !memory) {
         if (workflowRun === readRun || incoming.projectMemory !== undefined || !isLive()) return changedWorkflowStage;
-        function prepareAttachmentStage() {
+        function prepareLocalStage() {
           if (!isLive() || !allowed()) return changedWorkflowStage;
           const readBoundRun = () => {
             const run = workflowRun();
             const index = run?.rows.findIndex((row) => row.targetId === body.targetId &&
               row.sessionId === body.sessionId && row.turnId === body.turnId);
             const stage = run?.workflow.stages[index];
-            return run?.version === 5 && isLocalClaudeOrAcpStage(stage) && !stage.agent && !stage.agentPreset && !stage.fileAccess?.paths.length
+            return run?.version === 5 && isLocalClaudeOrAcpStage(stage) && !stage.agentPreset && !stage.fileAccess?.paths.length &&
+              !stage.agent?.plugins.length && stage.agent?.memory !== 'shared'
               ? run : null;
           };
-          return prepareWorkflowStage(incoming, incoming.workflowStage, readBoundRun, {}, () => false,
+          return prepareWorkflowStage(incoming, incoming.workflowStage, readBoundRun, extensionState(), () => false,
             readSavedWorkflow, false, ['submitted', 'pending', 'running']);
         }
-        const stage = prepareAttachmentStage();
+        const stage = prepareLocalStage();
         if (!stage.ok) return stage;
         const model = service.status().models.find(({ id }) => id === incoming.model);
         if (!model || model.id !== 'default') return changedWorkflowStage;
         const refs = stage.fileAccess?.attachments ?? [];
-        const authorization = JSON.stringify(stage.fileAccess);
+        const attachmentPin = JSON.stringify(stage.fileAccess);
+        const authorization = JSON.stringify([attachmentPin ?? null, stage.localMcp]);
+        const receiptFingerprint = stage.localMcp.length ? fingerprint({ signature, authorization }) :
+          refs.length ? fingerprint({ signature, authorization: attachmentPin }) : signature;
         const permittedResources = () => {
-          const latest = prepareAttachmentStage();
-          return latest.ok && latest.prompt === stage.prompt && JSON.stringify(latest.fileAccess) === authorization;
+          const latest = prepareLocalStage();
+          return latest.ok && latest.prompt === stage.prompt && JSON.stringify([JSON.stringify(latest.fileAccess) ?? null, latest.localMcp]) === authorization;
         };
         let files = [];
         if (refs.length) {
@@ -382,9 +386,9 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data, 
         ] : stage.prompt;
         // The stored conversation and workflow receipt keep the prompt and references, without copying attachment content.
         return normalized(await raw(incoming, profile, 'send', {
-          fingerprint: refs.length ? fingerprint({ signature, authorization }) : signature,
+          fingerprint: receiptFingerprint,
           model: model.id, effort: model.defaultEffort,
-          background: true, workspace: 'private', input, permittedResources,
+          background: true, workspace: 'private', input, permittedResources, mcpServers: stage.localMcp,
         }, { prompt: stage.prompt }), profile, body.sessionId);
       }
       if (!incoming.workflowStage && memory) {

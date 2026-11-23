@@ -1,13 +1,14 @@
 import { execFile, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { lstat, readFile, realpath, writeFile } from 'node:fs/promises';
+import { lstat, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, win32 } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { canonicalLocalDirectory, ensurePrivateDirectory } from './codex-runtime.mjs';
 import { antigravityThread } from '../local-sdk/antigravity.mjs';
 import { claudeThread } from '../local-sdk/claude.mjs';
+import { withStageMcp } from '../local-sdk/stage-mcp.mjs';
 import { providerDefaultModels, validLocalApiKey } from '../local-sdk/providers.mjs';
 
 export const claudeKeyVariable = 'VPS_WORKBENCH_LOCAL_CLAUDE_API_KEY';
@@ -19,8 +20,10 @@ const drive = /^[a-z]:[\\/]/i;
 const binaryPath = (value) => typeof value === 'string' && drive.test(value) && /[\\/]agy[.]exe$/iu.test(value);
 const policy = {
   agentMode: '', toolPermission: 'strict', enableTerminalSandbox: true,
-  permissions: { deny: ['command(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)', 'mcp(*)'] },
+  permissions: { deny: ['command(*)', 'write_file(*)', 'read_url(*)', 'execute_url(*)'], ask: ['mcp(*)'] },
 };
+const previousPolicy = { ...policy, permissions: { deny: [...policy.permissions.deny, 'mcp(*)'] } };
+
 
 export function localAgentEnvironment(environment, home, cache, binary, temp = cache) {
   const system = new Map(Object.entries(environment).map(([name, value]) => [name.toUpperCase(), value]));
@@ -61,8 +64,15 @@ async function configureAntigravity(account) {
   const contents = JSON.stringify(policy);
   try { await writeFile(file, contents, { flag: 'wx', mode: 0o600 }); }
   catch (error) {
-    if (error.code !== 'EEXIST' || !(await lstat(file)).isFile() ||
-        JSON.stringify(JSON.parse(await readFile(file, 'utf8'))) !== contents) throw failure('invalid_environment');
+    if (error.code !== 'EEXIST' || !(await lstat(file)).isFile()) throw failure('invalid_environment');
+    const saved = JSON.stringify(JSON.parse(await readFile(file, 'utf8')));
+    if (saved === contents) return;
+    if (saved !== JSON.stringify(previousPolicy)) throw failure('invalid_environment');
+    const temporary = file + '.' + randomUUID() + '.tmp';
+    try {
+      await writeFile(temporary, contents, { flag: 'wx', mode: 0o600 });
+      await rename(temporary, file);
+    } finally { await rm(temporary, { force: true }); }
   }
 }
 
@@ -164,9 +174,10 @@ export async function openLocalAgentRuntime({ backend, runtimeRoot, stateRoot, c
       await launchLogin(binary, account, localAgentEnvironment(environment, account, cache, binary, temp));
       return { ok: true };
     } }),
-    async createThread(profile, nativeId, { interaction, turnId, workspace, bindSession } = {}) {
+    async createThread(profile, nativeId, { interaction, turnId, workspace, bindSession, mcpServers = [], permittedResources } = {}) {
       if (!runtimeAvailable) throw failure('invalid_environment');
       if (!credentialConfigured(profile)) throw failure('auth_required');
+      if (mcpServers.length && (workspace !== 'private' || interaction || !permittedResources)) throw failure('invalid_environment');
       const registered = await canonicalLocalDirectory(profile.directory);
       if (claude) {
         const { account, temp, env } = await claudeEnvironment(profile);
@@ -176,17 +187,28 @@ export async function openLocalAgentRuntime({ backend, runtimeRoot, stateRoot, c
         } else {
           env.ANTHROPIC_API_KEY = claudeKey;
         }
-        return claudeThread({ query: sdk.query, directory, nativeId, turnId, context: interaction,
-          providerOptions: { pathToClaudeCodeExecutable: binary, env } });
+        return withStageMcp(mcpServers, permittedResources, (connections) =>
+          claudeThread({ query: sdk.query, directory, nativeId, turnId, context: interaction, mcpServers: connections,
+            permitted: permittedResources, providerOptions: { pathToClaudeCodeExecutable: binary, env } }));
       }
       const { account, cache, temp } = await profileDirectories(stateRoot, profile);
       const directory = workspace === 'private' ? await ensurePrivateDirectory(join(temp, turnId)) : registered;
       const env = localAgentEnvironment(environment, account, cache, binary, temp);
       if (!await digestMatches(binary, agyHash)) throw failure('invalid_environment');
       await configureAntigravity(account);
-      return antigravityThread({ directory, nativeId, context: interaction, bindSession,
-        launch: () => spawn(binary, ['acp', '--sandbox', '--disable-telemetry', '--include-default-customizations=false'], { cwd: directory, env,
-          shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }) });
+      if (workspace === 'private') {
+        // ACP must discover only the servers supplied in the scoped session descriptor.
+        for (const path of [join(account, '.gemini', 'config', 'mcp_config.json'),
+          join(account, '.gemini', 'antigravity-cli', 'mcp_config.json'), join(directory, '.agents', 'mcp_config.json')]) {
+          const existing = await lstat(path).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+          if (existing) throw failure('invalid_environment');
+        }
+      }
+      return withStageMcp(mcpServers, permittedResources, (connections) =>
+        antigravityThread({ directory, nativeId, context: interaction, bindSession, mcpServers: connections, permitted: permittedResources,
+          launch: () => spawn(binary, ['acp', '--sandbox', '--disable-telemetry', '--include-default-customizations=false',
+            ...(connections.length ? ['--process-per-session'] : [])], { cwd: directory, env,
+            shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }) }));
     },
   };
 }

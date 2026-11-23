@@ -1,4 +1,4 @@
-import { exactFields, workflowProviders, workflowText, workflowUuid } from '../workflow-engine/state.mjs';
+import { exactFields, isLocalClaudeOrAcpStage, workflowProviders, workflowText, workflowUuid } from '../workflow-engine/state.mjs';
 import { workflowStagePrompt } from '../workflow-engine/runner.mjs';
 
 export const changedWorkflowStage = {
@@ -12,7 +12,25 @@ function unavailable(message) {
   return { ok: false, code: 'workflow_modules_unavailable', message };
 }
 
-export function checkStageResources({ provider, agent }, targetId, state) {
+export function resolveLocalStageMcp(stage, targetId, state) {
+  const selected = [];
+  for (const { id, targetId: approvedTarget, tools } of stage.agent?.mcpServers ?? []) {
+    const server = state.servers.find((entry) =>
+      entry.id === id && entry.targetId === targetId && entry.enabled && entry.local);
+    if (approvedTarget !== targetId || !server || !tools?.length ||
+        tools.some((tool) => !server.local.tools.includes(tool))) return null;
+    selected.push({ id, targetId, local: { url: server.local.url, tools: [...tools] } });
+  }
+  return selected;
+}
+
+export function checkStageResources(stage, targetId, state) {
+  if (isLocalClaudeOrAcpStage(stage)) {
+    const localMcp = resolveLocalStageMcp(stage, targetId, state);
+    if (!localMcp) return unavailable('本机阶段的 MCP 服务或授权工具已变更。请重新核对授权。');
+    return { ok: true, mcpServers: localMcp.map(({ id }) => id), pluginInstructions: '', localMcp };
+  }
+  const { provider, agent } = stage;
   const mcpServers = [];
   const pluginBlocks = [];
   for (const reference of agent?.mcpServers ?? []) {
@@ -64,9 +82,9 @@ export function prepareWorkflowStage(body, reference, readRun, state, isProject,
 
   const resources = checkStageResources(stage, body.targetId, state);
   if (!resources.ok) return resources;
-  const { mcpServers, pluginInstructions } = resources;
+  const { mcpServers, pluginInstructions, localMcp } = resources;
   try {
-    return { ok: true, projectId, memory: run.version === 5 ? 'isolated' : stage.agent?.memory ?? 'isolated', mcpServers, fileAccess,
+    return { ok: true, projectId, memory: run.version === 5 ? 'isolated' : stage.agent?.memory ?? 'isolated', mcpServers, fileAccess, ...(localMcp && { localMcp }),
       prompt: workflowStagePrompt(run, index, pluginInstructions, scoped) };
   } catch {
     return unavailable('此阶段的任务和提示词模板组合过长。请缩短任务或减少模板。');

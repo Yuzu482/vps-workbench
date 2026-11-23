@@ -41,6 +41,7 @@ const messages = Object.freeze({
   browse_only: '本机 SDK 处于仅浏览模式。',
   auth_required: '请配置本机 Codex API 密钥并检查账号权限。',
   network_error: '本机 Codex 无法连接模型服务。请检查本机网络和原回执。',
+  mcp_http_unavailable: '当前 Antigravity ACP 未声明支持 HTTP MCP。请检查版本后重试。',
   image_input_unavailable: '当前本机 ACP 账号或模型未声明支持图片附件。请移除图片或改用文字资料。',
   start_failed: '本机 Codex 无法启动这一轮。',
   turn_failed: '本机 Codex 报告该轮失败。',
@@ -294,6 +295,7 @@ function knownStartCode(error) {
 
 function sdkFailure(message) {
   if (typeof message !== 'string') return null;
+  if (message === 'ACP MCP HTTP unavailable') return 'mcp_http_unavailable';
   if (message === 'ACP image input unavailable') return 'image_input_unavailable';
   if (/\b(?:401 Unauthorized|403 Forbidden|invalid_api_key)\b/i.test(message)) return 'auth_required';
   return /\b(?:ECONNREFUSED|ENOTFOUND|error sending request|connection reset|stream disconnected)\b/i.test(message)
@@ -566,6 +568,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       const thread = await createThread({ ...profile, ...(start.execution && {
         model: start.execution.model, effort: start.execution.effort,
       }) }, start.nativeThreadId, { workspace: start.execution?.workspace, sessionId, signal, mcpServers: options?.mcpServers,
+        permittedResources: options?.permittedResources,
         verbosity: start.execution?.verbosity, turnId, bindSession: (id) => bindNative(sessionId, turnId, id),
         ...(usesLocalControls(backend) && options?.fingerprint && !options.background && { interaction: controlsFor(sessionId, turnId, control) }),
         rasterInput: Array.isArray(input) && input.some(({ type }) => type === 'raster') });

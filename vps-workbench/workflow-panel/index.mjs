@@ -5,7 +5,7 @@ import { resolveAgentPreset } from '../agent-presets/state.mjs';
 import { createRunArtifacts } from './run-artifacts.mjs';
 import { createStageFileAccessEditor } from './file-access.mjs';
 import { createMixedRunBrief, createMixedStageDetails, executionContexts, executionLocations, getMixedStartReason, targetForStage } from './mixed.mjs';
-import { linearWorkflowEdges, validateWorkflowDraft, validateWorkflowEdges, workflowProviders, isLocalClaudeOrAcpStage } from '../workflow-engine/state.mjs';
+import { linearWorkflowEdges, maxStageMcpServers, validateWorkflowDraft, validateWorkflowEdges, workflowProviders, isLocalClaudeOrAcpStage } from '../workflow-engine/state.mjs';
 import { createStageGraph } from './stage-graph.mjs';
 import { workflowPanelStyles } from './styles.mjs';
 
@@ -122,6 +122,34 @@ export function createWorkflowPanel(React, { icon } = {}) {
       })) : note(onManage ? '还没有预设。可在「管理预设」中新建。' : '还没有可套用的预设。'));
   }
 
+  function StageMcpEditor({ stage, servers, targetId, connected, onChange }) {
+    const selected = stage.agent?.mcpServers ?? [];
+    const current = servers.filter((server) => server.enabled && server.targetId === targetId);
+    const stale = selected.some((reference) => !current.some(({ id, targetId, local }) => reference.id === id &&
+      reference.targetId === targetId && reference.tools?.every((tool) => local.tools.includes(tool))));
+    function toggle(server, name, checked) {
+      const before = selected.find(({ id }) => id === server.id);
+      const tools = [...(before?.tools ?? []).filter((tool) => tool !== name), ...(checked ? [name] : [])];
+      const grants = selected.filter(({ id }) => id !== server.id);
+      if (tools.length) grants.push({ id: server.id, targetId, tools });
+      onChange(grants);
+    }
+    return h('fieldset', { className: 'vc-workflow-files', disabled: !connected },
+      h('legend', null, '阶段 MCP 工具授权'),
+      note('只调用勾选的服务器和工具。连线仅交接文本。'),
+      stale && alert('授权属于另一配置，或服务器与工具已变更。请清除后重新选择。'),
+      current.length ? current.map((server) => {
+        const reference = selected.find(({ id, targetId: saved }) => id === server.id && saved === targetId);
+        return h('div', { className: 'vc-workflow-dependencies', key: server.id, role: 'group', 'aria-label': server.id },
+          h('strong', null, server.id),
+          server.local.tools.map((tool) => h('label', { key: tool, className: 'vc-workflow-note' },
+            h('input', { type: 'checkbox', checked: reference?.tools?.includes(tool) === true,
+              'aria-label': server.id + ' · ' + tool, disabled: stale || (!reference && selected.length >= maxStageMcpServers),
+              onChange: (event) => toggle(server, tool, event.target.checked) }), ' ', tool)));
+      }) : note('请在「设置 → MCP 服务器」为此本机配置登记并启用服务。'),
+      selected.length ? button('清除此阶段 MCP 授权', () => onChange([])) : null);
+  }
+
   function StageEditor({ stage, index, count, dependencies, available, catalog, load, presetChoices, onManageAgentPresets,
     moduleCatalog, onChange, onMove, onDelete, onDisconnect, disabled, fileEditor, mixed }) {
     const number = index + 1;
@@ -216,13 +244,19 @@ export function createWorkflowPanel(React, { icon } = {}) {
       missingCatalogModel && note('已保存的模型当前不可用。运行前请选择可用模型。'),
       field('角色与指令', h('textarea', { value: stage.instruction, onChange: setValue('instruction'), required: true, maxLength: 1200 })),
       agentEditor && (execution ? h('div', { className: 'vc-workflow-independent-modules' }, agentEditor) : agentEditor),
+      attachmentsOnly && !blind && h(StageMcpEditor, { stage, servers: moduleCatalog?.localServers ?? [],
+        targetId: target?.targetId, connected, onChange: (mcpServers) => {
+          const next = withAgent(stage, mcpServers.length ? { mcpServers, plugins: [], memory: 'isolated' } : null);
+          delete next.agentPreset;
+          onChange(next);
+        } }),
       canEditFiles && h(StageFileAccessEditor, { ...fileEditor, stage, connected,
         ...(attachmentsOnly && { attachmentsOnly, localSdk: true, catalogScope: target.targetId,
           readFileTarget: () => target.targetId }) }),
-      !canEditGrants && (stage.agent || stage.agentPreset || showOldFiles) && h('div', { className: 'vc-workflow-dependencies' },
+      !canEditGrants && ((stage.agent && (!attachmentsOnly || blind)) || stage.agentPreset || showOldFiles) && h('div', { className: 'vc-workflow-dependencies' },
         h('h4', null, '现有资源授权'),
         note(blind ? '保存盲审阶段前须清除以下授权。' : attachmentsOnly ? '请清除旧的 Agent 模块，或选定本机配置后重新授权附件。' : '切换主工作区至此配置后可编辑授权。'),
-        stage.agent && note(agentSummary(stage.agent)),
+        stage.agent && (!attachmentsOnly || blind) && note(agentSummary(stage.agent)),
         showOldFiles && note(`${stage.fileAccess.paths.length} 个文件路径 · ${stage.fileAccess.attachments.length} 个附件`),
         actions((stage.agent || stage.agentPreset) && button('清除 Agent 资源及预设', clearAgent),
           showOldFiles && button('清除此阶段文件授权', () => fileEditor.onChange()))),

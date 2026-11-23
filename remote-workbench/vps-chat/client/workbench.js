@@ -572,6 +572,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       : connection.provider === 'antigravity' ? scope
         : antigravityRoute?.connection === connection && antigravityRoute?.scope === scope ? antigravityRoute.targetId : '';
     const moduleCatalog = extensions ? { servers: extensions.state.servers.filter((server) => Boolean(server.local) === localSdk),
+      localServers: extensions.state.servers.filter((server) => server.local),
       plugins: extensions.state.plugins, localSdk,
       codexTargetId, antigravityTargetId } : null;
     const category = projectFilter && !projects.has(projectFilter) ? null : projectFilter;
@@ -2477,7 +2478,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           }, menuIcon(h, 'library'), '项目资源库') : null,
           workflows ? h('button', { type: 'button', className: 'vc-button vc-resource-entry',
             'aria-label': '工作流', 'aria-haspopup': 'dialog', onClick: workflows.openPanel,
-            disabled: localSdk && providerId !== 'codex', title: localSdk && providerId !== 'codex' ? '切换到本机 Codex 后可运行工作流' : undefined,
+            disabled: localSdk && providerId !== 'codex' && !workflows.panel.mixed,
           }, menuIcon(h, 'fork'), '工作流', workflows.panel.running
             ? h('span', { className: 'vc-project-count', role: 'status' }, '运行中') : null) : null,
           h('button', { type: 'button', className: 'vc-button vc-resource-entry vc-playground-entry',
@@ -2684,7 +2685,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           memoryTargetId: configuration.memoryTargetId, connectionName: configuration.name, projects,
           selectedProject: configuration.targetId === scope ? selectedProject : null,
           readMemoryModels: remoteEnabled && configurationReady && configuration.memoryTargetId ? readMemoryModels : undefined,
-          mcpTargetId: (localSdk ? ['codex'] : ['codex', 'antigravity']).includes(configuredProvider) ? configuration.targetId : '',
+          mcpTargetId: (localSdk ? ['codex', 'claude-sdk', 'antigravity'] : ['codex', 'antigravity']).includes(configuredProvider) ? configuration.targetId : '',
           mcpProvider: configuredProvider,
         } } : null,
       })),

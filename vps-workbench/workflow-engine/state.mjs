@@ -100,23 +100,29 @@ function manifestText(value, maxLength, maxBytes) {
     !invalidIdentifierText.test(value) && utf8.encode(value).length <= maxBytes;
 }
 
-export function validateStageAgent(value, provider) {
+export function validateStageAgent(value, provider, localToolGrants = false) {
   if (!exactFields(value, 'mcpServers', 'plugins', 'memory') ||
       !Array.isArray(value.mcpServers) || value.mcpServers.length > maxStageMcpServers ||
       !Array.isArray(value.plugins) || value.plugins.length > maxStagePlugins ||
       (value.memory !== 'shared' && value.memory !== 'isolated')) throw new Error('步骤 Agent 模块配置无效。');
-  if (value.mcpServers.length && !workflowProviders[provider]?.mcp) {
+  if (value.mcpServers.length && !localToolGrants && !workflowProviders[provider]?.mcp) {
     throw new Error('配置了 MCP 服务器的步骤须使用 Codex 或 Antigravity。');
   }
   const serverIds = new Set();
   let serverTarget = null;
   const mcpServers = Array.from(value.mcpServers, (server) => {
-    if (!exactFields(server, 'id', 'targetId') || typeof server.id !== 'string' || !moduleId.test(server.id) ||
+    if (!exactFields(server, 'id', 'targetId', ...(localToolGrants ? ['tools'] : [])) || typeof server.id !== 'string' || !moduleId.test(server.id) ||
         typeof server.targetId !== 'string' || !targetId.test(server.targetId) || serverIds.has(server.id) ||
         (serverTarget !== null && server.targetId !== serverTarget)) throw new Error('步骤 MCP 服务器无效、重复或不属于同一连接。');
     serverIds.add(server.id);
     serverTarget = server.targetId;
-    return { id: server.id, targetId: server.targetId };
+    const { id, targetId: approvedTarget, tools } = server;
+    if (!localToolGrants) return { id, targetId: approvedTarget };
+    if (!Array.isArray(tools) || !tools.length || tools.length > 32 || new Set(tools).size !== tools.length ||
+        tools.some((name) => typeof name !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(name))) {
+      throw new Error('本机阶段必须逐项授权 MCP 工具。');
+    }
+    return { id, targetId: approvedTarget, tools: [...tools].sort() };
   });
   const pluginRefs = new Set();
   const plugins = Array.from(value.plugins, (plugin) => {
@@ -205,7 +211,7 @@ function validateDraft(value, allowAgentMetadata) {
     }
     const normalized = { id: legacy ? `s${index + 1}` : stage.id, name: workflowText(stage.name, 64, `${label}名称`, false), provider, model,
       instruction: workflowText(stage.instruction, 1200, `${label}指令`) };
-    if (hasAgent) normalized.agent = validateStageAgent(stage.agent, provider);
+    if (hasAgent) normalized.agent = validateStageAgent(stage.agent, provider, isLocalClaudeOrAcpStage(stage));
     if (hasAgentPreset) normalized.agentPreset = validateStageAgentPreset(stage.agentPreset, label);
     if (hasFileAccess) {
       const fileAccess = validateWorkflowFileAccess(stage.fileAccess);
@@ -213,9 +219,10 @@ function validateDraft(value, allowAgentMetadata) {
     }
     if (hasExecution) {
       normalized.execution = validateStageExecution(stage.execution, label);
-      if (isLocalClaudeOrAcpStage(normalized) && (normalized.agent || normalized.agentPreset || normalized.fileAccess?.paths.length ||
+      if (isLocalClaudeOrAcpStage(normalized) && (normalized.agentPreset || normalized.fileAccess?.paths.length || normalized.agent?.plugins.length ||
+          normalized.agent?.memory === 'shared' ||
           (model !== '' && model !== 'default'))) {
-        throw new Error(`${label}的本机执行端支持账号默认模型和单独授权的附件。请清除 Agent 模块、工作目录路径或指定模型。`);
+        throw new Error(`${label}的本机执行端支持账号默认模型和单独授权的附件与 MCP 工具。请清除预设、模板、共享记忆、工作目录路径或指定模型。`);
       }
       if (normalized.execution.context === 'blind' && (normalized.agent || normalized.agentPreset || normalized.fileAccess)) {
         throw new Error(`${label}为盲审，须先移除 Agent、插件和文件权限。`);

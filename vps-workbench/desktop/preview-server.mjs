@@ -183,7 +183,7 @@ export async function startPreview({ localAgents = false, localComponents = fals
     async resolve(stage) {
       if (stage?.execution?.location === 'local-sdk') {
         const sdk = await localSdk();
-        return mixedLocalRoute(stage, sdk.workflowRecords.get(stage.provider));
+        return mixedLocalRoute(stage, sdk.workflowRecords.get(stage.provider), data);
       }
       const preset = previewPreset();
       if (!preset.providers.includes(stage?.provider)) return null;

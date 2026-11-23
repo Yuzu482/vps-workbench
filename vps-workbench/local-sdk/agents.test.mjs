@@ -172,7 +172,8 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 const input = createInterface({ input: process.stdin });
 const supportsImages = process.argv[1] === 'test-images';
-let workspace, first, task, session = (!supportsImages && process.argv[1]) || 'acp:' + randomUUID(), isLoaded = false;
+const supportsMcp = process.argv[1] === 'test-mcp';
+let workspace, first, task, session = (!supportsImages && !supportsMcp && process.argv[1]) || 'acp:' + randomUUID(), isLoaded = false;
 const write = (packet) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...packet }) + '\n');
 const reply = (id, result) => write({ id, result });
 const chunk = (text) => write({ method: 'session/update', params: { sessionId: session,
@@ -184,15 +185,23 @@ for await (const line of input) {
     assert.equal(params.protocolVersion, 1);
     assert.deepEqual(params.clientCapabilities, {});
     reply(id, { protocolVersion: 1, agentCapabilities: { loadSession: true,
-      ...(supportsImages && { promptCapabilities: { image: true } }) } });
+      ...(supportsImages && { promptCapabilities: { image: true } }), ...(supportsMcp && { mcpCapabilities: { http: true } }) } });
   } else if (method === 'session/new' || method === 'session/load') {
     workspace = params.cwd;
-    assert.deepEqual(params.mcpServers, []);
+    assert.deepEqual(params.mcpServers, supportsMcp
+      ? [{ type: 'http', name: 'docs', url: 'http://127.0.0.1:3000/stage-mcp', headers: [] }] : []);
     if (method === 'session/load') { assert.match(params.sessionId, /^acp:[0-9a-f-]{36}$/); session = params.sessionId; isLoaded = true; }
     reply(id, { sessionId: session });
   } else if (method === 'session/prompt') {
     assert.equal(params.sessionId, session);
     const text = params.prompt[0].text;
+    if (text === 'MCP fixture') {
+      first = id;
+      for (const name of ['allowed', 'blocked']) write({ method: 'session/request_permission', id: name,
+        params: { sessionId: session, toolCall: { toolCallId: name, name: 'mcp__docs__' + name, kind: 'other' },
+          options: [{ kind: 'allow_once', optionId: 'once' }] } });
+      continue;
+    }
     if (text === '批准的图文附件') {
       assert.equal(supportsImages, true);
       assert.deepEqual(params.prompt.slice(1), [
@@ -219,6 +228,11 @@ for await (const line of input) {
   } else if (method === 'session/cancel') {
     assert.equal(params.sessionId, session);
     reply(first, { stopReason: 'cancelled' });
+  } else if (id === 'allowed') {
+    assert.deepEqual(packet.result.outcome, { outcome: 'selected', optionId: 'once' });
+  } else if (id === 'blocked') {
+    assert.deepEqual(packet.result.outcome, { outcome: 'cancelled' });
+    chunk('MCP bound'); reply(first, { stopReason: 'end_turn' });
   } else if (id === 'foreign') assert.deepEqual(packet.result.outcome, { outcome: 'cancelled' });
   else if (id === 'read-permission' && task === '变更审批对象') {
     assert.deepEqual(packet.result.outcome, { outcome: 'cancelled' });
@@ -321,5 +335,52 @@ test('non-interactive ACP attachment input requires an advertised image capabili
         assert.ok(!result.some(({ item }) => item));
       }
     });
+  }
+});
+
+test('native adapters advertise the scoped MCP endpoint and deny every ungranted tool', { timeout: 10000 }, async () => {
+  const mcpServers = [{ name: 'docs', url: 'http://127.0.0.1:3000/stage-mcp', tools: ['allowed'] }];
+  const signal = new AbortController().signal;
+  const turnId = randomUUID();
+  let permitted = true;
+  const claude = claudeThread({ directory: process.cwd(), turnId, mcpServers, permitted: () => permitted,
+    query({ prompt, options }) {
+      const events = (async function* () {
+        assert.deepEqual(options.tools, []);
+        assert.deepEqual(options.mcpServers, { docs: { type: 'http', url: mcpServers[0].url } });
+        assert.deepEqual(options.allowedTools, ['mcp__docs__allowed']);
+        assert.equal(options.strictMcpConfig, true);
+        const check = options.hooks.PreToolUse[0].hooks[0];
+        assert.deepEqual(await check({ tool_name: 'mcp__docs__allowed' }), {});
+        for (const name of ['Bash', 'Read', 'mcp__docs__blocked', 'mcp__other__allowed']) {
+          assert.equal((await check({ tool_name: name })).hookSpecificOutput.permissionDecision, 'deny');
+          assert.equal((await options.canUseTool(name, {}, { signal, toolUseID: 'fixture' })).behavior, 'deny');
+        }
+        assert.equal((await options.canUseTool('mcp__docs__allowed', {}, { signal, toolUseID: 'fixture' })).behavior, 'allow');
+        permitted = false;
+        assert.equal((await check({ tool_name: 'mcp__docs__allowed' })).hookSpecificOutput.permissionDecision, 'deny');
+        const { value } = await prompt.next();
+        yield { type: 'system', subtype: 'init', session_id: options.sessionId };
+        yield { type: 'result', subtype: 'success', session_id: options.sessionId, user_message_uuid: value.uuid };
+      })();
+      events.close = () => { void prompt.return(); };
+      return events;
+    },
+  });
+  async function consume(thread) {
+    const { events } = await thread.runStreamed('MCP fixture', { signal });
+    const results = [];
+    for await (const event of events) results.push(event);
+    return results;
+  }
+  assert.equal((await consume(claude)).at(-1).type, 'turn.completed');
+  for (const supported of [true, false]) {
+    const acp = antigravityThread({ directory: process.cwd(), mcpServers, permitted: () => true,
+      launch: () => spawn(process.execPath, ['--input-type=module', '-e', acpFixture, ...(supported ? ['test-mcp'] : [])],
+        { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }) });
+    const events = await consume(acp);
+    assert.equal(events.at(-1).type, supported ? 'turn.completed' : 'turn.failed');
+    if (supported) assert.ok(events.some(({ item }) => item?.text === 'MCP bound'));
+    else assert.equal(events.at(-1).error.message, 'ACP MCP HTTP unavailable');
   }
 });

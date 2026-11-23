@@ -305,7 +305,7 @@ test('archives are atomic and historical retries require the exact failed receip
   assert.equal((await runtime.retry(original.id, 0)).code, 'mixed_retry_unconfirmed');
 });
 
-test('desktop scopes local workflow attachments to each node and recovers the original mixed receipt', { timeout: 25000 }, async (t) => {
+test('desktop scopes local workflow attachments and MCP grants to each node and recovers the original receipt', { timeout: 25000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'workbench-mixed-text-'));
   const workspace = join(root, 'registered');
   await mkdir(workspace);
@@ -324,7 +324,10 @@ test('desktop scopes local workflow attachments to each node and recovers the or
       assert.equal(prior ?? null, null);
       assert.equal(scope, 'private');
       assert.equal(interaction, undefined);
-      assert.ok(!mcpServers?.length);
+      if (backend === 'codex') assert.ok(!mcpServers?.length);
+      else assert.deepEqual(mcpServers.map(({ id, targetId, local }) => [id, targetId, local.tools]), [
+        ['fixture-docs', profile.targetId, [backend === 'claude-sdk' ? 'read_doc' : 'summarize']],
+      ]);
       return { async runStreamed(input) {
         assert.ok(!localInputs.has(backend));
         localInputs.set(backend, { input, profile });
@@ -378,6 +381,17 @@ test('desktop scopes local workflow attachments to each node and recovers the or
     execution: { location: profiles.has(provider) ? 'local-sdk' : 'ssh-vps',
       configId: profiles.get(provider)?.id ?? memoryTargetId, context },
   });
+  const mcpGrant = (provider, tool) => ({
+    mcpServers: [{ id: 'fixture-docs', targetId: profiles.get(provider).targetId, tools: [tool] }],
+    plugins: [], memory: 'isolated',
+  });
+  const mcpRegistry = new Map();
+  for (const backend of ['claude-sdk', 'antigravity']) {
+    const server = { id: 'fixture-docs', targetId: profiles.get(backend).targetId,
+      local: { url: 'http://127.0.0.1:3000/mcp', tools: ['read_doc', 'summarize', 'write'] } };
+    mcpRegistry.set(backend, server);
+    for (const enabled of [false, true]) await data.changeExtensions({ op: 'save-server', server: { ...server, enabled } });
+  }
   const textFile = (name, contents) => ({ name, data: Buffer.from(contents).toString('base64') });
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/hJcAAAAASUVORK5CYII=';
   const [claudeRef, agyRef, imageRef] = await data.saveWorkflowAttachments([
@@ -389,8 +403,8 @@ test('desktop scopes local workflow attachments to each node and recovers the or
   const grant = (provider, attachments) => ({ targetId: profiles.get(provider).targetId, paths: [], attachments });
   const stages = [
     stage('draft', 'codex'),
-    { ...stage('review', 'claude-sdk'), fileAccess: grant('claude-sdk', [claudeRef]) },
-    { ...stage('audit', 'antigravity'), fileAccess: grant('antigravity', [agyRef, imageRef]) },
+    { ...stage('review', 'claude-sdk'), agent: mcpGrant('claude-sdk', 'read_doc'), fileAccess: grant('claude-sdk', [claudeRef]) },
+    { ...stage('audit', 'antigravity'), agent: mcpGrant('antigravity', 'summarize'), fileAccess: grant('antigravity', [agyRef, imageRef]) },
     { ...stage('summary', 'codex'), execution: { location: 'ssh-vps', configId: memoryTargetId, context: 'independent' } },
   ];
   const edges = [{ from: 'review', to: 'audit' }, ...stages.slice(0, 3).map(({ id: from }) => ({ from, to: 'summary' }))];
@@ -413,10 +427,15 @@ test('desktop scopes local workflow attachments to each node and recovers the or
   const input = { workflowId: id, revision: 1, task: 'COMMON-TASK', criteria: 'COMMON-CRITERIA', constraints: 'COMMON-LIMIT',
     evidence: [], transfers: [{ from: 'review', to: 'audit', fields: ['conclusion'] },
       ...stages.slice(0, 3).map(({ id: from }) => ({ from, to: 'summary', fields: ['conclusion'] }))] };
-  assert.equal((await request('start', { input })).code, 'workflow_file_access_changed');
+  const wrongAttachment = await request('start', { input });
+  assert.equal(wrongAttachment.code, 'workflow_file_access_changed', JSON.stringify(wrongAttachment));
   assert.equal(localInputs.size + remoteInputs.length, 0);
-  await save(stages, 1);
+  await save(stages.map((step) => step.id === 'review' ? { ...step, agent: mcpGrant('claude-sdk', 'unregistered') } : step), 1);
   input.revision = 2;
+  assert.equal((await request('start', { input })).ok, false);
+  assert.equal(localInputs.size + remoteInputs.length, 0);
+  await save(stages, 2);
+  input.revision = 3;
   const admission = await request('start', { input });
   assert.equal(admission.ok, true, JSON.stringify(admission));
   const settled = (phase) => until(async () => {
@@ -448,6 +467,8 @@ test('desktop scopes local workflow attachments to each node and recovers the or
   for (const backend of profiles.keys()) assert.ok(remoteInputs[0].prompt.includes(backend + ' result'));
   assert.doesNotMatch(JSON.stringify(remoteInputs[0]), /private detail|ATTACHMENT-CONTENT|claude-only|agy-only|agy-image/u);
   assert.deepEqual(remoteInputs[0].workflowFiles, { paths: [], attachments: [] });
+  assert.ok(!remoteInputs[0].extensions?.mcpServers?.length);
+  assert.doesNotMatch(remoteInputs[0].prompt, /fixture-docs|read_doc|summarize/u);
   assert.doesNotMatch(JSON.stringify(paused), /ATTACHMENT-CONTENT|UNAUTHORIZED-ATTACHMENT/u);
   const row = paused.rows[1], claude = profiles.get('claude-sdk');
   const publicCall = (payload) => app.requestLocal({ op: 'workbench', location: 'local-sdk', backend: 'claude-sdk',
@@ -486,8 +507,14 @@ test('desktop scopes local workflow attachments to each node and recovers the or
   const isolatedId = randomUUID();
   await data.changeWorkflows({ op: 'save', id: isolatedId, revision: null,
     draft: { name: '损坏快照验收', stages: [stages[1]], edges: [] } });
+  const isolatedInput = { ...input, workflowId: isolatedId, revision: 1, transfers: [] };
+  const claudeServer = mcpRegistry.get('claude-sdk');
+  await data.changeExtensions({ op: 'save-server', server: { ...claudeServer, enabled: false } });
+  assert.equal((await request('start', { input: isolatedInput })).ok, false);
+  assert.equal((await request('status')).run.id, reverse.id);
+  await data.changeExtensions({ op: 'save-server', server: { ...claudeServer, enabled: true } });
   await writeFile(join(root, 'workflow-attachments', claudeRef.digest), Buffer.alloc(claudeRef.size, 65));
-  assert.equal((await request('start', { input: { ...input, workflowId: isolatedId, revision: 1, transfers: [] } })).ok, true);
+  assert.equal((await request('start', { input: isolatedInput })).ok, true);
   const missing = await settled('paused');
   assert.equal(missing.rows[0].state, 'waiting');
   assert.match(missing.message, /阶段附件快照缺失或变更/u);

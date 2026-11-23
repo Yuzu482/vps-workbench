@@ -1,3 +1,5 @@
+import { extensionPreferenceKey, readExtensions } from '../extensions/state.mjs';
+import { resolveLocalStageMcp } from './workflow-stage.mjs';
 import { createHash } from 'node:crypto';
 import { confirmedFailedReceipt, createWorkflowRunner, readWorkflowRun, validateMixedInput } from '../workflow-engine/runner.mjs';
 import { exactFields, isLocalClaudeOrAcpStage, mixedWorkflowHistoryKey, mixedWorkflowRunKey, readWorkflows, validateWorkflowDraft, workflowKey, workflowText } from '../workflow-engine/state.mjs';
@@ -236,17 +238,22 @@ export function mixedLocalTargets(records) {
     : []);
 }
 
-export function mixedLocalRoute(stage, record) {
+export function mixedLocalRoute(stage, record, data) {
   if (stage?.execution?.location !== 'local-sdk' || !record?.sdk.runtimeAvailable) return null;
   const status = record.service.status();
   if (stage.provider !== status.backend) return null;
   const profile = status.profiles.find(({ id }) => id === stage.execution.configId);
   if (!profile) return null;
-  const routePin = hash(['local-sdk', profile, record.sdk.workflowCredentialPin]);
+  const hasStageMcp = isLocalClaudeOrAcpStage(stage) && stage.agent?.mcpServers.length;
+  const currentMcp = () => resolveLocalStageMcp(stage, profile.targetId, readExtensions(data.preference(extensionPreferenceKey) ?? null));
+  const mcp = hasStageMcp ? currentMcp() : [];
+  if (!mcp) return null;
+  const pin = (current, tools) => hash(['local-sdk', current, record.sdk.workflowCredentialPin, ...(hasStageMcp ? [tools] : [])]);
+  const routePin = pin(profile, mcp);
   return { routePin, targetId: profile.targetId, defaultModel: profile.model,
     settings: { location: 'local-sdk', provider: stage.provider, profileId: profile.id },
-    isCurrent: () => record.sdk.runtimeAvailable && hash(['local-sdk',
-      record.service.status().profiles.find(({ id }) => id === profile.id), record.sdk.workflowCredentialPin]) === routePin };
+    isCurrent: () => record.sdk.runtimeAvailable && pin(
+      record.service.status().profiles.find(({ id }) => id === profile.id), hasStageMcp ? currentMcp() : []) === routePin };
 }
 
 export function mixedVpsRoute(stage, preset, currentPreset, reply, readRelay) {

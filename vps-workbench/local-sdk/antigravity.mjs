@@ -99,7 +99,7 @@ async function eligibleRead(root, tool) {
   return workspaceFile(root, tool.rawInput.AbsolutePath);
 }
 
-export function antigravityThread({ launch, directory, nativeId, context, bindSession }) {
+export function antigravityThread({ launch, directory, nativeId, context, bindSession, mcpServers = [], permitted = () => false }) {
   return { async runStreamed(input, { signal }) {
     let session, live = false, firstEnded = false, stopTimer, wake, done = false, supportedPrompt;
     let text = '', supplement = null, lastSupplement = null;
@@ -110,6 +110,8 @@ export function antigravityThread({ launch, directory, nativeId, context, bindSe
       else queue.push(event);
       wake?.();
     };
+    const mcpTools = new Set(mcpServers.flatMap(({ name, tools }) =>
+      tools.flatMap((tool) => ['mcp__' + name + '__' + tool, name + '/' + tool])));
     const peer = transport(launch(), receive);
     const settle = (entry, optionId) => {
       if (!usedRequests.has(entry)) return false;
@@ -129,13 +131,15 @@ export function antigravityThread({ launch, directory, nativeId, context, bindSe
       const toolId = call?.toolCallId;
       const { allow, deny } = optionsFor(params?.options);
       if (!live || signal.aborted || params?.sessionId !== session || !validId(toolId) || usedTools.has(toolId) ||
-          usedTools.size >= 16 || !context || (!allow && !deny)) { settle(id); return; }
+          usedTools.size >= 16 || (!allow && !deny)) { settle(id); return; }
       usedTools.add(toolId);
-      const abort = new AbortController();
       const earlier = updates.get(toolId);
       const changed = earlier && ['name', 'kind', 'rawInput', 'locations'].some((key) => key in earlier && key in call &&
         JSON.stringify(earlier[key]) !== JSON.stringify(call[key]));
       const tool = { ...earlier, ...call };
+      if (!changed && allow && mcpTools.has(tool.name) && permitted()) { settle(id, allow); return; }
+      if (!context) { settle(id); return; }
+      const abort = new AbortController();
       waitingTools.set(toolId, { abort, tool });
       let choice, approval;
       try {
@@ -204,7 +208,10 @@ export function antigravityThread({ launch, directory, nativeId, context, bindSe
         const info = await peer.request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'vps-workbench', version: '1.0' } });
         if (info.protocolVersion !== 1) throw new Error('unsupported ACP version');
         supportedPrompt = info.agentCapabilities?.promptCapabilities;
-        const params = { cwd: directory, mcpServers: [] };
+        if (mcpServers.length && info.agentCapabilities?.mcpCapabilities?.http !== true) {
+          emit(failures('ACP MCP HTTP unavailable')); return;
+        }
+        const params = { cwd: directory, mcpServers: mcpServers.map(({ name, url }) => ({ type: 'http', name, url, headers: [] })) };
         let profile;
         if (nativeId) {
           if (info.agentCapabilities?.loadSession !== true) throw new Error('ACP session load unavailable');

@@ -92,7 +92,7 @@ export function createExtensionSettings(React) {
     return h(React.Fragment, null,
       h('p', null, mcpProvider === 'antigravity'
         ? '为 Antigravity 工作流登记 VPS 管理员已配置的 Python stdio 服务。'
-        : localSdk ? '使用已有的本机 HTTP MCP 服务。只会提供你列出的工具，请核对这些工具的权限。'
+        : localSdk ? '使用已有的本机 HTTP MCP 服务。Claude 和 Antigravity 由工作流阶段逐项授权工具。'
           : '为 Codex 登记 VPS 管理员已配置的 Python stdio 服务。'),
       h('section', { className: 'vc-settings-group' },
         h('h4', null, '添加 MCP 服务'),

@@ -208,7 +208,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
       return { ok: true, targets: items };
     },
     async resolve(stage) {
-      if (stage?.execution?.location === 'local-sdk') return mixedLocalRoute(stage, local.get(stage.provider));
+      if (stage?.execution?.location === 'local-sdk') return mixedLocalRoute(stage, local.get(stage.provider), data);
       const vps = await vpsTarget();
       if (!vps?.providers.includes(stage?.provider)) return null;
       const settings = { ...vps.settings, provider: stage.provider };

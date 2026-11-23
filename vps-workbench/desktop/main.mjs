@@ -237,7 +237,7 @@ async function start() {
       const target = change.server?.targetId;
       const profile = runtime.localStatus().profiles?.find(({ targetId }) => targetId === target);
       if (Boolean(change.server?.local) !== Boolean(profile) || (profile &&
-          (profile.backend !== 'codex' || readAccess(data.preference(accessPreference)).mode !== 'execute'))) throw new Error('invalid_mcp_scope');
+          readAccess(data.preference(accessPreference)).mode !== 'execute')) throw new Error('invalid_mcp_scope');
     }
     if (change?.op === 'set-scoped-personal-memory' && !runtime.localStatus().profiles?.some(({ targetId, backend }) => targetId === change.targetId && backend === 'codex'))
       throw new Error('invalid_local_profile');

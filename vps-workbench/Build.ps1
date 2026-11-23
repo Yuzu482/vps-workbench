@@ -143,7 +143,10 @@ try {
     foreach ($package in @('react', 'react-dom', 'scheduler')) {
         Copy-Item -LiteralPath (Join-Path $project "node_modules/$package/LICENSE") -Destination (Join-Path $licenses "$package.txt")
     }
-    foreach ($package in @('tar', '@isaacs/fs-minipass', 'chownr', 'minipass', 'minizlib', 'yallist')) {
+    $mcpNotices = @('@modelcontextprotocol/sdk', 'ajv', 'ajv-formats', 'content-type', 'eventsource-parser',
+        'fast-deep-equal', 'fast-uri', 'json-schema-traverse', 'pkce-challenge', 'zod', 'zod-to-json-schema')
+    $tarNotices = @('tar', '@isaacs/fs-minipass', 'chownr', 'minipass', 'minizlib', 'yallist')
+    foreach ($package in ($mcpNotices + $tarNotices)) {
         $notice = Get-ChildItem -LiteralPath (Join-Path $project "node_modules/$package") -Filter 'LICENSE*' -File | Select-Object -First 1
         if (!$notice) { throw "Missing license for $package" }
         Copy-Item -LiteralPath $notice.FullName -Destination (Join-Path $licenses "$($package.Replace('/', '-')).txt")

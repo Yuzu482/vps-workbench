@@ -1814,7 +1814,7 @@ test('design comparison aligns parent and child, shares zoom, and durably carrie
   assert.ok(!requests.includes('send'));
 });
 
-test('workflow editor saves separate local attachment grants and runs the mixed branches', { timeout: 35_000 }, async (t) => {
+test('workflow editor saves separate attachment and MCP tool grants for both local providers', { timeout: 35_000 }, async (t) => {
   const page = await openPreview(t, { previewOptions: { localAgents: true }, seed({ preferences }) {
     preferences['dsh-vps-chat:desktop-view-location:v1'] = 'ssh-vps';
   } });
@@ -1824,6 +1824,11 @@ test('workflow editor saves separate local attachment grants and runs the mixed 
     const claude = targets.find((item) => item.location === 'local-sdk' && item.providers.includes('claude-sdk')).id;
     const agy = targets.find((item) => item.location === 'local-sdk' && item.providers.includes('antigravity')).id;
     const vps = targets.find((item) => item.location === 'ssh-vps').id;
+    for (const profile of [claude, agy]) {
+      const server = { id: 'fixture-docs', targetId: targets.find(({ id }) => id === profile).targetId,
+        local: { url: 'http://127.0.0.1:3000/mcp', tools: ['lookup', 'summarize', 'write'] } };
+      for (const enabled of [false, true]) await native.changeExtensions({ op: 'save-server', server: { ...server, enabled } });
+    }
     const stage = (id, name, provider, configId, location = 'local-sdk') => ({
       id, name, provider, instruction: '完成此步骤并按简报交付。', model: '',
       execution: { location, configId, context: 'independent' },
@@ -1858,8 +1863,12 @@ test('workflow editor saves separate local attachment grants and runs the mixed 
   await panel.getByRole('alert').getByText(/现有授权属于另一执行配置/u).waitFor();
   assert.equal(await attachment.isDisabled(), true);
   await config.selectOption(claude);
+  await panel.getByRole('checkbox', { name: 'fixture-docs · lookup', exact: true }).check();
+  assert.equal(await panel.getByRole('checkbox', { name: 'fixture-docs · write', exact: true }).isChecked(), false);
   await panel.getByRole('button', { name: '第 2 阶段 · 本机审校', exact: true }).click();
   assert.equal(await panel.getByRole('button', { name: '移除本地附件 初稿资料.txt' }).count(), 0);
+  assert.equal(await panel.getByRole('checkbox', { name: 'fixture-docs · lookup', exact: true }).isChecked(), false);
+  await panel.getByRole('checkbox', { name: 'fixture-docs · summarize', exact: true }).check();
   await attachment.setInputFiles({ name: '核对资料.txt', mimeType: 'text/plain', buffer: Buffer.from('只给本机 Antigravity') });
   await panel.getByRole('button', { name: '移除本地附件 核对资料.txt' }).waitFor();
   await panel.getByRole('button', { name: '保存工作流', exact: true }).click();
@@ -1874,6 +1883,8 @@ test('workflow editor saves separate local attachment grants and runs the mixed 
   assert.deepEqual(result.run.rows.map(({ state }) => state), ['complete', 'complete', 'complete']);
   assert.deepEqual(result.run.workflow.stages.map(({ fileAccess }) => fileAccess?.attachments.map(({ name }) => name) ?? []),
     [['初稿资料.txt'], ['核对资料.txt'], []]);
+  assert.deepEqual(result.run.workflow.stages.map(({ agent }) => agent?.mcpServers.flatMap(({ tools }) => tools) ?? []),
+    [['lookup'], ['summarize'], []]);
   assert.match(result.run.rows[0].reply, /Claude Agent SDK 完成阶段/u);
   assert.match(result.run.rows[1].reply, /Antigravity ACP 完成阶段/u);
 });
