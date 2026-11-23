@@ -431,6 +431,15 @@ const english = {
   "VPS 浏览器已断开或未启动。请核对远端浏览器和出口配置。": "The VPS browser did not start or disconnected. Check the remote browser and egress settings.",
   "无法打开 VPS 账号窗口。": "Could not open the VPS account window.",
   "远程画面凭证无效。": "Invalid credentials for the VPS viewer.",
+  "授权链接会在当前 VPS 浏览器打开。若只显示链接，请复制后在远端浏览器粘贴。返回终端时可按 Shift+Insert。": "The sign-in link opens in the current VPS browser. If only a link is shown, copy and paste it into the remote browser. Press Shift+Insert to paste in the terminal.",
+  "VPS 剪贴板": "VPS clipboard",
+  "从本机粘贴": "Paste from this computer",
+  "在此按 Ctrl+V": "Press Ctrl+V here",
+  "复制到本机": "Copy to this computer",
+  "请粘贴一行文本，最多 8 KiB。": "Paste one line of text, up to 8 KiB.",
+  "已送到 VPS 剪贴板。请在远端浏览器粘贴，或在终端按 Shift+Insert。": "Copied to the VPS clipboard. Paste in the remote browser or press Shift+Insert in the terminal.",
+  "已复制到本机剪贴板。": "Copied to this computer.",
+  "无法写入本机剪贴板。": "Could not write to the local clipboard.",
 };
 
 export const interfaceLanguageKey = 'dsh-vps-chat:interface-language:v1';

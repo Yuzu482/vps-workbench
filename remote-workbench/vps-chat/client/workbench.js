@@ -77,7 +77,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
   const MarkdownReply = createMarkdownReply(React, CodeBlock, parseStreamingMarkdown);
   const DesignCanvas = createDesignCanvas(React);
-  const AccountDialog = createAccountDialog(React);
+  const AccountDialog = createAccountDialog(React, writeClipboard);
   const ProviderPicker = createProviderPicker(React);
   const SettingsDialog = createSettingsDialog(React, { hostThemeLabel });
   const ContextMenu = createContextMenu(React);

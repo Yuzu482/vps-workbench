@@ -32,6 +32,23 @@ TERMINAL_ACTIONS = {
     "claude-api-key": "Claude API key on the VPS",
     "antigravity-login": "Antigravity CLI login",
 }
+OAUTH_ENDPOINTS = {
+    "claude-login": (
+        ("claude.com", "/cai/oauth/authorize"),
+        ("claude.ai", "/oauth/authorize"),
+        ("platform.claude.com", "/oauth/authorize"),
+        ("console.anthropic.com", "/oauth/authorize"),
+    ),
+    "codex-login": (
+        ("auth.openai.com", "/oauth/authorize"),
+        ("auth.openai.com", "/api/accounts/authorize"),
+    ),
+    "antigravity-login": (
+        ("accounts.google.com", "/o/oauth2/v2/auth"),
+        ("accounts.google.com", "/o/oauth2/auth"),
+    ),
+}
+CLIPBOARD_LIMIT = 8192
 CHECK_URLS = {
     4: ("https://api.ipify.org/", "https://ipv4.icanhazip.com/"),
     6: ("https://api64.ipify.org/", "https://ipv6.icanhazip.com/"),
@@ -141,6 +158,40 @@ def claude_login_lock(home, resources):
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
+def oauth_opener(action, home, profile):
+    # A CLI can use BROWSER or xdg-open. Restrict both to the advisory login link
+    # for that CLI and to the Firefox profile created for this view.
+    return f"""#!/usr/bin/python3 -I
+import os
+import subprocess
+import sys
+from urllib.parse import urlsplit
+
+endpoints = {OAUTH_ENDPOINTS[action]!r}
+if len(sys.argv) != 2 or not sys.argv[1].isascii() or len(sys.argv[1]) > {CLIPBOARD_LIMIT}:
+    raise SystemExit("Open the login link directly in the VPS browser.")
+url = sys.argv[1]
+if any(ord(char) < 33 or ord(char) == 127 for char in url):
+    raise SystemExit("Open the login link directly in the VPS browser.")
+try:
+    target = urlsplit(url)
+except ValueError:
+    raise SystemExit("Unrecognized login link.") from None
+if target.scheme != "https" or (target.netloc.lower(), target.path) not in endpoints or not target.query:
+    raise SystemExit("Open the login link directly in the VPS browser.")
+env = {{name: os.environ[name] for name in ("DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "LANG") if name in os.environ}}
+env.update(HOME={str(home)!r}, PATH="/usr/bin:/bin:/snap/bin")
+try:
+    result = subprocess.run([{FIREFOX!r}, "--profile", {str(profile)!r}, "--new-tab", url], env=env,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=6)
+except (OSError, subprocess.TimeoutExpired):
+    raise SystemExit("Could not open the VPS browser. Copy the link from the terminal.") from None
+if result.returncode:
+    raise SystemExit("Could not open the VPS browser. Copy the link from the terminal.")
+"""
+
+
 def terminal_plan(action, home, directory, env, resources):
     if not os.access(XTERM, os.X_OK):
         raise AccountStartupError("account_terminal_missing")
@@ -149,10 +200,10 @@ def terminal_plan(action, home, directory, env, resources):
         target = owned_directory(owned_directory(home, ".config"), "remote-ssh")
         return [sys.executable, "-I", "-c", KEY_WRITER, str(target)], env
 
-    opener = directory / "account-browser-link"
-    opener.write_text("#!/bin/sh\nprintf '\\nOpen this address in the VPS browser above:\\n%s\\n' \"$1\"\n", encoding="ascii")
+    opener = directory / "xdg-open"
+    opener.write_text(oauth_opener(action, home, directory / "profile"), encoding="utf-8")
     opener.chmod(0o700)
-    env = {**env, "BROWSER": str(opener)}
+    env = {**env, "BROWSER": str(opener), "PATH": str(directory) + ":" + env["PATH"]}
     if action == "codex-login":
         name = "codex"
         argv = ["-c", 'cli_auth_credentials_store="file"', "login"]
@@ -277,6 +328,7 @@ def open_browser(directory, home, env, ipv6_allowed, action):
     }
     with contextlib.ExitStack() as resources:
         interactive = action in TERMINAL_ACTIONS
+        clipboard = action in OAUTH_ENDPOINTS
         if interactive:
             argv, terminal_env = terminal_plan(action, home, directory, env, resources)
             page = BROWSER_URLS["claude-console"] if action == "claude-api-key" else "about:blank"
@@ -286,22 +338,32 @@ def open_browser(directory, home, env, ipv6_allowed, action):
             "/usr/bin/Xtigervnc", display, "-auth", str(authority), "-nolisten", "tcp",
             "-rfbport", "-1", "-rfbunixpath", str(rfb), "-rfbunixmode", "0600",
             "-SecurityTypes", "None", "-desktop", "DSH VPS account", "-geometry", "1366x900",
-            "-depth", "24", "-AcceptCutText=0", "-SendCutText=0", "-AcceptSetDesktopSize=0",
+            "-depth", "24", f"-AcceptCutText={int(clipboard)}", f"-SendCutText={int(clipboard)}",
+            "-SendPrimary=0", "-SetPrimary=0", f"-MaxCutText={CLIPBOARD_LIMIT}", "-AcceptSetDesktopSize=0",
             "-AllowOverride=",
         ], **child_options)
         resources.callback(stop_process, vnc)
         wait_for_display(vnc, rfb)
         browser_env = {**env, "MOZ_CRASHREPORTER_DISABLE": "1"}
-        browser = subprocess.Popen([FIREFOX, "--no-remote", "--profile", str(profile),
+        browser_mode = "--new-instance" if clipboard else "--no-remote"
+        browser = subprocess.Popen([FIREFOX, browser_mode, "--profile", str(profile),
                                     "--width", "1366", "--height", "900", page],
                                    **{**child_options, "env": browser_env})
         resources.callback(stop_process, browser)
         wait_for_window(browser, env, rb'"navigator" "firefox(?:_firefox)?"')
+        if clipboard:
+            clipboard_helper = shutil.which("tigervncconfig", path=env["PATH"]) or shutil.which("vncconfig", path=env["PATH"])
+            if clipboard_helper:
+                bridge = subprocess.Popen([clipboard_helper, "-nowin"], **child_options)
+                resources.callback(stop_process, bridge)
         if interactive:
             terminal = subprocess.Popen([
                 XTERM, "-title", TERMINAL_ACTIONS[action], "-geometry", "126x15+0-0",
-                "-xrm", "XTerm*selectToClipboard: true", "-hold", "-e", *argv,
-            ], cwd=owned_directory(directory, "auth-work"), **{**child_options, "env": terminal_env})
+                "-xrm", "XTerm*selectToClipboard: true",
+                "-xrm", "XTerm*VT100.translations: #override Shift <Key>Insert: insert-selection(CLIPBOARD)",
+                "-hold", "-e", *argv,
+            ], cwd=owned_directory(directory, "auth-work"),
+               **{**child_options, "env": {**terminal_env, "DISPLAY": display, "XAUTHORITY": str(authority)}})
             resources.callback(stop_process, terminal)
             wait_for_window(terminal, env, rb'"xterm" "xterm"')
         with socket.socket(socket.AF_UNIX) as channel:

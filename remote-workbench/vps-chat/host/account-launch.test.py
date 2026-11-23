@@ -1,5 +1,6 @@
 import contextlib
 import errno
+import json
 import os
 from pathlib import Path
 import pty
@@ -7,11 +8,12 @@ import runpy
 import select
 import signal
 import stat
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 source = runpy.run_path(str(Path(__file__).with_name("RemoteClaudeAccount.py")))
@@ -64,8 +66,84 @@ class AccountLaunchTest(unittest.TestCase):
             self.assertEqual(claude_env["CLAUDE_CONFIG_DIR"], str(home / ".claude"))
             self.assertEqual(agy_env["HOME"], str(home / ".dsh-antigravity/home"))
             self.assertEqual(key[-1], str(home / ".config/remote-ssh"))
+            self.assertEqual(claude_env["BROWSER"], str(home / "xdg-open"))
+            self.assertEqual(claude_env["PATH"].split(":")[0], str(home))
             self.assertNotIn("ANTHROPIC_API_KEY", claude_env)
             self.assertNotIn("SSH_CONNECTION", agy_env)
+
+    def test_oauth_opener_targets_only_the_active_profile_and_allowed_https_route(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            profile = directory / "fresh-profile"
+            result = directory / "invocation"
+            browser = directory / "firefox"
+            browser.write_text(
+                "#!/usr/bin/python3 -I\nimport json, os, sys\nfrom pathlib import Path\n"
+                f"Path({str(result)!r}).write_text(json.dumps([sys.argv[1:], os.environ.get('DISPLAY')]))\n",
+                encoding="utf-8",
+            )
+            browser.chmod(0o700)
+            make_opener = source["oauth_opener"]
+            with patch.dict(make_opener.__globals__, {"FIREFOX": str(browser)}):
+                opener = directory / "xdg-open"
+                opener.write_text(make_opener("claude-login", directory, profile), encoding="utf-8")
+            opener.chmod(0o700)
+            allowed = "https://claude.com/cai/oauth/authorize?state=synthetic%26fixture"
+            process = subprocess.run([opener, allowed], env={"DISPLAY": ":907"}, capture_output=True)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            self.assertEqual(json.loads(result.read_text(encoding="utf-8")),
+                             [["--profile", str(profile), "--new-tab", allowed], ":907"])
+            result.unlink()
+            for invalid in (
+                "http://claude.ai/oauth/authorize?state=synthetic",
+                "https://claude.ai@invalid.example/oauth/authorize?state=synthetic",
+                "https://claude.ai.invalid.example/oauth/authorize?state=synthetic",
+                "https://claude.ai:443/oauth/authorize?state=synthetic",
+                "https://claude.ai/settings/account?state=synthetic",
+                "https://claude.ai/oauth/authorize",
+                "https://auth.openai.com/oauth/authorize?state=synthetic",
+                "https://claude.ai/oauth/authorize?state=fixture\n",
+                "https://claude.ai/oauth/authorize?" + "x" * 8192,
+            ):
+                with self.subTest(invalid=invalid[:100]):
+                    process = subprocess.run([opener, invalid], capture_output=True)
+                    self.assertNotEqual(process.returncode, 0)
+                    self.assertFalse(result.exists())
+                    self.assertNotIn(invalid.encode("ascii"), process.stderr)
+
+    def test_display_keeps_clipboard_and_browser_remoting_scoped_to_oauth(self):
+        launch = source["open_browser"]
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            for action, enabled in (("claude-login", True), ("claude-api-key", False), ("claude-account", False)):
+                with self.subTest(action=action), tempfile.TemporaryDirectory(dir=home) as session:
+                    directory = Path(session)
+                    with patch.dict(launch.__globals__, {
+                        "run_output": lambda *_: None,
+                        "terminal_plan": lambda *_: (["/fixture/tool"], {"HOME": str(home)}),
+                        "wait_for_display": lambda *_: None,
+                        "wait_for_window": lambda *_: None,
+                        "stop_process": lambda *_: None,
+                        "relay": lambda *_: None,
+                    }), patch("subprocess.Popen") as start, patch("socket.socket", return_value=MagicMock()), \
+                            patch("shutil.which", return_value="/fixture/tigervncconfig"):
+                        launch(directory, home, {"PATH": "/usr/bin"}, False, action)
+                    server, browser, *others = start.call_args_list
+                    server_args = server.args[0]
+                    self.assertIn(f"-AcceptCutText={int(enabled)}", server_args)
+                    self.assertIn(f"-SendCutText={int(enabled)}", server_args)
+                    self.assertIn("-SendPrimary=0", server_args)
+                    self.assertIn("-SetPrimary=0", server_args)
+                    self.assertIn("-rfbunixpath", server_args)
+                    port = server_args.index("-rfbport")
+                    self.assertEqual(server_args[port + 1], "-1")
+                    self.assertEqual(browser.args[0][1], "--new-instance" if enabled else "--no-remote")
+                    self.assertEqual(browser.args[0][3], str(directory / "profile"))
+                    self.assertEqual(any(call.args[0][0] == "/fixture/tigervncconfig" for call in others), enabled)
+                    if action != "claude-account":
+                        terminal = others[-1]
+                        self.assertEqual(terminal.kwargs["env"]["DISPLAY"], browser.kwargs["env"]["DISPLAY"])
+                        self.assertEqual(terminal.kwargs["env"]["XAUTHORITY"], browser.kwargs["env"]["XAUTHORITY"])
 
     def run_writer(self, root, confirmation, before_confirm=lambda: None):
         pid, fd = pty.fork()

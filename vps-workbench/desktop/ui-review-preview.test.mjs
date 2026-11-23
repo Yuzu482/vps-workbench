@@ -2269,3 +2269,91 @@ test('language controls fit a compact viewport and invalid saved locales fall ba
   await selected.press('Escape');
   await english.waitFor({ state: 'hidden' });
 });
+
+test('VPS OAuth clipboard transfers only on request and the cursor has a fallback', { timeout: 35_000 }, async (t) => {
+  const page = await openPreview(t);
+  const origin = new URL(page.url()).origin;
+  const port = Number(new URL(origin).port);
+  const attempts = [];
+  await page.evaluate(() => {
+    window.vpsWorkbench.writeClipboard = async (text) => {
+      (window.accountLocalCopies ??= []).push(text);
+      return true;
+    };
+  });
+  await page.route('**/dsh-vps-chat/api/rpc', (route) => {
+    const packet = route.request().postDataJSON();
+    if (packet?.op !== 'account-view') return route.fallback();
+    attempts.push(packet.action);
+    return route.fulfill({ json: { ok: true, protocol: 'dsh-account.' + 'a'.repeat(43), port } });
+  });
+  await page.route('**/dsh-vps-chat/api/account-player.mjs', (route) => route.fulfill({
+    contentType: 'text/javascript',
+    body: `
+      export default class Viewer extends EventTarget {
+        constructor(screen, socket) {
+          super();
+          window.accountViewer = this;
+          socket.addEventListener('open', () => this.dispatchEvent(new Event('connect')));
+          socket.addEventListener('close', () => this.dispatchEvent(new Event('disconnect')));
+        }
+        clipboardPasteFrom(text) { (window.accountRemoteCopies ??= []).push(text); }
+        disconnect() {}
+      }
+    `,
+  }));
+  await page.routeWebSocket(`ws://127.0.0.1:${port}/dsh-vps-chat/api/account-screen`, () => {});
+  await page.getByRole('group', { name: 'VPS 操作', exact: true }).getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await openSettingsSection(settings, '账号');
+  const emitClipboard = (text) => page.evaluate((text) => window.accountViewer.dispatchEvent(
+    new CustomEvent('clipboard', { detail: { text } })), text);
+
+  await settings.getByRole('button', { name: 'VPS 登录 Claude', exact: true }).click();
+  const oauth = page.getByRole('dialog', { name: 'Claude Code 订阅登录' });
+  await oauth.getByText('已连接 VPS 账号操作窗口', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.accountViewer.showDotCursor), true);
+  const clipboard = oauth.getByRole('group', { name: 'VPS 剪贴板' });
+  const copy = clipboard.getByRole('button', { name: '复制到本机' });
+  assert.equal(await copy.isEnabled(), false);
+  await emitClipboard('x'.repeat(8193));
+  assert.equal(await copy.isEnabled(), false);
+  await emitClipboard('example-only-code');
+  assert.deepEqual(await page.evaluate(() => window.accountLocalCopies ?? []), []);
+  await copy.click();
+  assert.deepEqual(await page.evaluate(() => window.accountLocalCopies), ['example-only-code']);
+
+  const paste = clipboard.getByRole('textbox', { name: '从本机粘贴' });
+  await paste.evaluate((input) => {
+    const data = new DataTransfer();
+    data.setData('text/plain', 'untrusted-synthetic-code');
+    input.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
+  });
+  assert.deepEqual(await page.evaluate(() => window.accountRemoteCopies ?? []), []);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  await page.evaluate(() => navigator.clipboard.writeText('first\nsecond'));
+  await paste.press('Control+v');
+  await clipboard.getByText('请粘贴一行文本，最多 8 KiB。').waitFor();
+  assert.deepEqual(await page.evaluate(() => window.accountRemoteCopies ?? []), []);
+  await page.evaluate(() => navigator.clipboard.writeText('local-fixture-code'));
+  await paste.press('Control+v');
+  await clipboard.getByText(/已送到 VPS 剪贴板/).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.accountRemoteCopies), ['local-fixture-code']);
+  assert.equal(await paste.inputValue(), '');
+
+  await oauth.getByRole('button', { name: '关闭账号窗口' }).click();
+  await oauth.waitFor({ state: 'hidden' });
+  await settings.getByRole('button', { name: 'VPS 登录 Claude', exact: true }).click();
+  await oauth.getByText('已连接 VPS 账号操作窗口', { exact: true }).waitFor();
+  assert.equal(await copy.isEnabled(), false);
+  await oauth.getByRole('button', { name: '关闭账号窗口' }).click();
+  await oauth.waitFor({ state: 'hidden' });
+
+  await settings.getByRole('button', { name: '设置 VPS 密钥', exact: true }).click();
+  const secret = page.getByRole('dialog', { name: '设置 VPS 上的 Claude API 密钥' });
+  await secret.getByText('已连接 VPS 账号操作窗口', { exact: true }).waitFor();
+  assert.equal(await secret.getByRole('group', { name: 'VPS 剪贴板' }).count(), 0);
+  await emitClipboard('fixture-secret');
+  assert.deepEqual(await page.evaluate(() => window.accountLocalCopies), ['example-only-code']);
+  assert.deepEqual(attempts, ['claude-login', 'claude-login', 'claude-api-key']);
+});
