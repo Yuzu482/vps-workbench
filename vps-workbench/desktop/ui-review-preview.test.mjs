@@ -111,6 +111,37 @@ test('the persistent shortcut rail docks conversation history beside the workspa
   await history.getByRole('button', { name: '新建对话', exact: true }).waitFor();
 });
 
+test('the provider palette expands inline to the right and puts the current tool first', { timeout: 30_000 }, async (t) => {
+  const page = await openPreview(t);
+  const trigger = page.getByRole('button', { name: '切换 VPS 执行端', exact: true });
+  const palette = page.getByRole('listbox', { name: '已配置的 VPS 执行端', exact: true });
+  const badge = trigger.locator('.vc-tool-badge');
+  await trigger.waitFor();
+  const anchor = await badge.boundingBox();
+  await trigger.click();
+  const current = palette.getByRole('option', { name: 'Codex', exact: true });
+  await current.waitFor();
+  assert.equal(await palette.getByRole('option').first().getAttribute('aria-label'), 'Codex');
+  const activeIcon = await current.locator('.vc-menu-icon').boundingBox();
+  assert.ok(Math.abs(anchor.x + anchor.width / 2 - activeIcon.x - activeIcon.width / 2) < 1);
+  assert.ok(Math.abs(anchor.y + anchor.height / 2 - activeIcon.y - activeIcon.height / 2) < 1);
+  const other = palette.getByRole('option', { name: 'Claude API', exact: true });
+  assert.ok((await other.boundingBox()).x > activeIcon.x + activeIcon.width);
+  await other.click();
+  const first = palette.getByRole('option').first();
+  await palette.getByRole('option', { name: 'Claude API', selected: true }).waitFor();
+  assert.equal(await first.getAttribute('aria-label'), 'Claude API');
+  assert.equal(await first.evaluate((button) => document.activeElement === button), true);
+  await page.keyboard.press('Escape');
+  await palette.waitFor({ state: 'hidden' });
+  assert.equal(await trigger.evaluate((button) => document.activeElement === button), true);
+  await trigger.press('ArrowDown');
+  await palette.waitFor();
+  assert.equal(await first.getAttribute('aria-label'), 'Claude API');
+  await page.locator('.desktop-brand').click();
+  await palette.waitFor({ state: 'hidden' });
+});
+
 test('subscription rings distinguish exhausted, unavailable and weekly-only observations', { timeout: 30_000 }, async (t) => {
   const page = await openPreview(t);
   await page.route('**/dsh-vps-chat/api/rpc', async (route) => {

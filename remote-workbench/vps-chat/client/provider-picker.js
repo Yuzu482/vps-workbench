@@ -6,19 +6,24 @@ export const readToolPreferences = (settings, knownTools) =>
   readStoredToolPreferences(settings, knownTools, (key) => workbenchStorage.getItem(key));
 
 function positionPalette(palette, button, count, openingIndex, docked) {
-  const bounds = button.closest('[data-vps-chat]').getBoundingClientRect();
+  const workbench = button.closest('[data-vps-chat]');
+  const bounds = workbench.getBoundingClientRect();
+  const inlineRail = docked && workbench.dataset.subscriptionOpen !== 'true' &&
+    window.matchMedia('(width > 620px)').matches;
+  palette.toggleAttribute('data-inline-rail', inlineRail);
   const anchor = button.getBoundingClientRect();
   const reveal = docked ? button.querySelector('.vc-tool-badge').getBoundingClientRect() : anchor;
   const padding = 5;
   const height = 42;
-  const start = Math.max(0, bounds.left) + 6;
+  const start = Math.max(0, bounds.left) + (inlineRail ? 0 : 6);
   const end = Math.min(window.innerWidth, bounds.right) - 6;
-  const slot = Math.min(40, Math.max(24, (end - start - padding * 2) / count));
+  const slot = Math.min(inlineRail ? 36 : 40, Math.max(24, (end - start - padding * 2) / count));
   const width = count * slot + padding * 2;
   const center = reveal.left + reveal.width / 2;
   const align = padding + (Math.min(openingIndex, count - 1) + .5) * slot;
-  const left = Math.max(start, Math.min(docked ? anchor.left : center - align, end - width));
-  const preferredTop = docked ? anchor.top - height - 8 : anchor.top + (anchor.height - height) / 2;
+  const preferredLeft = docked && !inlineRail ? anchor.left : center - align;
+  const left = Math.max(start, Math.min(preferredLeft, end - width));
+  const preferredTop = docked && !inlineRail ? anchor.top - height - 8 : reveal.top + (reveal.height - height) / 2;
   const top = Math.max(docked ? bounds.top + 6 : 6, Math.min(preferredTop, window.innerHeight - height - 6));
   const revealWidth = Math.min(reveal.width, width);
   const revealStart = Math.max(0, Math.min(center - left - revealWidth / 2, width - revealWidth));
@@ -41,8 +46,9 @@ export function createProviderPicker(React) {
     const palette = React.useRef(null);
     const openingIndex = React.useRef(0);
     const [open, setOpen] = React.useState(false);
-    const selected = tools.findIndex((tool) => tool.id === value);
-    const current = tools[selected];
+    const current = tools.find((tool) => tool.id === value);
+    const options = docked && current ? [current, ...tools.filter((tool) => tool !== current)] : tools;
+    const selected = options.indexOf(current);
 
     function focusOption(index) {
       palette.current.children[index + 1]?.focus({ preventScroll: true });
@@ -60,7 +66,7 @@ export function createProviderPicker(React) {
 
     function openPalette(index = Math.max(0, selected)) {
       const panel = palette.current;
-      if (disabled || !active || panel.matches(':popover-open')) return;
+      if (disabled || !active || options.length === 0 || panel.matches(':popover-open')) return;
       delete panel.dataset.instantClose;
       openingIndex.current = Math.max(0, selected);
       positionPalette(panel, button.current, tools.length, openingIndex.current, docked);
@@ -98,6 +104,10 @@ export function createProviderPicker(React) {
         observer.disconnect();
       };
     }, [open, tools.length, docked]);
+
+    React.useLayoutEffect(() => {
+      if (docked && open && selected >= 0 && palette.current.matches(':popover-open')) focusOption(selected);
+    }, [docked, open, value, selected]);
 
     function onPaletteKey(event) {
       if (event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return;
@@ -141,12 +151,16 @@ export function createProviderPicker(React) {
         'data-selected': selected >= 0, style: { '--vc-selected-index': Math.max(0, selected) },
       },
       h('span', { className: 'vc-tool-highlight', 'aria-hidden': true }),
-      tools.map((tool, index) => h('button', {
+      options.map((tool, index) => h('button', {
         key: tool.id, type: 'button', role: 'option', tabIndex: -1, className: 'vc-tool-option',
         'aria-label': tool.label, 'aria-selected': index === selected, 'aria-disabled': disabled,
         'data-index': index, 'data-tool-theme': tool.id, title: tool.label,
         onClick: (event) => {
-          if (disabled || index === selected) return;
+          if (disabled) return;
+          if (index === selected) {
+            if (docked) closePalette(true);
+            return;
+          }
           const bounds = event.currentTarget.getBoundingClientRect();
           const origin = event.detail > 0 ? { x: event.clientX, y: event.clientY } :
             { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
@@ -207,6 +221,7 @@ export const providerPickerCss = `
     border:0; border-radius:999px; background:transparent; color:var(--vc-accent);
     transition:color var(--vc-control-duration) ease, background-color var(--vc-control-duration) ease;
   }
+  [data-vps-chat] .vc-tool-palette[data-inline-rail] .vc-tool-option .vc-tool-icon {width:24px; height:24px}
   [data-vps-chat] .vc-tool-option[aria-disabled=true] {opacity:1}
   [data-vps-chat] .vc-tool-option:hover:not([aria-selected=true],[aria-disabled=true]) {background:var(--vc-tint)}
   [data-vps-chat] .vc-tool-option[aria-selected=true] {color:var(--vc-on-accent)}
