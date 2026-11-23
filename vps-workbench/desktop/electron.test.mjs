@@ -133,10 +133,10 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       assert.equal(await chooser.innerText(), 'Codex');
       assert.equal(await footer.locator('.vc-sidebar-settings [data-icon=settings] svg').count(), 1);
       assert.equal(await page.locator('.vc-header :is(.vc-tool-trigger, .vc-header-settings), .vc-account-entry').count(), 0);
-      const newChat = footer.getByRole('button', { name: '新建对话', exact: true });
+      const newChat = sidebar.getByRole('button', { name: '新建对话', exact: true });
       await newChat.waitFor();
       assert.equal(await newChat.locator('[data-icon=new-chat] svg').count(), 1);
-      assert.equal(await sidebar.getByRole('button', { name: '新建对话', exact: true }).count(), 0);
+      assert.equal(await footer.getByRole('button', { name: '新建对话', exact: true }).count(), 0);
       assert.equal(await page.locator('.vc-composer [data-control=mode] [data-icon=chat]').count(), 1);
       await page.emulateMedia({ reducedMotion: 'no-preference' });
       await page.evaluate(() => {
@@ -1485,7 +1485,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await dialog.waitFor({ state: 'hidden' });
       await page.getByRole('button', { name: '切换 VPS 执行端', exact: true }).click();
       await page.getByRole('option', { name: 'Antigravity', exact: true }).click();
-      await page.getByRole('group', { name: 'VPS 操作', exact: true })
+      await page.getByRole('complementary', { name: 'VPS 对话列表', exact: true })
         .getByRole('button', { name: '新建对话', exact: true }).click();
       const editor = page.getByRole('textbox', { name: '消息', exact: true });
       await editor.fill('生成测试内容');

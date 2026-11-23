@@ -1290,7 +1290,7 @@ test('local and VPS chat share the conversation, sidebar and settings styles at 
             });
           } else await toggle.click();
           await railShortcut.waitFor({ state: 'hidden' });
-          await assertWithinViewport(newChat);
+          await newChat.waitFor({ state: 'hidden' });
         }
 
         assert.equal(await shell.evaluate((root) => {
@@ -1701,16 +1701,18 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     const shortcuts = rail.getByRole('group', { name: '工作台快捷入口', exact: true });
     assert.deepEqual(await shortcuts.getByRole('button').allTextContents(), ['', '', '']);
     const footer = page.getByRole('group', { name: 'VPS 操作', exact: true });
-    const newChat = footer.getByRole('button', { name: '新建对话', exact: true });
+    const newChat = rail.getByRole('button', { name: '新建对话', exact: true });
     await assertWithinViewport(newChat);
     const primary = await newChat.boundingBox();
     assert.equal(primary.height, 40);
-    assert.ok(primary.width > boxes[0].width && primary.y > viewport.height - 160);
+    assert.ok(primary.width > boxes[0].width && primary.y + primary.height < boxes[0].y);
+    assert.equal(await footer.getByRole('button').count(), 2);
     assert.equal(primary.x, boxes[0].x);
     const providerButton = footer.getByRole('button', { name: '切换 VPS 执行端', exact: true });
     const settingsButton = footer.getByRole('button', { name: '设置', exact: true });
     const provider = await providerButton.boundingBox();
-    assert.ok(viewport.width > 620 ? primary.y + primary.height <= provider.y : primary.x + primary.width <= provider.x);
+    const settings = await settingsButton.boundingBox();
+    assert.ok(viewport.width > 620 ? provider.y + provider.height <= settings.y : provider.x + provider.width <= settings.x);
     const iconCenters = [];
     for (const button of [newChat, providerButton, settingsButton]) {
       await assertWithinViewport(button);
