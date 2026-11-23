@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -305,7 +305,7 @@ test('archives are atomic and historical retries require the exact failed receip
   assert.equal((await runtime.retry(original.id, 0)).code, 'mixed_retry_unconfirmed');
 });
 
-test('desktop runs both local text agents with Codex and VPS, then recovers the original receipt', { timeout: 25000 }, async (t) => {
+test('desktop scopes local workflow attachments to each node and recovers the original mixed receipt', { timeout: 25000 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'workbench-mixed-text-'));
   const workspace = join(root, 'registered');
   await mkdir(workspace);
@@ -326,7 +326,6 @@ test('desktop runs both local text agents with Codex and VPS, then recovers the 
       assert.equal(interaction, undefined);
       assert.ok(!mcpServers?.length);
       return { async runStreamed(input) {
-        assert.equal(typeof input, 'string');
         assert.ok(!localInputs.has(backend));
         localInputs.set(backend, { input, profile });
         return { events: (async function* () {
@@ -350,6 +349,10 @@ test('desktop runs both local text agents with Codex and VPS, then recovers the 
     makeBridge: () => ({ request(body) {
       if (body.op === 'send') {
         remoteInputs.push(body);
+        if (body.prompt.includes('VPS-SOURCE-STAGE')) return { ok: true, targetId: body.targetId, session: { id: body.sessionId,
+          turns: [{ id: body.turnId, state: 'complete', reply: JSON.stringify({
+            conclusion: 'VPS-approved-conclusion', evidence: 'VPS-private-details', pending: '',
+          }) }] } };
         remoteReceipts.set(body.sessionId, { ok: true, targetId: body.targetId, session: { id: body.sessionId,
           turns: [{ id: body.turnId, state: 'complete', reply: 'VPS summary' }] } });
         return { ok: false, code: 'bridge_uncertain' };
@@ -375,16 +378,31 @@ test('desktop runs both local text agents with Codex and VPS, then recovers the 
     execution: { location: profiles.has(provider) ? 'local-sdk' : 'ssh-vps',
       configId: profiles.get(provider)?.id ?? memoryTargetId, context },
   });
-  const stages = [stage('draft', 'codex'), stage('review', 'claude-sdk'), stage('audit', 'antigravity', 'blind'), { ...stage('summary', 'codex'), execution: { location: 'ssh-vps', configId: memoryTargetId, context: 'independent' } }];
+  const textFile = (name, contents) => ({ name, data: Buffer.from(contents).toString('base64') });
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/hJcAAAAASUVORK5CYII=';
+  const [claudeRef, agyRef, imageRef] = await data.saveWorkflowAttachments([
+    textFile('claude-only.txt', 'CLAUDE-ATTACHMENT-CONTENT'),
+    textFile('agy-only.txt', 'AGY-ATTACHMENT-CONTENT'),
+    { name: 'agy-image.png', data: png },
+    textFile('unused.txt', 'UNAUTHORIZED-ATTACHMENT'),
+  ]);
+  const grant = (provider, attachments) => ({ targetId: profiles.get(provider).targetId, paths: [], attachments });
+  const stages = [
+    stage('draft', 'codex'),
+    { ...stage('review', 'claude-sdk'), fileAccess: grant('claude-sdk', [claudeRef]) },
+    { ...stage('audit', 'antigravity'), fileAccess: grant('antigravity', [agyRef, imageRef]) },
+    { ...stage('summary', 'codex'), execution: { location: 'ssh-vps', configId: memoryTargetId, context: 'independent' } },
+  ];
   const edges = [{ from: 'review', to: 'audit' }, ...stages.slice(0, 3).map(({ id: from }) => ({ from, to: 'summary' }))];
   const id = randomUUID();
-  const save = (steps) => data.changeWorkflows({ op: 'save', id, revision: null, draft: { name: '四路文本混合', stages: steps, edges } });
-  for (const unsupported of [{ model: 'custom' }, {
-    agent: { mcpServers: [], plugins: [], memory: 'shared' },
-  }]) {
-    await assert.rejects(async () => save(stages.map((step) => step.id === 'review' ? { ...step, ...unsupported } : step)), /纯文本/);
+  const save = (steps, revision = null) => data.changeWorkflows({ op: 'save', id, revision, draft: { name: '附件混合验收', stages: steps, edges } });
+  for (const unsupported of [{ model: 'custom' }, { execution: { ...stages[1].execution, context: 'blind' } },
+    { fileAccess: { ...stages[1].fileAccess, paths: ['workspace.txt'] } },
+    { agent: { mcpServers: [], plugins: [], memory: 'shared' } }]) {
+    await assert.rejects(async () => save(stages.map((step) => step.id === 'review' ? { ...step, ...unsupported } : step)),
+      /单独授权的附件|为盲审/u);
   }
-  await save(stages);
+  await save(stages.map((step) => step.id === 'review' ? { ...step, fileAccess: grant('antigravity', [claudeRef]) } : step));
   const { targets } = await request('targets');
   for (const [backend, profile] of profiles) {
     assert.deepEqual(targets.find(({ id }) => id === profile.id).providers, [backend]);
@@ -393,8 +411,12 @@ test('desktop runs both local text agents with Codex and VPS, then recovers the 
   assert.equal((await request('catalog', { stage: wrong })).ok, false);
 
   const input = { workflowId: id, revision: 1, task: 'COMMON-TASK', criteria: 'COMMON-CRITERIA', constraints: 'COMMON-LIMIT',
-    evidence: [{ stageId: 'audit', id: 'source', text: 'ORIGINAL-BLIND-EVIDENCE' }],
-    transfers: stages.slice(0, 3).map(({ id: from }) => ({ from, to: 'summary', fields: ['conclusion'] })) };
+    evidence: [], transfers: [{ from: 'review', to: 'audit', fields: ['conclusion'] },
+      ...stages.slice(0, 3).map(({ id: from }) => ({ from, to: 'summary', fields: ['conclusion'] }))] };
+  assert.equal((await request('start', { input })).code, 'workflow_file_access_changed');
+  assert.equal(localInputs.size + remoteInputs.length, 0);
+  await save(stages, 1);
+  input.revision = 2;
   const admission = await request('start', { input });
   assert.equal(admission.ok, true, JSON.stringify(admission));
   const settled = (phase) => until(async () => {
@@ -407,15 +429,26 @@ test('desktop runs both local text agents with Codex and VPS, then recovers the 
   assert.equal(localInputs.size, 3);
   for (const [backend, { input: prompt, profile }] of localInputs) {
     assert.equal(profile.id, profiles.get(backend).id);
-    assert.match(prompt, /COMMON-TASK[\s\S]*COMMON-CRITERIA[\s\S]*COMMON-LIMIT/u);
-    assert.doesNotMatch(prompt, /private detail|已启用的记忆/u);
+    const text = typeof prompt === 'string' ? prompt : prompt.map(({ text }) => text).filter(Boolean).join('\n');
+    assert.match(text, /COMMON-TASK[\s\S]*COMMON-CRITERIA[\s\S]*COMMON-LIMIT/u);
+    assert.doesNotMatch(text, /private detail|已启用的记忆|UNAUTHORIZED-ATTACHMENT/u);
   }
-  assert.match(localInputs.get('antigravity').input, /ORIGINAL-BLIND-EVIDENCE/u);
-  assert.doesNotMatch(localInputs.get('antigravity').input, /claude-sdk result/u);
-  assert.doesNotMatch(localInputs.get('claude-sdk').input, /ORIGINAL-BLIND-EVIDENCE/u);
+  const claudeInput = localInputs.get('claude-sdk').input;
+  assert.deepEqual(claudeInput.slice(1).map(({ text }) => JSON.parse(text)), [
+    { attachment: 'claude-only.txt', evidence: 'CLAUDE-ATTACHMENT-CONTENT' },
+  ]);
+  const agyInput = localInputs.get('antigravity').input;
+  assert.match(agyInput[0].text, /claude-sdk result/u);
+  assert.doesNotMatch(JSON.stringify(agyInput), /CLAUDE-ATTACHMENT-CONTENT|claude-only[.]txt/u);
+  assert.deepEqual(JSON.parse(agyInput[1].text), { attachment: 'agy-only.txt', evidence: 'AGY-ATTACHMENT-CONTENT' });
+  assert.equal(agyInput[3].type, 'raster');
+  assert.equal(agyInput[3].bytes.toString('base64'), png);
+  assert.equal(typeof localInputs.get('codex').input, 'string');
   assert.equal(remoteInputs.length, 1);
   for (const backend of profiles.keys()) assert.ok(remoteInputs[0].prompt.includes(backend + ' result'));
-  assert.doesNotMatch(remoteInputs[0].prompt, /private detail|ORIGINAL-BLIND-EVIDENCE/u);
+  assert.doesNotMatch(JSON.stringify(remoteInputs[0]), /private detail|ATTACHMENT-CONTENT|claude-only|agy-only|agy-image/u);
+  assert.deepEqual(remoteInputs[0].workflowFiles, { paths: [], attachments: [] });
+  assert.doesNotMatch(JSON.stringify(paused), /ATTACHMENT-CONTENT|UNAUTHORIZED-ATTACHMENT/u);
   const row = paused.rows[1], claude = profiles.get('claude-sdk');
   const publicCall = (payload) => app.requestLocal({ op: 'workbench', location: 'local-sdk', backend: 'claude-sdk',
     payload: { ...payload, settings: { location: 'local-sdk', provider: 'claude-sdk', profileId: claude.id }, targetId: row.targetId } });
@@ -434,4 +467,29 @@ test('desktop runs both local text agents with Codex and VPS, then recovers the 
   assert.equal(completed.rows[3].turnId, paused.rows[3].turnId);
   assert.equal(remoteInputs.length, 1);
   assert.equal(remoteReads[0].sessionId, paused.rows[3].sessionId);
+  // The reverse edge also carries only approved textual fields, even when VPS has an independently authorized snapshot.
+  const [vpsRef] = await data.saveWorkflowAttachments([textFile('vps-only.txt', 'PRIVATE-VPS-ATTACHMENT')]);
+  const reverseId = randomUUID();
+  const vpsSource = { ...stages[3], instruction: 'VPS-SOURCE-STAGE',
+    fileAccess: { targetId, paths: [], attachments: [vpsRef] } };
+  await data.changeWorkflows({ op: 'save', id: reverseId, revision: null, draft: { name: '反向附件验收',
+    stages: [vpsSource, stages[1]], edges: [{ from: 'summary', to: 'review' }] } });
+  localInputs.delete('claude-sdk');
+  assert.equal((await request('start', { input: { ...input, workflowId: reverseId, revision: 1,
+    transfers: [{ from: 'summary', to: 'review', fields: ['conclusion'] }] } })).ok, true);
+  const reverse = await settled('complete');
+  assert.equal(reverse.workflowId, reverseId);
+  assert.deepEqual(remoteInputs[1].workflowFiles.attachments, [textFile('vps-only.txt', 'PRIVATE-VPS-ATTACHMENT')]);
+  const reverseInput = JSON.stringify(localInputs.get('claude-sdk').input);
+  assert.ok(reverseInput.includes('VPS-approved-conclusion') && reverseInput.includes('CLAUDE-ATTACHMENT-CONTENT'));
+  assert.doesNotMatch(reverseInput, /VPS-private-details|PRIVATE-VPS-ATTACHMENT|vps-only[.]txt/u);
+  const isolatedId = randomUUID();
+  await data.changeWorkflows({ op: 'save', id: isolatedId, revision: null,
+    draft: { name: '损坏快照验收', stages: [stages[1]], edges: [] } });
+  await writeFile(join(root, 'workflow-attachments', claudeRef.digest), Buffer.alloc(claudeRef.size, 65));
+  assert.equal((await request('start', { input: { ...input, workflowId: isolatedId, revision: 1, transfers: [] } })).ok, true);
+  const missing = await settled('paused');
+  assert.equal(missing.rows[0].state, 'waiting');
+  assert.match(missing.message, /阶段附件快照缺失或变更/u);
+  assert.equal(localInputs.size, 3);
 });

@@ -13,13 +13,13 @@ async function verifiedTarget(readFileTarget, provider, signal) {
   throw new Error('无法核验此执行工具的远端目标。请检查连接后重试。');
 }
 
-const mismatchMessage = '现有授权属于另一远端目标。请清除现有授权，核对目标后重新添加。';
+const mismatchMessage = '现有授权属于另一执行配置。请清除现有授权，核对配置后重新添加。';
 
 export function createStageFileAccessEditor(React) {
   const h = React.createElement;
 
   return function StageFileAccessEditor({ stage, connected, open, catalogScope, readFileTarget, saveAttachments,
-    busy, disabled, onChange, onRequest, localSdk }) {
+    busy, disabled, onChange, onRequest, localSdk, attachmentsOnly }) {
     const helpId = React.useId();
     const [path, setPath] = React.useState('');
     const [error, setError] = React.useState('');
@@ -111,7 +111,7 @@ export function createStageFileAccessEditor(React) {
         signal.throwIfAborted();
         if (!Array.isArray(imported) || imported.length !== files.length || imported.some((entry, index) =>
           entry?.name !== files[index].name || entry.size !== files[index].size)) throw new Error('未能保存全部所选附件。');
-        if (await resolveGrantTarget(signal) !== target) throw new Error('导入期间远端目标已变化。请核对目标后重新选择附件。');
+        if (await resolveGrantTarget(signal) !== target) throw new Error('导入期间执行配置已变化。请核对配置后重新选择附件。');
         return validateWorkflowFileAccess({ targetId: target, paths, attachments: [...attachments, ...imported] });
       });
     }
@@ -132,13 +132,14 @@ export function createStageFileAccessEditor(React) {
 
     const status = !canResolve ? '当前无法核验执行目标。启用并连接此执行工具后可添加授权。'
       : targetResult === 'matched' ? (localSdk ? '现有授权与当前本机配置匹配。' : '现有授权与当前远端目标匹配。')
-      : targetResult === 'error' ? '无法核验现有授权的远端目标。请检查连接后重试。'
-      : canCheck && !targetResult ? '正在核验现有授权的远端目标…' : '';
+      : targetResult === 'error' ? '无法核验现有授权的执行目标。请检查配置后重试。'
+      : canCheck && !targetResult ? '正在核验现有授权的执行目标…' : '';
 
     return h('fieldset', { className: 'vc-workflow-files', disabled: disabled || busy, 'aria-describedby': helpId },
       h('legend', null, '阶段文件授权'),
       h('p', { id: helpId, className: 'vc-workflow-note' },
         !fileAccess && '此阶段默认无文件授权。',
+        attachmentsOnly ? '附件只提供给当前阶段，连线仅交接文本。支持 UTF-8 文本，图片取决于执行端的输入能力。' :
         localSdk ? '路径相对于已登记的本机工作目录。授权文件和附件以只读资料提供。回复可在阶段产物中导出。' :
           h(React.Fragment, null, '远端路径相对于项目工作区根目录，仅支持单个常规文件。附件快照位于 ',
             h('code', null, '/attachments/<name>'), '，阶段产物写入 ', h('code', null, '/output'), '。上游文件需要单独授权。')),
@@ -150,7 +151,7 @@ export function createStageFileAccessEditor(React) {
       list(localSdk ? '本机路径' : '远端路径', paths, (index) => remove(paths.filter((_, position) => position !== index), attachments)),
       list('本地附件', attachments.map(({ name }) => name),
         (index) => remove(paths, attachments.filter((_, position) => position !== index))),
-      h('div', { className: 'vc-workflow-file-path-row' },
+      !attachmentsOnly && h('div', { className: 'vc-workflow-file-path-row' },
         h('label', { className: 'vc-workflow-field' }, h('span', null, localSdk ? '本机相对路径' : '远端相对路径'),
           h('input', { value: path, placeholder: 'docs/brief.md', disabled: addDisabled, spellCheck: false,
             onChange: (event) => { setPath(event.target.value); setError(''); },
@@ -166,7 +167,7 @@ export function createStageFileAccessEditor(React) {
         h('input', { type: 'file', multiple: true, disabled: addDisabled || typeof saveAttachments !== 'function',
           onChange: addAttachments })),
       h('p', { className: 'vc-workflow-note' },
-        `每阶段最多 ${maxWorkflowFilePaths} 个路径与 ${maxWorkflowAttachments} 个附件，附件合计最多 ${attachmentLimit}。`),
+        `每阶段最多 ${attachmentsOnly ? '' : maxWorkflowFilePaths + ' 个路径与 '}${maxWorkflowAttachments} 个附件，附件合计最多 ${attachmentLimit}。`),
       fileAccess && h('button', { type: 'button', className: 'vc-button', onClick: () => remove([], []) }, '清除此阶段文件授权'));
   };
 }

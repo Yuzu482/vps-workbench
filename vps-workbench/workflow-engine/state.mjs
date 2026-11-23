@@ -15,7 +15,7 @@ export const workflowProviders = Object.freeze({
   antigravity: Object.freeze({ label: 'Antigravity', models: true, mcp: true }),
 });
 
-export function isLocalTextStage(stage) {
+export function isLocalClaudeOrAcpStage(stage) {
   return stage?.execution?.location === 'local-sdk' && ['claude-sdk', 'antigravity'].includes(stage.provider);
 }
 
@@ -213,9 +213,9 @@ function validateDraft(value, allowAgentMetadata) {
     }
     if (hasExecution) {
       normalized.execution = validateStageExecution(stage.execution, label);
-      if (isLocalTextStage(normalized) && (normalized.agent || normalized.agentPreset || normalized.fileAccess ||
+      if (isLocalClaudeOrAcpStage(normalized) && (normalized.agent || normalized.agentPreset || normalized.fileAccess?.paths.length ||
           (model !== '' && model !== 'default'))) {
-        throw new Error(`${label}的本机执行端仅支持账号默认模型和纯文本。请清除 Agent 模块、文件授权或指定模型。`);
+        throw new Error(`${label}的本机执行端支持账号默认模型和单独授权的附件。请清除 Agent 模块、工作目录路径或指定模型。`);
       }
       if (normalized.execution.context === 'blind' && (normalized.agent || normalized.agentPreset || normalized.fileAccess)) {
         throw new Error(`${label}为盲审，须先移除 Agent、插件和文件权限。`);

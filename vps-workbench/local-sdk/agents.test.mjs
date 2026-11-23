@@ -171,7 +171,8 @@ import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 const input = createInterface({ input: process.stdin });
-let workspace, first, task, session = process.argv[1] || 'acp:' + randomUUID(), isLoaded = false;
+const supportsImages = process.argv[1] === 'test-images';
+let workspace, first, task, session = (!supportsImages && process.argv[1]) || 'acp:' + randomUUID(), isLoaded = false;
 const write = (packet) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...packet }) + '\n');
 const reply = (id, result) => write({ id, result });
 const chunk = (text) => write({ method: 'session/update', params: { sessionId: session,
@@ -182,7 +183,8 @@ for await (const line of input) {
   if (method === 'initialize') {
     assert.equal(params.protocolVersion, 1);
     assert.deepEqual(params.clientCapabilities, {});
-    reply(id, { protocolVersion: 1, agentCapabilities: { loadSession: true } });
+    reply(id, { protocolVersion: 1, agentCapabilities: { loadSession: true,
+      ...(supportsImages && { promptCapabilities: { image: true } }) } });
   } else if (method === 'session/new' || method === 'session/load') {
     workspace = params.cwd;
     assert.deepEqual(params.mcpServers, []);
@@ -191,6 +193,15 @@ for await (const line of input) {
   } else if (method === 'session/prompt') {
     assert.equal(params.sessionId, session);
     const text = params.prompt[0].text;
+    if (text === '批准的图文附件') {
+      assert.equal(supportsImages, true);
+      assert.deepEqual(params.prompt.slice(1), [
+        { type: 'text', text: '授权文本' },
+        { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' },
+      ]);
+      chunk('收到授权图文'); reply(id, { stopReason: 'end_turn' });
+      continue;
+    }
     if (text === '断线') { chunk('未确认'); process.exit(0); }
     if (text === '续聊') { assert.equal(isLoaded, true); chunk('本机会话已恢复'); reply(id, { stopReason: 'end_turn' }); }
     else if (!first) { first = id; task = text; chunk('正在处理'); }
@@ -286,4 +297,29 @@ test('Antigravity ACP drives a real local stdio fixture with bound steering, den
     steerId: randomUUID(), prompt: '无执行授权' })).code, 'workbench_browse_only');
   await eventually(async () => (await stop.read())?.state === 'stopped');
   assert.deepEqual(f.ssh, []);
+});
+
+test('non-interactive ACP attachment input requires an advertised image capability', { timeout: 10000 }, async (t) => {
+  for (const supported of [true, false]) {
+    await t.test(supported ? 'image input' : 'image capability absent', async () => {
+      const thread = antigravityThread({ directory: process.cwd(),
+        launch: () => spawn(process.execPath, ['--input-type=module', '-e', acpFixture, ...(supported ? ['test-images'] : [])], {
+          shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+        }) });
+      const { events } = await thread.runStreamed([
+        { type: 'text', text: '批准的图文附件' }, { type: 'text', text: '授权文本' },
+        { type: 'raster', format: 'png', bytes: Buffer.from('iVBORw0KGgo=', 'base64') },
+      ], { signal: new AbortController().signal });
+      const result = [];
+      for await (const event of events) result.push(event);
+      if (supported) {
+        assert.equal(result.at(-1).type, 'turn.completed', JSON.stringify(result));
+        assert.ok(result.some(({ item }) => item?.text === '收到授权图文'));
+      } else {
+        assert.equal(result.at(-1).type, 'turn.failed');
+        assert.match(result.at(-1).error.message, /ACP image input unavailable/u);
+        assert.ok(!result.some(({ item }) => item));
+      }
+    });
+  }
 });

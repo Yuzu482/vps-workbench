@@ -1814,7 +1814,7 @@ test('design comparison aligns parent and child, shares zoom, and durably carrie
   assert.ok(!requests.includes('send'));
 });
 
-test('workflow editor binds local Claude and Antigravity configurations and runs their text branches', { timeout: 35_000 }, async (t) => {
+test('workflow editor saves separate local attachment grants and runs the mixed branches', { timeout: 35_000 }, async (t) => {
   const page = await openPreview(t, { previewOptions: { localAgents: true }, seed({ preferences }) {
     preferences['dsh-vps-chat:desktop-view-location:v1'] = 'ssh-vps';
   } });
@@ -1850,6 +1850,18 @@ test('workflow editor binds local Claude and Antigravity configurations and runs
   await config.selectOption(claude);
   assert.equal(await provider.inputValue(), 'claude-sdk');
   assert.equal(await provider.locator('option:checked').textContent(), 'Claude Agent SDK');
+  const attachment = panel.getByLabel('选择本地附件', { exact: true });
+  assert.equal(await panel.getByLabel('本机相对路径').count(), 0);
+  await attachment.setInputFiles({ name: '初稿资料.txt', mimeType: 'text/plain', buffer: Buffer.from('只给本机 Claude') });
+  await panel.getByRole('button', { name: '移除本地附件 初稿资料.txt' }).waitFor();
+  await config.selectOption(agy);
+  await panel.getByRole('alert').getByText(/现有授权属于另一执行配置/u).waitFor();
+  assert.equal(await attachment.isDisabled(), true);
+  await config.selectOption(claude);
+  await panel.getByRole('button', { name: '第 2 阶段 · 本机审校', exact: true }).click();
+  assert.equal(await panel.getByRole('button', { name: '移除本地附件 初稿资料.txt' }).count(), 0);
+  await attachment.setInputFiles({ name: '核对资料.txt', mimeType: 'text/plain', buffer: Buffer.from('只给本机 Antigravity') });
+  await panel.getByRole('button', { name: '移除本地附件 核对资料.txt' }).waitFor();
   await panel.getByRole('button', { name: '保存工作流', exact: true }).click();
   const brief = panel.getByRole('group', { name: '运行简报', exact: true });
   await brief.getByLabel('运行任务', { exact: true }).fill('处理纯文本活动说明。');
@@ -1860,6 +1872,8 @@ test('workflow editor binds local Claude and Antigravity configurations and runs
   await panel.getByText('工作流已完成。', { exact: true }).waitFor({ timeout: 15_000 });
   const result = await page.evaluate(() => window.vpsWorkbench.mixedWorkflow({ op: 'status' }));
   assert.deepEqual(result.run.rows.map(({ state }) => state), ['complete', 'complete', 'complete']);
+  assert.deepEqual(result.run.workflow.stages.map(({ fileAccess }) => fileAccess?.attachments.map(({ name }) => name) ?? []),
+    [['初稿资料.txt'], ['核对资料.txt'], []]);
   assert.match(result.run.rows[0].reply, /Claude Agent SDK 完成阶段/u);
   assert.match(result.run.rows[1].reply, /Antigravity ACP 完成阶段/u);
 });

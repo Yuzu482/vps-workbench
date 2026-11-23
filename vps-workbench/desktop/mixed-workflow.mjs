@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { confirmedFailedReceipt, createWorkflowRunner, readWorkflowRun, validateMixedInput } from '../workflow-engine/runner.mjs';
-import { exactFields, isLocalTextStage, mixedWorkflowHistoryKey, mixedWorkflowRunKey, readWorkflows, validateWorkflowDraft, workflowKey, workflowText } from '../workflow-engine/state.mjs';
+import { exactFields, isLocalClaudeOrAcpStage, mixedWorkflowHistoryKey, mixedWorkflowRunKey, readWorkflows, validateWorkflowDraft, workflowKey, workflowText } from '../workflow-engine/state.mjs';
 import { archiveMixedRun, readMixedRunHistory } from './mixed-run-history.mjs';
 
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -113,7 +113,7 @@ export function openMixedWorkflow({ data, canExecute, targets, resolve, catalog,
       const stage = snapshot?.workflow.stages[stageIndex];
       const row = snapshot?.rows[stageIndex];
       if (!stage || !row || !canExecute()) return forbidden;
-      if (isLocalTextStage(stage)) return problem('mixed_text_only', '此阶段的交付物为文本回复。');
+      if (isLocalClaudeOrAcpStage(stage)) return problem('mixed_text_only', '此阶段的交付物为文本回复。');
       const route = await resolve(stage);
       const isAllowed = () => findRun(runId)?.rows[stageIndex]?.turnId === row.turnId &&
         canExecute() && route?.routePin === snapshot.mixed.routePins[stageIndex] &&
@@ -146,6 +146,9 @@ export function openMixedWorkflow({ data, canExecute, targets, resolve, catalog,
           const route = await resolve(stage);
           if (!canExecute()) return forbidden;
           if (!route?.isCurrent()) return changed;
+          if (isLocalClaudeOrAcpStage(stage) && stage.fileAccess && stage.fileAccess.targetId !== route.targetId) {
+            return problem('workflow_file_access_changed', `阶段「${stage.name}」的附件授权属于另一配置，请重新选择附件。`);
+          }
           const models = await catalog(route);
           const model = stage.model || route.defaultModel || models.find((item) => item.isDefault)?.id;
           if (!model || !models.some(({ id }) => id === model)) return problem('mixed_preflight',

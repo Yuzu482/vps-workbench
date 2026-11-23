@@ -41,6 +41,7 @@ const messages = Object.freeze({
   browse_only: '本机 SDK 处于仅浏览模式。',
   auth_required: '请配置本机 Codex API 密钥并检查账号权限。',
   network_error: '本机 Codex 无法连接模型服务。请检查本机网络和原回执。',
+  image_input_unavailable: '当前本机 ACP 账号或模型未声明支持图片附件。请移除图片或改用文字资料。',
   start_failed: '本机 Codex 无法启动这一轮。',
   turn_failed: '本机 Codex 报告该轮失败。',
   stop_unconfirmed: '已请求停止。本轮结果尚未确认，可查询原回执。',
@@ -293,6 +294,7 @@ function knownStartCode(error) {
 
 function sdkFailure(message) {
   if (typeof message !== 'string') return null;
+  if (message === 'ACP image input unavailable') return 'image_input_unavailable';
   if (/\b(?:401 Unauthorized|403 Forbidden|invalid_api_key)\b/i.test(message)) return 'auth_required';
   return /\b(?:ECONNREFUSED|ENOTFOUND|error sending request|connection reset|stream disconnected)\b/i.test(message)
     ? 'network_error' : null;

@@ -1,4 +1,4 @@
-import { isLocalTextStage } from '../workflow-engine/state.mjs';
+import { isLocalClaudeOrAcpStage } from '../workflow-engine/state.mjs';
 import { mixedHandoffValues, mixedIncoming, mixedTransferLabels as transferFields } from '../workflow-engine/mixed-context.mjs';
 import { simulateMixedWorkflow } from '../workflow-engine/mixed-preview.mjs';
 
@@ -160,7 +160,7 @@ export function createMixedRunBrief(React, { button, field, note, actions, provi
           return h('li', { key: stage.id },
             h('strong', null, `第 ${index + 1} 阶段 · ${stageName(stage)}`),
             note(stage.execution ? [label, providerLabel(stage.provider, stage.execution.location),
-              isLocalTextStage(stage) ? '账号默认模型 · 纯文本' : stage.model || defaultModel(stage.provider),
+              isLocalClaudeOrAcpStage(stage) ? '账号默认模型 · 文本输出' : stage.model || defaultModel(stage.provider),
               executionContexts[stage.execution.context]].join(' · ') : label),
             stageFiles(h, stage, note));
         })),
@@ -171,7 +171,7 @@ export function createMixedRunBrief(React, { button, field, note, actions, provi
           evidenceText.get(stage.id) ?? '', (text) => setEvidenceText((previous) => new Map(previous).set(stage.id, text)), 1500, true)))),
       edges.length > 0 && h('section', { className: 'vc-workflow-mixed-section', 'aria-label': '阶段间传递' },
         h('h4', null, '阶段间传递'),
-        requiredApprovals.length > 0 && note('逐条确认传递范围。未选字段的连线仅等待上游完成。'),
+        requiredApprovals.length > 0 && note('逐条确认传递的文本字段。附件由接收阶段单独授权。未选字段的连线仅等待上游完成。'),
         edges.map(({ key, source, destination, blind, needsApproval }) => {
           const approval = approvals[key];
           const edgeStage = (stage) => `第 ${workflow.stages.indexOf(stage) + 1} 阶段 · ${stageName(stage)}`;
