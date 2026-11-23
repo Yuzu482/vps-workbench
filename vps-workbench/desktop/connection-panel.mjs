@@ -1,3 +1,4 @@
+import { t } from '../../remote-workbench/vps-chat/client/interface-language.js';
 import React from 'react';
 import { checkVpsConnection, setupChecks } from './setup-state.mjs';
 import { TrialActions, trialResult, useConnectionTrial } from './connection-trial.mjs';
@@ -11,12 +12,12 @@ export const checkLabels = { waiting: '待检查', checking: '检查中', passed
 
 export function ConnectionResult({ id, label, detail, result, children }) {
   const state = result?.state ?? 'waiting';
-  return h('li', { className: 'vc-setup-step', 'data-state': state, 'aria-label': label },
+  return h('li', { className: 'vc-setup-step', 'data-state': state, 'aria-label': t(label) },
     h('div', { className: 'vc-setup-step-header' },
       h('span', { className: 'vc-setup-marker', 'aria-hidden': true }, state === 'passed' ? '✓' : state === 'failed' ? '!' : ''),
-      h('strong', null, label), h('span', { className: 'vc-setup-status' }, id === 'response' && state === 'waiting'
-        ? '未试跑' : checkLabels[state])),
-    h('p', { role: state === 'failed' ? 'alert' : undefined }, result?.detail ?? detail), children);
+      h('strong', null, t(label)), h('span', { className: 'vc-setup-status' }, id === 'response' && state === 'waiting'
+        ? t('未试跑') : t(checkLabels[state]))),
+    h('p', { role: state === 'failed' ? 'alert' : undefined }, t(result?.detail ?? detail)), children);
 }
 
 export function vpsTrialTarget(settings, { list, models, model }, defaultModel) {
@@ -103,15 +104,15 @@ export function VpsConnectionChecks({ diagnostics, ready, dirty, busy, remoteEna
   }, label);
   const account = current?.results.account;
   const canTest = ready && !dirty && !busy && remoteEnabled && !diagnostics.checking;
-  const status = current?.checking ? '检查中' : current?.checked?.model ? '预检通过' :
-    Object.values(current?.results ?? {}).some(({ state }) => state === 'failed') ? '检查失败' :
+  const status = current?.checking ? t('检查中') : current?.checked?.model ? '预检通过' :
+    Object.values(current?.results ?? {}).some(({ state }) => state === 'failed') ? t('检查失败') :
       current?.checked?.manualTarget ? '待确认登录' : '未检查';
 
-  return h('section', { className: 'vc-setup-group vc-connection-checks', 'aria-label': 'VPS 连接检查' },
+  return h('section', { className: 'vc-setup-group vc-connection-checks', 'aria-label': t('VPS 连接检查') },
     h('div', { className: 'vc-setup-overview' }, h('h4', null, '连接检查'),
       h('span', { role: 'status' }, status)),
     h('div', { className: 'vc-setup-actions' },
-      action('测试连接', () => void test(), !canTest),
+      action(t('测试连接'), () => void test(), !canTest),
       h('small', null, !remoteEnabled ? '仅浏览模式下可查看已保存的连接。' :
         !ready || dirty ? '保存当前连接配置后即可测试。' : '检查 SSH、出口、账号和目录。')),
     h('ol', { className: 'vc-setup-steps' }, setupChecks.map(([id, label, detail]) => {
@@ -124,10 +125,10 @@ export function VpsConnectionChecks({ diagnostics, ready, dirty, busy, remoteEna
       } else if (result?.state === 'failed' && id === 'egress') {
         repair = action('核对预期出口', () => focusField('expectedIpv4'), busy);
       } else if (id === 'account' && ['failed', 'confirm'].includes(account?.state)) {
-        repair = account.code === 'tool_disabled' ? action('启用此执行端', openTools, busy) :
+        repair = account.code === 'tool_disabled' ? action(t('启用此执行端'), openTools, busy) :
           h('div', { className: 'vc-setup-actions' },
-          action(provider === 'claude' ? '设置 VPS 密钥' : '在 VPS 登录', () => openAccount(setupAccountActions[provider]), !canTest),
-          current?.checked?.manualTarget && action('已在 VPS 登录，继续检查', () => void test(current.checked.manualTarget), !canTest));
+          action(provider === 'claude' ? t('设置 VPS 密钥') : t('在 VPS 登录'), () => openAccount(setupAccountActions[provider]), !canTest),
+          current?.checked?.manualTarget && action(t('已在 VPS 登录，继续检查'), () => void test(current.checked.manualTarget), !canTest));
       } else if (id === 'model' && result?.state === 'failed') {
         repair = action('检查模型设置', openTools, busy);
       } else if (id === 'response') {

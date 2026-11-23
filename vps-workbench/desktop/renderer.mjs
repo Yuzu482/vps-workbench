@@ -1,3 +1,5 @@
+import { interfaceLanguageKey, normalizeInterfaceLanguage, setInterfaceLanguage, t }
+  from '../../remote-workbench/vps-chat/client/interface-language.js';
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
@@ -48,30 +50,36 @@ function showLocalStatus(message) {
   status.hidden = false;
 }
 
-function reportChromeError() { showLocalStatus('未能完成工作台操作'); }
+function applyLanguage(language) {
+  setInterfaceLanguage(language);
+  document.documentElement.lang = language;
+  document.title = t('VPS 工作台');
+}
+
+function reportChromeError() { showLocalStatus(t('未能完成工作台操作')); }
 
 function ConversationLinkDialog({ onOpen, onClose }) {
   const dialog = React.useRef(null);
   const [error, setError] = React.useState('');
   React.useLayoutEffect(() => { dialog.current.showModal(); }, []);
-  return h('dialog', { ref: dialog, className: 'desktop-link-dialog', 'aria-label': '打开对话链接', onClose },
+  return h('dialog', { ref: dialog, className: 'desktop-link-dialog', 'aria-label': t('打开对话链接'), onClose },
     h('form', { onSubmit(event) {
       event.preventDefault();
       const link = parseConversationLink(new FormData(event.currentTarget).get('link'));
-      if (!link) { setError('请输入有效的 VPS Workbench 对话链接。'); return; }
+      if (!link) { setError(t('请输入有效的 VPS Workbench 对话链接。')); return; }
       dialog.current.close();
       onOpen(link);
     } },
-    h('label', null, '对话链接', h('input', { name: 'link', maxLength: 256, required: true, autoFocus: true,
+    h('label', null, t('对话链接'), h('input', { name: 'link', maxLength: 256, required: true, autoFocus: true,
       placeholder: 'vps-workbench://…', onChange: () => setError('') })),
     error ? h('p', { role: 'alert' }, error) : null,
     h('div', { className: 'desktop-link-actions' },
       native.registerChatLinks ? h('button', { type: 'button', onClick: async () => {
-        try { setError(await native.registerChatLinks() ? '已关联 Windows 对话链接。' : 'Windows 未能关联此程序。'); }
-        catch { setError('Windows 未能关联此程序。'); }
-      } }, '关联 Windows 链接') : null,
-      h('button', { type: 'button', onClick: () => dialog.current.close() }, '取消'),
-      h('button', { type: 'submit' }, '打开'))));
+        try { setError(await native.registerChatLinks() ? t('已关联 Windows 对话链接。') : t('Windows 未能关联此程序。')); }
+        catch { setError(t('Windows 未能关联此程序。')); }
+      } }, t('关联 Windows 链接')) : null,
+      h('button', { type: 'button', onClick: () => dialog.current.close() }, t('取消')),
+      h('button', { type: 'submit' }, t('打开')))));
 }
 
 async function saveWorkflowAttachments(files) {
@@ -125,10 +133,12 @@ try {
   const { preferences, projects, access: initialAccess, dataNotices = [], localComponents = null } = await native.bootstrap();
   if (dataNotices.length) showLocalStatus(dataNotices.join(' '));
   const values = new Map(Object.entries(preferences));
+  const initialLanguage = normalizeInterfaceLanguage(values.get(interfaceLanguageKey));
+  applyLanguage(initialLanguage);
   const showComponentWelcome = localComponents?.mode === 'on-demand' && localComponents.supported &&
     localComponents.items.every(({ ready }) => !ready) && !values.get(componentWelcomeKey);
   function persist(key, value) {
-    void native.setPreference(key, value).catch(() => showLocalStatus('本机设置保存失败'));
+    void native.setPreference(key, value).catch(() => showLocalStatus(t('本机设置保存失败')));
   }
   setWorkbenchStorage({
     getItem: (key) => values.get(key) ?? null,
@@ -196,6 +206,19 @@ try {
     const settingsLayer = React.useRef(null);
     const settingsTrigger = React.useRef(null);
     const [appearance, setAppearance] = React.useState(readPreferences);
+    const [language, setLanguage] = React.useState(initialLanguage);
+    async function changeLanguage(next) {
+      if (normalizeInterfaceLanguage(next) !== next) return false;
+      if (next === language) return true;
+      try {
+        await saveLocalPreference(interfaceLanguageKey, next);
+        applyLanguage(next);
+        setLanguage(next);
+        return true;
+      } catch {
+        return false;
+      }
+    }
     const appearanceDraft = React.useRef(appearance);
     const appearanceWrites = React.useRef(Promise.resolve());
     const [resourcesOpen, setResourcesOpen] = React.useState(false);
@@ -308,7 +331,7 @@ try {
           appearanceDraft.current = saved;
           setAppearance(saved);
         }
-        showLocalStatus('应用偏好未能保存。请重试。');
+        showLocalStatus(t('应用偏好未能保存。请重试。'));
         return false;
       }
     }
@@ -361,23 +384,24 @@ try {
     const sshVisible = location === 'ssh-vps';
     const openSearch = native.localSearch ? () => setSearchOpen(true) : undefined;
     return h(React.Fragment, null,
-      h(DesktopChrome, { native, projectCatalog, location, newLocation, locations, openLocation, changeNewLocation,
+      h(DesktopChrome, { native, projectCatalog, location, newLocation, locations: locations.map(([id, label]) => [id, t(label)]), openLocation, changeNewLocation,
         onError: reportChromeError,
         onOpenChatLink: () => setChatLinkDialog(true), onOpenSearch: openSearch,
-        onOpenResources: () => setResourcesOpen(true) }),
+        onOpenResources: () => setResourcesOpen(true),
+        onOpenLanguage: () => settingsSurface(location).open('appearance') }),
       h('div', { className: 'desktop-location-bar' },
-        h('div', { role: 'group', 'aria-label': '打开会话历史', className: 'desktop-location-tabs' },
+        h('div', { role: 'group', 'aria-label': t('打开会话历史'), className: 'desktop-location-tabs' },
           locations.map(([id, label]) => h('button', { key: id, type: 'button',
-            'aria-pressed': id === location, onClick: () => openLocation(id) }, label))),
-        h('label', null, '新建位置',
-          h('select', { 'aria-label': '新建位置', value: newLocation, onChange: (event) => changeNewLocation(event.target.value) },
-            locations.map(([id, label]) => h('option', { key: id, value: id }, label))))),
+            'aria-pressed': id === location, onClick: () => openLocation(id) }, t(label)))),
+        h('label', null, t('新建位置'),
+          h('select', { 'aria-label': t('新建位置'), value: newLocation, onChange: (event) => changeNewLocation(event.target.value) },
+            locations.map(([id, label]) => h('option', { key: id, value: id }, t(label)))))),
       visited.has('ssh-vps') ? h(Workbench, { projectCatalog, terminalView, resourcesOpen, setResourcesOpen, onQuickSearch: openSearch,
         workflowSearch: workflowSearch?.location === 'ssh-vps' ? workflowSearch : null, onWorkflowSearchOpened,
         chatLink: chatLink?.location === 'ssh-vps' ? chatLink : null, onChatLinkResult,
         access, accessPending, changeAccess, visible: sshVisible, active: sshVisible, newChatRequest: sshNew,
         settingsSurface: settingsSurface('ssh-vps'),
-        applicationPreferences: { value: appearance, change: changeAppearance },
+        applicationPreferences: { value: appearance, change: changeAppearance, language, changeLanguage },
         onNewChat: newLocation === 'local-sdk' ? startChat : undefined,
         extensions: { state: extensions, change: changeExtensions, busy: extensionsBusy },
         agentPresets: { items: agentItems, change: changeAgentPresets, error: agentPresetError },
@@ -390,7 +414,7 @@ try {
         newChatRequest: localNew, onNewChat: startChat,
         settingsSurface: settingsSurface('local-sdk'),
         componentSetup: { initial: localComponents, welcome: componentWelcome, continue: completeComponentWelcome },
-        applicationPreferences: { value: appearance, change: changeAppearance }, savePreference: saveLocalPreference,
+        applicationPreferences: { value: appearance, change: changeAppearance, language, changeLanguage }, savePreference: saveLocalPreference,
         extensions: { state: extensions, change: changeExtensions, busy: extensionsBusy },
         agentPresets: { items: agentItems, change: changeAgentPresets, error: agentPresetError },
         workflowStore: { items: workflowItems, change: changeWorkflows, initialRun: initialLocalRun,
@@ -403,5 +427,5 @@ try {
   }
   root.render(h(DesktopApp));
 } catch {
-  root.render(h('p', { role: 'alert', className: 'standalone-start-error' }, '工作台暂时无法读取本机设置。'));
+  root.render(h('p', { role: 'alert', className: 'standalone-start-error' }, t('工作台暂时无法读取本机设置。')));
 }

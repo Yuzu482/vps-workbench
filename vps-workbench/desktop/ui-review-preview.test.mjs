@@ -2214,3 +2214,58 @@ test('design materials reuse the settings switches and keep persistent and per-m
   assert.equal(await brief.isChecked(), true);
   assert.equal(await references.isChecked(), false);
 });
+
+test('interface language applies immediately to both locations and survives reload without editing drafts', { timeout: 40_000 }, async (t) => {
+  const page = await openPreview(t);
+  const languageGroup = () => page.locator('dialog:modal').getByRole('group', { name: /^(?:界面语言|Language)$/ });
+  const chatDraft = '保持这段草稿 unchanged 😊';
+  const composer = page.getByRole('textbox', { name: '消息', exact: true });
+  await composer.fill(chatDraft);
+  await page.getByRole('button', { name: '文件', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Language / 界面语言', exact: true }).click();
+  await languageGroup().getByRole('button', { name: 'English', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Settings', exact: true }).waitFor();
+  await languageGroup().getByRole('button', { name: 'English', pressed: true }).waitFor();
+  assert.equal(await page.locator('html').getAttribute('lang'), 'en');
+  assert.equal(await page.title(), 'VPS Workbench');
+  const dialog = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await dialog.getByRole('navigation', { name: 'Settings categories', exact: true })
+    .getByRole('button', { name: 'Connection', exact: true }).click();
+  await dialog.getByLabel('VPS host', { exact: true }).waitFor();
+  await dialog.getByRole('button', { name: 'Test connection', exact: true }).waitFor();
+  await dialog.getByRole('button', { name: 'Close settings', exact: true }).click();
+  assert.equal(await page.getByRole('textbox', { name: 'Message', exact: true }).inputValue(), chatDraft);
+  await page.getByRole('button', { name: 'Local search', exact: true }).click();
+  const search = page.getByRole('dialog', { name: 'Local search', exact: true });
+  await search.getByRole('searchbox', { name: 'Local search', exact: true }).waitFor();
+  await search.getByRole('button', { name: 'Close search', exact: true }).click();
+  await page.getByRole('group', { name: 'Conversation locations' })
+    .getByRole('button', { name: 'Local SDK', exact: true }).click();
+  await page.getByRole('group', { name: 'Local controls', exact: true }).waitFor();
+  await page.reload();
+  await page.getByRole('group', { name: 'Local controls', exact: true }).waitFor();
+  assert.equal(await page.locator('html').getAttribute('lang'), 'en');
+  await page.getByRole('button', { name: 'File', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Language / 界面语言', exact: true }).click();
+  await languageGroup().getByRole('button', { name: '简体中文', exact: true }).click();
+  await page.getByRole('dialog', { name: '设置', exact: true }).waitFor();
+  assert.equal(await page.locator('html').getAttribute('lang'), 'zh-CN');
+});
+
+test('language controls fit a compact viewport and invalid saved locales fall back to Chinese', { timeout: 25_000 }, async (t) => {
+  const page = await openPreview(t, { viewport: { width: 365, height: 480 }, seed(state) {
+    state.preferences['dsh-vps-chat:interface-language:v1'] = 'unsupported';
+  } });
+  assert.equal(await page.locator('html').getAttribute('lang'), 'zh-CN');
+  await page.getByRole('button', { name: '文件', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Language / 界面语言', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  await dialog.getByRole('button', { name: 'English', exact: true }).press('Enter');
+  const english = page.getByRole('dialog', { name: 'Settings', exact: true });
+  const selected = english.getByRole('button', { name: 'English', pressed: true });
+  await selected.waitFor();
+  const bounds = await selected.boundingBox();
+  assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 365);
+  await selected.press('Escape');
+  await english.waitFor({ state: 'hidden' });
+});

@@ -1,3 +1,4 @@
+import { t } from '../../remote-workbench/vps-chat/client/interface-language.js';
 import React from 'react';
 import { editMenuGroups } from '../../remote-workbench/vps-chat/client/context-menu.js';
 import { connectChromeColors } from './chrome-colors.mjs';
@@ -111,7 +112,7 @@ function TitleMenu({ kind, label, children, items }) {
 }
 
 export function DesktopChrome({ native, projectCatalog, location, newLocation, locations, openLocation, changeNewLocation,
-  onError, onOpenResources, onOpenChatLink, onOpenSearch }) {
+  onError, onOpenResources, onOpenChatLink, onOpenSearch, onOpenLanguage }) {
   const header = React.useRef(null);
   const sidebar = React.useRef(null);
   const sidebarButton = React.useRef(null);
@@ -177,21 +178,22 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
   }
 
   const fileItems = [
-    { key: 'open-chat-link', label: '打开对话链接…', run: onOpenChatLink },
+    { key: 'open-chat-link', label: t('打开对话链接…'), run: onOpenChatLink },
     ...(location === 'local-sdk' ? [] : [
-      { key: 'import', label: '导入 DSH 对话数据…', icon: 'import', run: () => run(native.importHistory) },
+      { key: 'import', label: t('导入 DSH 对话数据…'), icon: 'import', run: () => run(native.importHistory) },
       { key: 'location-separator', type: 'separator' },
     ]),
-    { key: 'history-location', type: 'heading', label: '打开会话历史' },
+    { key: 'history-location', type: 'heading', label: t('打开会话历史') },
     ...locations.map(([id, label]) => ({ key: 'open-' + id,
-      label: label + ' 历史' + (id === location ? ' · 当前' : ''), run: () => openLocation(id) })),
-    { key: 'new-location', type: 'heading', label: '新建位置' },
+      label: t('{location} 历史', { location: label }) + (id === location ? ' · ' + t('当前') : ''), run: () => openLocation(id) })),
+    { key: 'new-location', type: 'heading', label: t('新建位置') },
     ...locations.map(([id, label]) => ({ key: 'new-' + id,
-      label: '新建时使用 ' + label + (id === newLocation ? ' · 默认' : ''), run: () => changeNewLocation(id) })),
+      label: t('新建时使用 {location}', { location: label }) + (id === newLocation ? ' · ' + t('默认') : ''), run: () => changeNewLocation(id) })),
     { key: 'quit-separator', type: 'separator' },
-    { key: 'quit', label: '退出工作台', icon: 'exit', shortcut: 'Alt+F4', run: () => run(native.quit) },
+    { key: 'language', label: 'Language / 界面语言', run: onOpenLanguage },
+    { key: 'quit', label: t('退出工作台'), icon: 'exit', shortcut: 'Alt+F4', run: () => run(native.quit) },
   ];
-  const editItems = editMenuGroups.flat().map(([key, label, shortcut]) => ({ key, label, shortcut, run() {
+  const editItems = editMenuGroups.flat().map(([key, label, shortcut]) => ({ key, label: t(label), shortcut, run() {
     const target = lastContentFocus.current;
     if (target?.isConnected && !target.closest('[inert]') && target.getClientRects().length) {
       target.focus({ preventScroll: true });
@@ -201,22 +203,22 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
   editItems.splice(5, 0, { key: 'selection-separator', type: 'separator' });
   editItems.splice(2, 0, { key: 'clipboard-separator', type: 'separator' });
   const projectItems = [
-    { key: 'resources', label: '项目资源库', icon: 'folder', run: onOpenResources },
+    { key: 'resources', label: t('项目资源库'), icon: 'folder', run: onOpenResources },
     { key: 'local-directories-separator', type: 'separator' },
-    { key: 'add', label: '添加目录…', icon: 'plus', run: () => run(native.addProject) },
+    { key: 'add', label: t('添加目录…'), icon: 'plus', run: () => run(native.addProject) },
   ];
   if (projects.length) {
     projectItems.push({ key: 'project-separator', type: 'separator' },
-      { key: 'project-heading', type: 'heading', label: '移出项目' },
+      { key: 'project-heading', type: 'heading', label: t('移出项目') },
       ...projects.map(({ workspaceId, title }) => ({
-        key: `project:${workspaceId}`, label: title, title: `移出 ${title}`, accessibleLabel: `移出 ${title}`,
+        key: `project:${workspaceId}`, label: title, title: t('移出 {project}', { project: title }), accessibleLabel: t('移出 {project}', { project: title }),
         icon: 'minus', run: () => run(() => native.removeProject(workspaceId)),
       })));
   }
-  const sidebarLabel = sidebarVisible ? '收起会话侧栏' : '展开会话侧栏';
+  const sidebarLabel = sidebarVisible ? t('收起会话侧栏') : t('展开会话侧栏');
 
   return h('header', { ref: header, className: 'desktop-titlebar' },
-    h('div', { className: 'desktop-title-controls', role: 'group', 'aria-label': '工作台操作' },
+    h('div', { className: 'desktop-title-controls', role: 'group', 'aria-label': t('工作台操作') },
       h('button', {
         ref: sidebarButton, type: 'button', className: 'desktop-title-button desktop-sidebar-button',
         title: sidebarLabel, 'aria-label': sidebarLabel, 'aria-controls': sidebarId,
@@ -230,12 +232,12 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
       }, glyph('sidebar')),
       h('div', { className: 'desktop-brand' },
         h('img', { className: 'desktop-app-icon', src: '/app-icon.png', draggable: false, alt: '' }),
-        h('span', { className: 'desktop-app-title' }, 'VPS 工作台')),
+        h('span', { className: 'desktop-app-title' }, t('VPS 工作台'))),
       h('span', { className: 'desktop-title-divider', 'aria-hidden': true }),
-      h(TitleMenu, { kind: 'file', label: '文件', items: fileItems }, '文件', glyph('chevron')),
-      h(TitleMenu, { kind: 'edit', label: '编辑', items: editItems }, '编辑', glyph('chevron')),
-      h(TitleMenu, { kind: 'projects', label: '项目', items: projectItems }, '项目', glyph('chevron')),
+      h(TitleMenu, { kind: 'file', label: t('文件'), items: fileItems }, t('文件'), glyph('chevron')),
+      h(TitleMenu, { kind: 'edit', label: t('编辑'), items: editItems }, t('编辑'), glyph('chevron')),
+      h(TitleMenu, { kind: 'projects', label: t('项目'), items: projectItems }, t('项目'), glyph('chevron')),
       onOpenSearch && h('button', { type: 'button', className: 'desktop-title-button desktop-search-trigger',
-        'aria-keyshortcuts': 'Control+k', title: '本地全局搜索 (Ctrl+K)', 'aria-label': '本地全局搜索',
+        'aria-keyshortcuts': 'Control+k', title: t('本地全局搜索 (Ctrl+K)'), 'aria-label': t('本地全局搜索'),
         onClick: onOpenSearch }, glyph('search'))));
 }

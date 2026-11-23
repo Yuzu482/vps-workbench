@@ -1,3 +1,4 @@
+import { t } from './interface-language.js';
 import { menuIcon } from './menu-icons.js';
 import { afterPopupMotion } from './menu-motion.js';
 import { createAdvancedModelOptions } from './advanced-model-options.js';
@@ -270,12 +271,12 @@ export function createComposerControls(React) {
   const AdvancedModelOptions = createAdvancedModelOptions(React);
 
   function AccessTrigger({ access, provider, expanded, open, localSdk }) {
-    const label = access.mode === 'browse' ? '仅浏览' : localSdk ? '本机执行' : (scopedWorkspaceProviders.has(provider) &&
-      workspaceChoices.find(([id]) => access.workspace !== 'default' && id === access.workspace)?.[1]) || 'VPS 执行';
+    const label = access.mode === 'browse' ? t('仅浏览') : localSdk ? t('本机执行') : (scopedWorkspaceProviders.has(provider) &&
+      workspaceChoices.find(([id]) => access.workspace !== 'default' && id === access.workspace)?.[1]) || t('VPS 执行');
     return h('button', {
       type: 'button', className: 'vc-button vc-composer-option', 'data-control': 'access', 'data-browse': access.mode === 'browse',
-      'aria-label': '访问权限', 'aria-description': label, 'aria-expanded': expanded, 'aria-haspopup': 'dialog',
-      title: `访问权限 · ${label}`, onClick: (event) => open('access', event.currentTarget),
+      'aria-label': t('访问权限'), 'aria-description': label, 'aria-expanded': expanded, 'aria-haspopup': 'dialog',
+      title: t('访问权限') + ' · ' + label, onClick: (event) => open('access', event.currentTarget),
     }, menuIcon(h, 'access'), h('span', { className: 'vc-option-label' }, label));
   }
 
@@ -317,45 +318,45 @@ export function createComposerControls(React) {
 
     const { usage } = report;
     const contextTitle = usage
-      ? `${report.earlierUsage ? '上次上下文用量' : '上下文'} ${occupancy(usage) ?? `${numbers.format(usage.usedTokens)} tokens`}` : undefined;
+      ? `${report.earlierUsage ? t('上次上下文用量') : t('上下文')} ${occupancy(usage) ?? `${numbers.format(usage.usedTokens)} tokens`}` : undefined;
     const used = usage?.contextWindow ? Math.min(100, usage.usedTokens * 100 / usage.contextWindow) : 0;
     const chosen = catalog?.models?.find((entry) => entry.id === selection?.id);
     const reported = catalog?.models?.find((entry) => entry.id === report.model);
-    const modeName = mode === 'design' ? '设计' : '对话';
+    const modeName = mode === 'design' ? t('设计') : t('对话');
     const modelName = chosen?.displayName ?? selection?.id ?? reported?.displayName ?? report.model;
     const effort = selection ? selection.effort ?? chosen?.defaultEffort : report.effort;
     const modelTitle = modelName && effort ? `${modelName} · ${effortName(effort)}` : modelName;
     const option = (key, description, ...contents) => h('button', {
         type: 'button', className: 'vc-button vc-composer-option',
-        'aria-label': key === 'plugins' && templateLabel || panelNames[key],
+        'aria-label': key === 'plugins' && templateLabel || t(panelNames[key]),
         'aria-haspopup': 'dialog', 'aria-expanded': panel === key, 'data-control': key, 'data-design': mode === 'design',
         'aria-description': description, disabled: !available,
-        onClick: (event) => open(key, event.currentTarget), title: description ?? panelNames[key],
+        onClick: (event) => open(key, event.currentTarget), title: description ?? t(panelNames[key]),
       }, ...contents);
 
-    return h('div', { className: 'vc-composer-toolbar', role: 'group', 'aria-label': '发送设置', 'data-wide-actions': wideActions },
+    return h('div', { className: 'vc-composer-toolbar', role: 'group', 'aria-label': t('发送设置'), 'data-wide-actions': wideActions },
       h('div', { className: 'vc-composer-tools' },
         historyButton,
         openMaterials ? h('button', {
           type: 'button', className: 'vc-button vc-composer-option vc-composer-materials', 'aria-haspopup': 'dialog',
-          'aria-label': '添加设计资料', title: '添加设计资料', onClick: openMaterials, disabled: materialsDisabled,
+          'aria-label': t('添加设计资料'), title: t('添加设计资料'), onClick: openMaterials, disabled: materialsDisabled,
         }, h('span', { className: 'vc-composer-add', 'aria-hidden': true }, '+'),
-        h('span', { className: 'vc-option-label' }, '资料')) : null,
+        h('span', { className: 'vc-option-label' }, t('资料'))) : null,
         option('mode', modeName, showModeIcon ? menuIcon(h, mode === 'design' ? 'canvas' : 'chat') : null,
           h('span', { className: 'vc-option-label' }, modeName)), accessButton,
         memoryMode ? option('memory', memoryMode, menuIcon(h, 'library'),
           h('span', { className: 'vc-option-label' }, memoryMode)) : null,
-        hasPluginPrompts ? option('plugins', '插入提示词', menuIcon(h, 'library'),
-          h('span', { className: 'vc-option-label' }, templateLabel ?? '插件')) : null),
+        hasPluginPrompts ? option('plugins', t('插入提示词'), menuIcon(h, 'library'),
+          h('span', { className: 'vc-option-label' }, templateLabel ?? t('插件'))) : null),
       h('div', { className: 'vc-composer-end' },
         h('span', {
-          className: 'vc-context-indicator', role: 'img', 'data-control': 'context', 'aria-label': '上下文用量',
+          className: 'vc-context-indicator', role: 'img', 'data-control': 'context', 'aria-label': t('上下文用量'),
           'aria-description': contextTitle, 'aria-describedby': showTooltip ? tooltipId : undefined,
           onPointerEnter: (event) => { if (event.pointerType !== 'touch') showContext(event.currentTarget); },
           onPointerLeave: dismissTooltipSoon,
         },
           h('span', { className: 'vc-context-meter', 'aria-hidden': true, style: { '--vc-used': `${used}%` } })),
-        option('model', modelTitle, h('span', { className: 'vc-option-label' }, modelName ?? '模型'),
+        option('model', modelTitle, h('span', { className: 'vc-option-label' }, modelName ?? t('模型')),
           modelName && effort ? h('span', { className: 'vc-option-effort' }, effortName(effort)) : null),
         children),
       showTooltip ? h(Panel, {
@@ -368,7 +369,7 @@ export function createComposerControls(React) {
   function ContextDetails({ report, attached, design, localSdk }) {
     const { usage, usageModel, earlierUsage } = report;
     const percent = occupancy(usage);
-    const source = localSdk ? '本机执行端' : 'VPS';
+    const source = localSdk ? t('本机执行端') : 'VPS';
     return h(React.Fragment, null,
       usage ? h(React.Fragment, null,
         h('dl', null,
@@ -390,7 +391,7 @@ export function createComposerControls(React) {
     return h(React.Fragment, null,
       h('p', null, empty ? '可切换当前草稿的工作方式。' : '切换会打开新会话，现有会话保留原模式。'),
       h('div', { className: 'vc-mode-options', role: 'group', 'aria-label': '可用模式' },
-        [['chat', '对话', '通用对话'], ['design', '设计', designAvailable ? '对话与画布' : '需要 Codex']].map(([value, label, hint]) =>
+        [['chat', t('对话'), '通用对话'], ['design', t('设计'), designAvailable ? '对话与画布' : '需要 Codex']].map(([value, label, hint]) =>
           h('button', {
             key: value, type: 'button', className: 'vc-button', 'aria-label': label, 'aria-pressed': mode === value,
             disabled: !canChangeMode || (value === 'design' && !designAvailable), onClick: () => change(value),
@@ -408,9 +409,9 @@ export function createComposerControls(React) {
     }
     return h(React.Fragment, null,
       h('h3', { className: 'vc-access-heading' }, '工作台'),
-      choices('mode', [localSdk ? ['execute', '本机执行', '可向所选本机执行端发起操作'] : ['execute', 'VPS 执行', '可向当前执行端发起远端操作'],
-        ['browse', '仅浏览', '查看已保存的会话与项目资源']]),
-      h('h3', { className: 'vc-access-heading' }, localSdk ? '本机工作区' : 'VPS 工作区'),
+      choices('mode', [localSdk ? ['execute', t('本机执行'), '可向所选本机执行端发起操作'] : ['execute', t('VPS 执行'), '可向当前执行端发起远端操作'],
+        ['browse', t('仅浏览'), '查看已保存的会话与项目资源']]),
+      h('h3', { className: 'vc-access-heading' }, localSdk ? '本机工作区' : t('VPS 工作区')),
         localSdk ? h('p', null, '本机执行端使用所选配置的只读工作目录。') :
         scopedWorkspaceProviders.has(provider) ? choices('workspace', workspaceChoices)
         : h('p', null, '此工具采用执行端原生的工作区权限。'));
@@ -431,7 +432,7 @@ export function createComposerControls(React) {
     const options = model?.defaultEffort ? levels : [null, ...levels];
     const levelIndex = Math.max(0, options.indexOf(effort));
     const maxLevel = options.length - 1;
-    const formatEffort = (value) => value ? effortName(value) : '默认';
+    const formatEffort = (value) => value ? effortName(value) : t('默认');
     const listId = `${groupId}-models`;
     const recentModel = report.model
       ? `最近运行 ${report.model}${report.effort ? ` · ${effortName(report.effort)}` : ''}` : '';
@@ -525,7 +526,7 @@ export function createComposerControls(React) {
     const choices = [
       [false, optedOut ? '项目记忆关闭' : '跟随记忆设置', optedOut ? '移入此项目时选择了仅移动'
         : automatic ? `自动提炼并引用相关${automatic}` : '在长期记忆设置中开启自动记忆'],
-      [true, '独立上下文', '使用这条会话的历史，关闭自动记忆的读取和写入'],
+      [true, t('独立上下文'), '使用这条会话的历史，关闭自动记忆的读取和写入'],
     ];
     return h(React.Fragment, null,
       h('div', { className: 'vc-mode-options vc-access-options' }, choices.map(([value, label, detail]) =>
@@ -601,9 +602,9 @@ export function createComposerControls(React) {
         focusAnchor();
       };
     }, [anchor, close, onExpanded, ref, tooltip]);
-    const name = tooltip ? '上下文用量' : kind === 'plugins' && templateLabel || panelNames[kind];
+    const name = tooltip ? t('上下文用量') : kind === 'plugins' && templateLabel || t(panelNames[kind]);
     const closeButton = tooltip ? null : h('button', {
-      type: 'button', className: 'vc-button vc-composer-panel-close', 'aria-label': '关闭', title: '关闭',
+      type: 'button', className: 'vc-button vc-composer-panel-close', 'aria-label': t('关闭'), title: t('关闭'),
       onClick: () => ref.current.hidePopover(),
     }, '×');
     return h('div', {

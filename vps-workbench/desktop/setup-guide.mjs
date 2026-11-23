@@ -1,3 +1,4 @@
+import { t } from '../../remote-workbench/vps-chat/client/interface-language.js';
 import React from 'react';
 import { menuIcon } from '../../remote-workbench/vps-chat/client/menu-icons.js';
 import { afterPopupMotion } from '../../remote-workbench/vps-chat/client/menu-motion.js';
@@ -218,65 +219,65 @@ export function SetupGuide({ connection, connectionName, scope, memoryTargetId, 
   return h('dialog', { ref: dialog, className: 'vc-setup-guide vc-workbench-settings vc-popup-motion',
     'aria-labelledby': title, onCancel(event) { event.preventDefault(); dismiss(); } },
     h('header', { className: 'vc-settings-header' },
-      h('h2', { id: title }, 'VPS 接入向导'),
-      button('×', () => dismiss(), { className: 'vc-button vc-settings-close', 'aria-label': '关闭接入向导' })),
+      h('h2', { id: title }, t('VPS 接入向导')),
+      button('×', () => dismiss(), { className: 'vc-button vc-settings-close', 'aria-label': t('关闭接入向导') })),
     h('form', { className: 'vc-settings-form', onSubmit: check },
       h('div', { className: 'vc-settings-scroll vc-setup-scroll' },
-        h('p', { className: 'vc-setup-notice' }, '模型请求由 VPS 发出。基础接入通过后可运行内置示例。'),
+        h('p', { className: 'vc-setup-notice' }, t('模型请求由 VPS 发出。基础接入通过后可运行内置示例。')),
         h('fieldset', { className: 'vc-setup-providers', disabled },
-          h('legend', null, '示例执行端'),
+          h('legend', null, t('示例执行端')),
           h('div', null, tools.map(({ id, icon }) => h('label', { key: id, className: 'vc-setup-provider', 'data-picked': provider === id },
             h('input', { type: 'radio', name: providerGroup, value: id, checked: provider === id,
               onChange: () => { setProvider(id); setPresetId(''); setUseDefaultModel(false); reset(); } }),
             menuIcon(h, icon), workflowProviders[id].label)))),
-        h('section', { className: 'vc-setup-group', 'aria-label': '基础接入检查' },
-          h('div', { className: 'vc-setup-overview' }, h('h3', null, '基础接入检查'),
-            h('span', { role: 'status' }, ready && passedCount < steps.length ? '基础预检完成' : `${passedCount} / ${steps.length} 项通过`)),
+        h('section', { className: 'vc-setup-group', 'aria-label': t('基础接入检查') },
+          h('div', { className: 'vc-setup-overview' }, h('h3', null, t('基础接入检查')),
+            h('span', { role: 'status' }, ready && passedCount < steps.length ? t('基础预检完成') : t('{passed} / {total} 项通过', { passed: passedCount, total: steps.length }))),
           h('ol', { className: 'vc-setup-steps' }, setupChecks.flatMap(([id, label]) => [stepCard(id, label,
             id === 'ssh' && editing ? h('div', { className: 'vc-setup-fields' }, h(ConnectionFields, {
               form, desktop: true, busy: disabled, edit(key, value) { setForm((previous) => editConnectionForm(previous, key, value)); reset(); },
-            }), connectionName && button('取消修改', () => { setEditing(false); reset(); }, { disabled })) : null,
+            }), connectionName && button(t('取消修改'), () => { setEditing(false); reset(); }, { disabled })) : null,
             (id === 'ssh' && connection && !editing || id === 'egress' && results.egress?.state === 'failed' && !editing) ?
               h('div', { className: 'vc-setup-actions' },
-              h('small', null, connectionName || '当前 VPS'), button('编辑连接', editVps, { disabled })) : null,
+              h('small', null, connectionName || t('当前 VPS')), button(t('编辑连接'), editVps, { disabled })) : null,
             id === 'account' && fixAccount ? h('div', { className: 'vc-setup-actions' },
-              enableProvider ? button('启用此执行端', () => void enable(), { disabled })
-                : button(provider === 'claude' ? '设置 VPS 密钥' : '在 VPS 登录', login, { disabled: disabled || !remoteEnabled }),
-              manualTarget && button('已在 VPS 登录，继续检查', () => void check(null, manualTarget), { disabled })) : null,
-            id === 'model' && results.model?.code === 'model_unavailable' ? button('改用执行端默认模型', () => {
+              enableProvider ? button(t('启用此执行端'), () => void enable(), { disabled })
+                : button(provider === 'claude' ? t('设置 VPS 密钥') : t('在 VPS 登录'), login, { disabled: disabled || !remoteEnabled }),
+              manualTarget && button(t('已在 VPS 登录，继续检查'), () => void check(null, manualTarget), { disabled })) : null,
+            id === 'model' && results.model?.code === 'model_unavailable' ? button(t('改用执行端默认模型'), () => {
               setUseDefaultModel(true); reset();
             }, { disabled }) : null,
             id === 'response' && trial ? h(TrialActions, { trial, target: ready && verified.trialTarget,
               allowed: !disabled && remoteEnabled }) : null), ...(id === 'ssh' ? [h(VpsBackendSetup, { key: 'backend',
                 installer: backend, disabled: disabled || !remoteEnabled || editing && !form.hostKeyConfirmed })] : [])]))),
-        h('section', { className: 'vc-setup-group', 'aria-label': '额外 Agent 检查' },
-          h('div', { className: 'vc-setup-overview' }, h('h3', null, '额外 Agent 检查'),
-            h('small', { className: 'vc-settings-current' }, '可选')),
+        h('section', { className: 'vc-setup-group', 'aria-label': t('额外 Agent 检查') },
+          h('div', { className: 'vc-setup-overview' }, h('h3', null, t('额外 Agent 检查')),
+            h('small', { className: 'vc-settings-current' }, t('可选'))),
           h('div', { className: 'vc-setup-actions vc-setup-agent-actions' },
-            presets.length || presetId ? h('label', null, '检查额外 Agent', h('select', { value: presetId, disabled,
+            presets.length || presetId ? h('label', null, t('检查额外 Agent'), h('select', { value: presetId, disabled,
               onChange(event) {
                 setPresetId(event.target.value);
                 setResults((current) => Object.fromEntries(steps.filter(([id]) => current[id]).map(([id]) => [id, current[id]])));
               } },
-            h('option', { value: '' }, '只检查基础接入'),
-            presetId && !agent ? h('option', { value: presetId, disabled: true }, '已移除的预设') : null,
+            h('option', { value: '' }, t('只检查基础接入')),
+            presetId && !agent ? h('option', { value: presetId, disabled: true }, t('已移除的预设')) : null,
             ...presets.map(({ id, name }) => h('option', { key: id, value: id }, name)))) :
-              h('p', { className: 'vc-setup-notice' }, '当前执行端暂无 Agent 预设。'),
-            agentNeedsAttention ? button('检查 Agent 设置', () => editSettings('agents'), { disabled }) : null),
+              h('p', { className: 'vc-setup-notice' }, t('当前执行端暂无 Agent 预设。')),
+            agentNeedsAttention ? button(t('检查 Agent 设置'), () => editSettings('agents'), { disabled }) : null),
           agentError ? h('p', { className: 'vc-setup-notice', role: 'alert' }, agentError) : null,
           presetId && h('ol', { className: 'vc-setup-steps' }, agentSteps.map(([id, label]) => stepCard(id, label)))),
-        !remoteEnabled && h('p', { role: 'status', className: 'vc-setup-notice' }, '当前为仅浏览。切换为 VPS 执行后可开始检查。'),
+        !remoteEnabled && h('p', { role: 'status', className: 'vc-setup-notice' }, t('当前为仅浏览。切换为 VPS 执行后可开始检查。')),
         ready && h('div', { className: 'vc-setup-example', role: 'status' },
-          h('strong', null, '接入示例 · 读书会活动页'),
-          h('p', null, '整理简报 → 核对并汇总。示例使用已验证的执行端和模型、内置角色及独立上下文，并消耗所选执行端的额度。'),
+          h('strong', null, t('接入示例 · 读书会活动页')),
+          h('p', null, t('整理简报 → 核对并汇总。示例使用已验证的执行端和模型、内置角色及独立上下文，并消耗所选执行端的额度。')),
           workflow?.blocked && h('p', null, workflow.blocked))),
       h('footer', { className: 'vc-settings-footer vc-setup-footer' },
-        !remoteEnabled && onEnableExecution ? button('切换为 VPS 执行', onEnableExecution, { disabled: accessPending }) : null,
-        ready && workflow?.blocked && workflow.showRun ? button('查看工作流', () => dismiss(workflow.showRun)) : null,
+        !remoteEnabled && onEnableExecution ? button(t('切换为 VPS 执行'), onEnableExecution, { disabled: accessPending }) : null,
+        ready && workflow?.blocked && workflow.showRun ? button(t('查看工作流'), () => dismiss(workflow.showRun)) : null,
         h('button', { type: 'submit', className: `vc-button ${ready ? 'vc-settings-outline' : 'vc-primary'}`,
           disabled: disabled || !remoteEnabled || Boolean(manualTarget) || (editing && !form.hostKeyConfirmed) },
-        busy ? '正在检查' : editing ? '连接并检查' : Object.keys(results).length ? '重新检查' : '开始检查'),
-        ready ? button('运行示例工作流', () => {
+        busy ? t('正在检查') : editing ? t('连接并检查') : Object.keys(results).length ? t('重新检查') : t('开始检查')),
+        ready ? button(t('运行示例工作流'), () => {
           dismiss(() => workflow.start(verified.provider, verified.model, verified.targetId));
         }, { className: 'vc-button vc-primary', disabled: !canRun }) : null)));
 }

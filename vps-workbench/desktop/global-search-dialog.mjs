@@ -1,3 +1,4 @@
+import { t } from '../../remote-workbench/vps-chat/client/interface-language.js';
 import React from 'react';
 
 const h = React.createElement;
@@ -12,13 +13,13 @@ function GroupedResults({ packet, onSelect }) {
     groups.get(item.group.id).items.push(item);
   }
   return h(React.Fragment, null,
-    h('p', { role: 'status' }, packet.total ? `${packet.total} 项结果${packet.total > 100 ? ' · 显示前 100 项' : ''}` : '没有找到匹配的记录。'),
-    packet.partial && h('p', { role: 'status' }, '部分本机记录无法读取或超出索引上限。'),
+    h('p', { role: 'status' }, packet.total ? t('{total} 项结果', { total: packet.total }) + (packet.total > 100 ? ' · ' + t('显示前 100 项') : '') : t('没有找到匹配的记录。')),
+    packet.partial && h('p', { role: 'status' }, t('部分本机记录无法读取或超出索引上限。')),
     Array.from(groups, ([id, { label, items }]) => h('section', { key: id, 'aria-label': label },
       h('h4', null, label),
       h('ul', null, items.map(({ id: resultId, type, title, excerpt }) => h('li', { key: resultId },
         h('button', { type: 'button', 'data-search-result': resultId, onClick: () => onSelect(resultId) },
-          h('span', { className: 'desktop-search-kind' }, types[type]),
+          h('span', { className: 'desktop-search-kind' }, t(types[type])),
           h('strong', null, title), excerpt && h('span', { className: 'desktop-search-excerpt' }, excerpt))))))));
 }
 
@@ -60,7 +61,7 @@ export function GlobalSearchDialog({ request, onClose, onOpenConversation, onOpe
         epochUsed.current = epoch;
         setPacket({ key: searchKey, value });
       } catch (error) {
-        if (live) setResultError(error.message || '暂时无法读取本机搜索结果。');
+        if (live) setResultError(error.message || t('暂时无法读取本机搜索结果。'));
       }
     }, 170);
     return () => { live = false; clearTimeout(timer); };
@@ -72,7 +73,7 @@ export function GlobalSearchDialog({ request, onClose, onOpenConversation, onOpe
       if (!live) return;
       if (!value?.ok) throw new Error(value?.message);
       setDetail(value.item);
-    }).catch((error) => { if (live) setDetailError(error.message || '暂时无法读取这条记录。'); });
+    }).catch((error) => { if (live) setDetailError(error.message || t('暂时无法读取这条记录。')); });
     return () => { live = false; };
   }, [requested, request]);
 
@@ -107,43 +108,43 @@ export function GlobalSearchDialog({ request, onClose, onOpenConversation, onOpe
     callback(value);
   }
 
-  return h('dialog', { ref: dialog, className: 'desktop-search-dialog', 'aria-label': '本地全局搜索', onClose },
+  return h('dialog', { ref: dialog, className: 'desktop-search-dialog', 'aria-label': t('本地全局搜索'), onClose },
     h('div', { className: 'desktop-search-head' },
-      h('label', null, '本地全局搜索', h('input', { type: 'search', ref: input, value: query, maxLength: 160,
-        placeholder: '搜索会话正文、项目、画板、工作流与产物',
+      h('label', null, t('本地全局搜索'), h('input', { type: 'search', ref: input, value: query, maxLength: 160,
+        placeholder: t('搜索会话正文、项目、画板、工作流与产物'),
         onChange: (event) => { setQuery(event.target.value); setRequested(null); setResultError(''); } })),
-      h('button', { type: 'button', onClick: () => dialog.current.close(), 'aria-label': '关闭搜索' }, '×')),
+      h('button', { type: 'button', onClick: () => dialog.current.close(), 'aria-label': t('关闭搜索') }, '×')),
     h('div', { className: 'desktop-search-actions' },
       within && h('button', { type: 'button', onClick: () => { setWithin(null); setRequested(null); setResultError(''); } },
-        within.title + ' · 清除项目筛选'),
+        within.title + ' · ' + t('清除项目筛选')),
       h('button', { type: 'button', disabled: !canQuery,
-        onClick: () => { setRequested(null); setResultError(''); setEpoch((value) => value + 1); } }, '刷新索引')),
+        onClick: () => { setRequested(null); setResultError(''); setEpoch((value) => value + 1); } }, t('刷新索引'))),
     h('div', { ref: scroll, className: 'desktop-search-scroll' },
       requested ? h(React.Fragment, null,
-        h('button', { type: 'button', onClick: back }, '返回搜索结果'),
-        detailError ? h('p', { role: 'alert' }, detailError) : !item ? h('p', { role: 'status' }, '正在读取本机记录…') :
-          h('section', { className: 'desktop-search-detail', 'aria-label': '搜索结果详情' },
+        h('button', { type: 'button', onClick: back }, t('返回搜索结果')),
+        detailError ? h('p', { role: 'alert' }, detailError) : !item ? h('p', { role: 'status' }, t('正在读取本机记录…')) :
+          h('section', { className: 'desktop-search-detail', 'aria-label': t('搜索结果详情') },
             h('h3', { ref: destination, tabIndex: -1 }, item.title),
             h('p', { className: 'desktop-search-muted' }, item.group.label),
             item.type === 'message' && h(React.Fragment, null,
-              textBlock('用户消息', item.prompt), ...(item.supplemental ?? []).map((text, i) => h(React.Fragment, { key: i },
-                textBlock('用户补充', text))), textBlock('模型回复', item.reply)),
+              textBlock(t('用户消息'), item.prompt), ...(item.supplemental ?? []).map((text, i) => h(React.Fragment, { key: i },
+                textBlock(t('用户补充'), text))), textBlock(t('模型回复'), item.reply)),
             item.type === 'board' && h(React.Fragment, null,
-              textBlock('画板版本 ID', item.version),
+              textBlock(t('画板版本 ID'), item.version),
               h('iframe', { sandbox: '', referrerPolicy: 'no-referrer', title: item.title, srcDoc: item.html })),
-            item.type === 'project' && h('button', { type: 'button', onClick: () => filterProject(item) }, '查看项目内的本机记录'),
+            item.type === 'project' && h('button', { type: 'button', onClick: () => filterProject(item) }, t('查看项目内的本机记录')),
             item.type === 'workflow' && h(React.Fragment, null,
-              h('p', null, '版本 ' + item.revision),
+              h('p', null, t('版本 {revision}', { revision: item.revision })),
               h('ol', null, item.stages.map((stage) => h('li', { key: stage.id },
                 textBlock(stage.name, stage.instruction)))),
-              h('button', { type: 'button', onClick: () => openInWorkbench(onOpenWorkflow, item) }, '打开工作流')),
+              h('button', { type: 'button', onClick: () => openInWorkbench(onOpenWorkflow, item) }, t('打开工作流'))),
             item.type === 'artifact' && h(React.Fragment, null,
-              h('p', null, [item.workflow, item.stageName, item.size === undefined ? '' : `${item.size} 字节`].filter(Boolean).join(' · ')),
-              textBlock('阶段轮次 ID', item.turnId),
-              item.text ? textBlock('本机已保存的内容', item.text) : h('p', null, '本机保存了产物名称和出处。'),
-              h('button', { type: 'button', onClick: () => openInWorkbench(onOpenWorkflow, item) }, '打开原运行阶段')),
+              h('p', null, [item.workflow, item.stageName, item.size === undefined ? '' : t('{size} 字节', { size: item.size })].filter(Boolean).join(' · ')),
+              textBlock(t('阶段轮次 ID'), item.turnId),
+              item.text ? textBlock(t('本机已保存的内容'), item.text) : h('p', null, t('本机保存了产物名称和出处。')),
+              h('button', { type: 'button', onClick: () => openInWorkbench(onOpenWorkflow, item) }, t('打开原运行阶段'))),
             item.nav && h('button', { type: 'button', onClick: () => openInWorkbench(onOpenConversation, item.nav) },
-              item.type === 'board' ? '在画布中打开' : '在会话中打开'))) :
+              item.type === 'board' ? t('在画布中打开') : t('在会话中打开')))) :
         resultError ? h('p', { role: 'alert' }, resultError) : current ? h(GroupedResults, { packet: current, onSelect: select }) :
-          h('p', { role: canQuery ? 'status' : undefined }, canQuery ? '正在搜索本机记录…' : '输入要查找的内容。')));
+          h('p', { role: canQuery ? 'status' : undefined }, canQuery ? t('正在搜索本机记录…') : t('输入要查找的内容。'))));
 }

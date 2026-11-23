@@ -1,3 +1,4 @@
+import { t } from './interface-language.js';
 import { readSubscriptionLimits, subscriptionMeter, subscriptionWindows } from './subscription-limits.js';
 import { createMarkdownReply } from './markdown.js';
 import { createDesignCanvas } from './design-canvas.js';
@@ -107,7 +108,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     'storage_before_send', 'mode_conflict', 'relay_required', 'workbench_browse_only', 'memory_scope_changed',
   ]);
   const statusLabels = {
-    pending: localSdk ? '等待本机 SDK 确认' : '等待 VPS 确认',
+    pending: localSdk ? t('等待本机 SDK 确认') : t('等待 VPS 确认'),
     running: localSdk ? '本机执行端正在处理' : 'VPS 正在处理', stopping: '正在停止', stopped: '已停止',
     complete: '已完成', failed: '执行失败', unknown: '结果待确认',
   };
@@ -342,7 +343,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
     return h('div', { className: 'vc-reply-actions' },
       h('span', { role: 'status', className: 'vc-copy-status', 'data-failed': current?.copied === false },
-        current ? (current.copied ? '已复制' : '复制失败') : ''),
+        current ? (current.copied ? t('已复制') : '复制失败') : ''),
       h('button', { type: 'button', className: 'vc-button vc-copy-reply', disabled: copying, onClick: copyReply },
         '复制回复'));
   }
@@ -395,8 +396,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         h('div', { className: 'vc-answer-head' },
           h('strong', null, providerName),
           turn.model || turn.effort ? h('span', { className: 'vc-answer-model' },
-            turn.model || '推理强度', turn.effort ? ` · ${turn.effort}` : '') : null,
-          h('span', { className: 'vc-answer-state', 'data-state': state }, statusLabels[state]),
+            turn.model || t('推理强度'), turn.effort ? ` · ${turn.effort}` : '') : null,
+          h('span', { className: 'vc-answer-state', 'data-state': state }, t(statusLabels[state])),
           localSdk && turn.message ? h('span', { className: 'vc-answer-state', 'data-state': state }, turn.message) : null,
           turn.reply ? h(ReplyCopy, { source: turn.reply }) : null),
         turn.reply ? h(MarkdownReply, { source: turn.reply, collapseHtml: design, onStreamingRender,
@@ -484,7 +485,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [pollPaused, setPollPaused] = React.useState(false);
     const [settingsView, setSettingsView] = React.useState({ tab: false, visit: 0 });
     const [savedConfiguration, setSavedConfiguration] = React.useState(null);
-    const settingsLabel = localSdk || VpsConnectionChecks ? '设置' : 'VPS 设置';
+    const settingsLabel = localSdk || VpsConnectionChecks ? t('设置') : t('VPS 设置');
     const [setupOpen, setSetupOpen] = React.useState(false);
     const [accountOpen, setAccountOpen] = React.useState(null);
     const [requestedAccount, setRequestedAccount] = React.useState(null);
@@ -589,7 +590,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       catch { return null; }
     }, [scope]);
     const conversationOptions = conversationEdits[scope] ?? storedConversationOptions;
-    const titleFor = (row) => conversationOptions?.[row.id]?.title ?? row.title;
+    const titleFor = (row) => conversationOptions?.[row.id]?.title ?? (row.local ? t(row.title) : row.title);
     const selectedRow = rows.find((row) => row.id === selected);
     const projectFor = (row) => row?.local ? row.projectId ?? ''
       : projectMembershipId(projectMembershipFor(projectMemberships, row?.id));
@@ -1345,7 +1346,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     function clipboardItem(id, label, text, icon = 'copy') {
       return { id, label, icon, async run() {
         const copied = await writeClipboard(text).catch(() => false);
-        notifyContext(copied ? '已复制' : '复制失败');
+        notifyContext(copied ? t('已复制') : '复制失败');
       } };
     }
 
@@ -1386,7 +1387,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       const saved = !row.local;
       const link = saved && linkFor(row.id);
       const groups = [
-        archived ? [] : [{ id: 'pin', icon: pinned ? 'unpin' : 'pin', label: pinned ? '取消置顶' : '置顶会话',
+        archived ? [] : [{ id: 'pin', icon: pinned ? 'unpin' : 'pin', label: pinned ? '取消置顶' : t('置顶会话'),
           disabled: !saved, run: () => void changeConversationOptions(row, { pinned: !pinned }) }],
         [{ id: 'rename', icon: 'rename', label: '重命名…', disabled: !saved,
           run: () => setConversationDialog({ kind: 'rename', id: row.id, scope }) },
@@ -1395,7 +1396,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         link ? [clipboardItem('conversation-link', '复制对话链接', link, 'link')] : [],
         [{ id: 'archive', icon: archived ? 'restore' : 'archive', label: archived ? '恢复会话' : '归档会话',
           disabled: !saved, run: () => void changeConversationOptions(row, { archived: !archived },
-            archived ? '已恢复会话' : '已归档会话') }],
+            archived ? '已恢复会话' : t('已归档会话')) }],
       ];
       openContextMenu(event, event.currentTarget, '会话操作', groups);
     }
@@ -2277,25 +2278,26 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         : approvalUnconfirmed ? '工具授权结果待确认。可查询原任务。'
           : needsCheck ? '请查询原任务状态后继续。' : blockedAfterTurn ? '请新建对话以继续使用。'
           : parametersBlocked ? '请在「模型 → 高级参数」确认该执行端的参数，或恢复默认后发送。' : '');
-    const title = conversationOptions?.[selected]?.title ?? snapshot?.session.title ?? selectedRow?.title ??
-      (localSdk ? '本地 Codex SDK' : 'VPS 对话');
-    const routeStatus = ready ? `${connectionName ? `${connectionName} · ` : ''}VPS 已配置` : 'VPS 待配置';
+    const title = conversationOptions?.[selected]?.title ?? (selectedRow?.local
+      ? t(snapshot?.session.title ?? selectedRow.title) : snapshot?.session.title ?? selectedRow?.title) ??
+      (localSdk ? t('本地 Codex SDK') : t('VPS 对话'));
+    const routeStatus = ready ? `${connectionName ? `${connectionName} · ` : ''}${t('VPS 已配置')}` : t('VPS 待配置');
     const stopBusy = working === 'stop' || stopPending;
     const steerBusy = working === 'steer';
     const waitingForReceipt = Boolean(attempt || working === 'send');
-    const sendLabel = supplementDraft ? '作为新一轮发送' : '发送';
-    const stopLabel = stopBusy ? '正在停止' : '停止生成';
+    const sendLabel = supplementDraft ? t('作为新一轮发送') : t('发送');
+    const stopLabel = stopBusy ? t('正在停止') : t('停止生成');
     const sendKey = activePreferences.sendKey === 'ctrl-enter' ? 'Ctrl+Enter' : 'Enter';
     const newlineKey = activePreferences.sendKey === 'ctrl-enter' ? 'Enter' : 'Shift+Enter';
-    const composerHint = !remoteEnabled ? '仅浏览 · 可以编辑并保留草稿'
-      : working === 'send' ? (localSdk ? `正在发送至本机 ${providerName}` : '正在发送至 VPS')
-        : stopBusy ? (localSdk ? '等待本机 SDK 确认停止' : '等待 VPS 确认停止')
-      : steerBusy ? '正在提交给当前轮次'
-        : waitingForApproval ? '等待工具审批 · 可以保留补充草稿或停止生成'
-        : steerOffered ? (earlierSupplement ? '这是前一轮的补充草稿。编辑后可用于当前轮次。' : `${sendKey} 补充当前轮次 · ${newlineKey} 换行`)
+    const composerHint = !remoteEnabled ? t('仅浏览 · 可以编辑并保留草稿')
+      : working === 'send' ? (localSdk ? t('正在发送至本机 {provider}', { provider: providerName }) : t('正在发送至 VPS'))
+        : stopBusy ? (localSdk ? t('等待本机 SDK 确认停止') : t('等待 VPS 确认停止'))
+      : steerBusy ? t('正在提交给当前轮次')
+        : waitingForApproval ? t('等待工具审批 · 可以保留补充草稿或停止生成')
+        : steerOffered ? (earlierSupplement ? '这是前一轮的补充草稿。编辑后可用于当前轮次。' : t('{send} 补充当前轮次 · {newline} 换行', { send: sendKey, newline: newlineKey }))
           : supplementDraft ? (isActive(lastState) ? '补充草稿已保留。当前轮次结束后可手动发送。' : '补充草稿已保留，可手动作为新一轮发送。')
             : unavailableModel && sessionModel === undefined ? '默认模型已不在目录 · 将沿用会话设置'
-              : `${sendKey} 发送 · ${newlineKey} 换行`;
+              : t('{send} 发送 · {newline} 换行', { send: sendKey, newline: newlineKey });
     const chatPaneId = `${viewId}-chat`;
     const chatLogId = `${viewId}-messages`;
     const canvasPaneId = `${viewId}-canvas`;
@@ -2303,13 +2305,13 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const projectStatus = workspaceSnapshot.state === 'error' ? '暂时无法读取本地项目'
       : workspaceSnapshot.phase === 'pending' ? '正在读取本地项目'
         : '暂无本地项目';
-    const projectChoices = [[null, '全部会话'], ['', '未归类'], ...projects];
+    const projectChoices = [[null, t('全部会话')], ['', t('未归类')], ...projects];
     const currentProjectTitle = selectedProject
       ? projects.get(selectedProject) ?? (workspaceSnapshot.phase === 'pending' ? '正在读取项目' : '项目不可用')
-      : '未归类';
+      : t('未归类');
     const toolPicker = sidebarActions || (ready && configuredTools.length) ? h(ProviderPicker, {
       value: activeTool, tools: configuredTools, disabled: !ready || providerSwitchLocked, active,
-      ariaLabel: localSdk ? '切换本机执行端' : undefined,
+      ariaLabel: localSdk ? t('切换本机执行端') : undefined,
       select: changeProvider, closeOnSelect: crossesSubscriptionView, docked: sidebarActions,
       decorateIcon: sidebarActions ? (icon) => subscriptionMeter(h,
         activeTool && subscriptionSamples[`${subscriptionScope}:${localSdk ? scope : activeTool}`], icon) : undefined,
@@ -2348,7 +2350,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         onKeyDown: (event) => openConversationMenu(event, row),
         onDragStart: dragEnabled ? (event) => startSessionDrag(event, row) : undefined, onDragEnd: endSessionDrag,
       }, pinned && !archived ? menuIcon(h, 'pin') : null, h('span', { className: 'vc-session-title' }, label),
-      row.mode === 'design' ? h('span', { className: 'vc-session-mode', 'aria-hidden': true }, '设计') : null);
+      row.mode === 'design' ? h('span', { className: 'vc-session-mode', 'aria-hidden': true }, t('设计')) : null);
     };
     function renderProject([projectId, label]) {
       const entries = groups.get(projectId);
@@ -2378,14 +2380,14 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         h('div', { className: 'vc-disclosure-motion', 'data-expanded': expanded, inert: !expanded },
           h('div', { className: 'vc-disclosure-clip' },
             h('div', { className: 'vc-project-session-rows', role: 'group', 'aria-label': label },
-              entries.length ? entries.map(renderSession) : h('p', null, '此项目暂无会话')))));
+              entries.length ? entries.map(renderSession) : h('p', null, t('此项目暂无会话'))))));
     }
     const pinnedFolders = [...projects].filter(([id]) => pinnedProjects.has(id));
     const newActions = h('div', { className: 'vc-new-actions' },
       h('button', {
         type: 'button', className: 'vc-button vc-new vc-primary', onClick: onNewChat ?? startNewChat,
         disabled: !onNewChat && (!chatEnabled || Boolean(working)),
-      }, '＋ 新对话'),
+      }, t('＋ 新对话')),
       h('button', {
         type: 'button', className: 'vc-button vc-new vc-new-design', onClick: () => newSession('design'),
         disabled: !designAvailable || Boolean(working),
@@ -2415,23 +2417,23 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         onStreamingRender: parseStreamingMarkdown && turn.id === lastTurn?.id ? followLatestReply : undefined,
       }))
         : h('div', { className: 'vc-welcome' },
-          h('h1', null, !ready ? (localSdk ? '开始一段对话' : `通过 VPS 与 ${providerName} 对话`) : !chatEnabled ? '选择一个执行端'
-            : working === 'history' ? '正在读取会话'
-            : design ? '从设计需求开始' : '开始一段对话'),
+          h('h1', null, !ready ? (localSdk ? t('开始一段对话') : t('通过 VPS 与 {provider} 对话', { provider: providerName })) : !chatEnabled ? t('选择一个执行端')
+            : working === 'history' ? t('正在读取会话')
+            : design ? t('从设计需求开始') : t('开始一段对话')),
           !ready ? h(React.Fragment, null,
-            h('p', null, localSdk ? '配置工作目录和模型后开始聊天。' : '在此输入消息、查看回复，模型请求由 VPS 发出。'),
+            h('p', null, localSdk ? t('配置工作目录和模型后开始聊天。') : t('在此输入消息、查看回复，模型请求由 VPS 发出。')),
             h('button', { type: 'button', className: 'vc-button vc-primary',
-              onClick: SetupGuide ? openSetup : () => openSettings() }, localSdk ? '配置本机 SDK' : SetupGuide ? '开始 VPS 接入' : '配置 VPS'))
+              onClick: SetupGuide ? openSetup : () => openSettings() }, localSdk ? t('配置本机 SDK') : SetupGuide ? t('开始 VPS 接入') : t('配置 VPS')))
             : !chatEnabled ? h(React.Fragment, null,
-              h('p', null, configuredTools.length ? '从切换菜单选择已配置的执行端。' : '配置执行端后即可对话。'),
+              h('p', null, configuredTools.length ? t('从切换菜单选择已配置的执行端。') : t('配置执行端后即可对话。')),
               SetupGuide && !configuredTools.length ? h('button', { type: 'button', className: 'vc-button vc-primary',
                 onClick: openSetup }, '打开接入向导') : null)
             : working !== 'history' && snapshot ? h(React.Fragment, null,
               h('p', null, design ? '描述用途、目标用户和视觉方向。原型会出现在设计画布。'
-                : localSdk ? `向本机 ${providerName} 提问，或让它带你熟悉当前项目。` : '向 VPS 上的助手提问，或让它带你熟悉当前项目。'),
+                : localSdk ? t('向本机 {provider} 提问，或让它带你熟悉当前项目。', { provider: providerName }) : t('向 VPS 上的助手提问，或让它带你熟悉当前项目。')),
               !draft ? h('button', { type: 'button', className: 'vc-button vc-example', onClick: fillExample,
-                'aria-label': design ? '填入设计示例' : '填入对话示例',
-              }, design ? '独立书店网站示例' : '项目导读示例') : null) : null)));
+                'aria-label': design ? t('填入设计示例') : t('填入对话示例'),
+              }, design ? t('独立书店网站示例') : t('项目导读示例')) : null) : null)));
     const conversationComposer = h('div', { className: 'vc-compose-area' },
       h('div', { className: 'vc-compose-wrap' },
         banner ? h('div', { className: 'vc-feedback', role: 'status' },
@@ -2450,12 +2452,12 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           h('textarea', {
             ref: editor, 'data-vc-focus-area': 'composer',
             rows: 2, value: draft, maxLength: steerOffered ? maxSteerLength : maxPromptLength,
-            'aria-label': localSdk ? '本地对话草稿' : '消息',
+            'aria-label': localSdk ? t('本地对话草稿') : t('消息'),
             'aria-describedby': chatEnabled ? hintId : undefined,
             placeholder: workflows?.editLabel ? '描述要如何配置工作流'
               : chatEnabled ? (steerOffered ? (design ? '补充当前设计的修改要求，最多 1,200 字符' : '补充当前轮次，最多 1,200 字符')
-              : design ? '描述页面、目标用户和视觉方向' : `给 ${providerName} 发消息`)
-              : ready ? '选择执行端后即可发送消息' : localSdk ? '配置本机 SDK 后可发送消息' : '配置 VPS 后即可发送消息',
+              : design ? t('描述页面、目标用户和视觉方向') : t('给 {provider} 发消息', { provider: providerName }))
+              : ready ? t('选择执行端后即可发送消息') : localSdk ? t('配置本机 SDK 后可发送消息') : t('配置 VPS 后即可发送消息'),
             disabled: !localSdk && (!chatEnabled || !selected), readOnly: working === 'provider' || working === 'send' || steerBusy,
             onChange: (event) => updateDraft(draftId, event.target.value),
             onContextMenu: openEditorMenu,
@@ -2501,10 +2503,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             materialsDisabled: waitingForReceipt, wideActions: Boolean(steerOffered || supplementDraft),
             mode, report, attached, selection: modelSelection, catalog, showModeIcon: sidebarActions, localSdk,
             accessButton: showingSubscription ? null : accessButton,
-            memoryMode: memoryAvailable ? memoryIsolated ? '独立上下文'
-              : projectMemorySuppressed ? '项目记忆关闭' : automaticMemory ? automaticMemoryLabel : '记忆' : null,
+            memoryMode: memoryAvailable ? memoryIsolated ? t('独立上下文')
+              : projectMemorySuppressed ? '项目记忆关闭' : automaticMemory ? automaticMemoryLabel : t('记忆') : null,
             hasPluginPrompts: pluginPrompts.length > 0,
-            templateLabel: settingsSurface ? '提示词模板' : undefined,
+            templateLabel: settingsSurface ? t('提示词模板') : undefined,
           },
             h('div', { className: 'vc-compose-buttons' },
               showStop ? h('button', {
@@ -2546,17 +2548,17 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
               setSettingsOpen(false);
               void workflows.example.start('codex', local.profile.model, local.profile.targetId);
             },
-          }, '运行示例工作流'))) } : local?.panels;
+          }, t('运行示例工作流')))) } : local?.panels;
     const newChatDisabled = !onNewChat && (!chatEnabled || Boolean(working));
     const sidebarShortcuts = [
-      ResourceLibrary ? h(SidebarShortcut, { className: 'vc-resource-entry', icon: 'library', label: '项目资源库',
-        detail: '浏览项目里的画板、图片和代码块。', 'aria-haspopup': 'dialog', onClick: () => setResourcesOpen(true) }) : null,
-      workflows ? h(SidebarShortcut, { className: 'vc-resource-entry', icon: 'fork', label: '工作流',
-        detail: workflows.panel.running ? '有工作流正在运行，打开可查看进度。' : '编辑阶段、运行工作流或查看回执。',
+      ResourceLibrary ? h(SidebarShortcut, { className: 'vc-resource-entry', icon: 'library', label: t('项目资源库'),
+        detail: t('浏览项目里的画板、图片和代码块。'), 'aria-haspopup': 'dialog', onClick: () => setResourcesOpen(true) }) : null,
+      workflows ? h(SidebarShortcut, { className: 'vc-resource-entry', icon: 'fork', label: t('工作流'),
+        detail: workflows.panel.running ? t('有工作流正在运行，打开可查看进度。') : t('编辑阶段、运行工作流或查看回执。'),
         running: workflows.panel.running, 'aria-haspopup': 'dialog', onClick: workflows.openPanel,
         disabled: localSdk && providerId !== 'codex' && !workflows.panel.mixed }) : null,
-      h(SidebarShortcut, { className: 'vc-resource-entry vc-playground-entry', icon: 'canvas', label: '设计工作台',
-        detail: designAvailable ? '在画布中编辑画板、查看版本。' : '切换到 Codex 后可打开设计工作台。',
+      h(SidebarShortcut, { className: 'vc-resource-entry vc-playground-entry', icon: 'canvas', label: t('设计工作台'),
+        detail: designAvailable ? t('在画布中编辑画板、查看版本。') : t('切换到 Codex 后可打开设计工作台。'),
         disabled: !designAvailable || Boolean(working), onClick: openPlayground,
         'aria-current': floatingChat ? 'page' : undefined })
     ];
@@ -2578,29 +2580,29 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         } else cycleAreaFocus(event);
       } },
       h('style', null, css),
-      sidebarActions ? h('nav', { className: 'vc-compact-rail vc-rail-shortcuts', 'aria-label': '快捷侧栏' },
-        h(SidebarShortcut, { className: 'vc-compact-history', icon: 'history', label: '会话与项目',
-          detail: '展开会话历史与项目。', 'aria-expanded': historyOpen, 'aria-controls': historyPanelId,
+      sidebarActions ? h('nav', { className: 'vc-compact-rail vc-rail-shortcuts', 'aria-label': t('快捷侧栏') },
+        h(SidebarShortcut, { className: 'vc-compact-history', icon: 'history', label: t('会话与项目'),
+          detail: t('展开会话历史与项目。'), 'aria-expanded': historyOpen, 'aria-controls': historyPanelId,
           onClick: (event) => { historyTrigger.current = event.currentTarget; setHistoryOpen((open) => !open); } }),
-        h(SidebarShortcut, { className: 'vc-compact-new-chat', icon: 'new-chat', label: '新建对话',
+        h(SidebarShortcut, { className: 'vc-compact-new-chat', icon: 'new-chat', label: t('新建对话'),
           detail: '在所选位置开始对话。', onClick: onNewChat ?? startNewChat, disabled: newChatDisabled }),
-        onQuickSearch ? h(SidebarShortcut, { className: 'vc-compact-search', icon: 'search', label: '查找会话和资源',
-          detail: '搜索会话、项目、画板和工作流。', 'aria-haspopup': 'dialog', onClick: onQuickSearch }) : null,
+        onQuickSearch ? h(SidebarShortcut, { className: 'vc-compact-search', icon: 'search', label: t('查找会话和资源'),
+          detail: t('搜索会话、项目、画板和工作流。'), 'aria-haspopup': 'dialog', onClick: onQuickSearch }) : null,
         ...sidebarShortcuts) : null,
       h('aside', {
         id: historyPanelId, className: 'vc-rail', 'data-open': historyOpen, 'data-design': design,
         style: showingSubscription && !sidebarActions ? { display: 'none' } : undefined,
-        'aria-label': localSdk ? '本地对话历史' : 'VPS 对话列表', tabIndex: -1, 'data-vc-focus-area': 'history',
+        'aria-label': localSdk ? t('本地对话历史') : t('VPS 对话列表'), tabIndex: -1, 'data-vc-focus-area': 'history',
       },
         sidebarActions ? h('div', { className: 'vc-rail-content' },
           h('button', {
             type: 'button', className: 'vc-button vc-new vc-sidebar-new vc-primary', onClick: onNewChat ?? startNewChat,
             disabled: newChatDisabled,
-          }, menuIcon(h, 'new-chat'), h('span', { className: 'vc-sidebar-new-label' }, '新建对话')),
+          }, menuIcon(h, 'new-chat'), h('span', { className: 'vc-sidebar-new-label' }, t('新建对话'))),
           h('div', { className: 'vc-rail-shortcuts', role: 'group', 'aria-label': '工作台快捷入口' }, ...sidebarShortcuts),
-          h('nav', { className: 'vc-list', 'aria-label': '会话记录' },
-            h('h2', { className: 'vc-rail-label vc-session-list-heading' }, '会话'),
-            pinnedRows.length ? h('section', { className: 'vc-pinned-sessions', 'aria-label': '置顶会话' },
+          h('nav', { className: 'vc-list', 'aria-label': t('会话记录') },
+            h('h2', { className: 'vc-rail-label vc-session-list-heading' }, t('会话')),
+            pinnedRows.length ? h('section', { className: 'vc-pinned-sessions', 'aria-label': t('置顶会话') },
               pinnedRows.map(renderSession)) : null,
             pinnedFolders.length ? h('section', { className: 'vc-pinned-projects', 'aria-label': '置顶项目' },
               pinnedFolders.map(renderProject)) : null,
@@ -2614,14 +2616,14 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
               h('span', { className: 'vc-group-chevron', 'aria-hidden': true })),
               h('div', { className: 'vc-disclosure-motion', 'data-expanded': archiveOpen, inert: !archiveOpen },
                 h('div', { className: 'vc-disclosure-clip' },
-                  h('div', { className: 'vc-project-session-rows', role: 'group', 'aria-label': '已归档会话' },
+                  h('div', { className: 'vc-project-session-rows', role: 'group', 'aria-label': t('已归档会话') },
                     archivedRows.map(renderSession))))) : null,
-            rows.length || projects.size ? null : h('p', null, '暂无会话')))
+            rows.length || projects.size ? null : h('p', null, t('暂无会话'))))
         : h(React.Fragment, null,
-        h('div', { className: 'vc-rail-label' }, '会话'),
+        h('div', { className: 'vc-rail-label' }, t('会话')),
         newActions,
         h('div', { className: 'vc-projects' },
-          h('h2', { className: 'vc-projects-heading', id: `${viewId}-project-label` }, '本地项目'),
+          h('h2', { className: 'vc-projects-heading', id: `${viewId}-project-label` }, t('本地项目')),
           h('div', { className: 'vc-project-list', role: 'group', 'aria-labelledby': `${viewId}-project-label` },
             projectChoices.map(([value, label]) => h('button', {
               type: 'button', key: value === null ? 'all' : `project:${value}`, className: 'vc-project-filter',
@@ -2629,14 +2631,14 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             }, value ? h('span', { className: 'vc-project-icon', 'aria-hidden': true }) : null,
             h('span', { className: 'vc-project-name' }, label))),
             projects.size ? null : h('p', { className: 'vc-project-status', role: 'status' }, projectStatus))),
-        h('nav', { className: 'vc-list', 'aria-label': '会话记录' },
+        h('nav', { className: 'vc-list', 'aria-label': t('会话记录') },
           visibleRows.length ? visibleRows.map(renderSession)
-            : h('p', null, category === null ? '暂无会话' : '此分类暂无会话')),
+            : h('p', null, category === null ? t('暂无会话') : t('此分类暂无会话'))),
         h('button', {
           type: 'button', className: 'vc-button vc-account-entry', disabled: !ready || providerSwitchLocked,
           onClick: () => openSettings('accounts'),
-        }, '账号管理'))),
-      sidebarActions ? h('div', { className: 'vc-sidebar-actions', role: 'group', 'aria-label': localSdk ? '本机操作' : 'VPS 操作' },
+        }, t('账号管理')))),
+      sidebarActions ? h('div', { className: 'vc-sidebar-actions', role: 'group', 'aria-label': localSdk ? t('本机操作') : t('VPS 操作') },
         toolPicker,
         h('button', {
           type: 'button', className: 'vc-button vc-sidebar-settings', disabled: providerSwitchLocked,
@@ -2648,7 +2650,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             type: 'button', className: 'vc-button vc-history-toggle', 'aria-expanded': historyOpen,
             hidden: showingSubscription && !sidebarActions,
             onClick: () => { historyTrigger.current = null; setHistoryOpen((open) => !open); },
-          }, '会话'),
+          }, t('会话')),
           h('div', { className: 'vc-heading' },
             h('div', { className: 'vc-heading-title' },
               showingSubscription ? h('strong', null, 'Claude Code（订阅）') : h('strong', { title }, title),
@@ -2659,7 +2661,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
                 value: selectedProject, 'aria-label': '归入本地项目', disabled: Boolean(working),
                 onChange: (event) => requestSessionMove(selectedRow, event.target.value),
               },
-              h('option', { value: '' }, '未归类'),
+              h('option', { value: '' }, t('未归类')),
               selectedProject && !projects.has(selectedProject)
                 ? h('option', { value: selectedProject, disabled: true }, currentProjectTitle) : null,
               [...projects].map(([id, name]) => h('option', { key: id, value: id }, name)))) : null),
@@ -2673,7 +2675,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           }, '返回设计对话') : null,
           !showingSubscription && design && !floatingChat ? h('div', { className: 'vc-design-panes vc-segments', role: 'group', 'aria-label': '工作区布局' },
             h('span', { className: 'vc-view-kind', 'aria-hidden': true }, '布局'),
-            [['chat', '对话', chatPaneId], ['split', '并排', `${chatPaneId} ${canvasPaneId}`], ['canvas', '画布', canvasPaneId]]
+            [['chat', t('对话'), chatPaneId], ['split', '并排', `${chatPaneId} ${canvasPaneId}`], ['canvas', '画布', canvasPaneId]]
               .filter(([pane]) => roomy || pane !== 'split')
               .map(([pane, name, controls]) => h('button', {
                 key: pane, type: 'button', className: 'vc-button', 'aria-controls': controls, 'aria-pressed': visiblePane === pane,
@@ -2734,7 +2736,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         } : null,
         toolDefault: unavailableModel ? undefined : defaultModel, followsTool: Boolean(defaultModel && modelSelection === defaultModel),
         access, accessProvider, accessBusy: accessPending || (remoteEnabled && providerSwitchLocked), changeAccess, localSdk,
-        pluginPrompts, insertPluginPrompt, templateLabel: settingsSurface ? '提示词模板' : undefined,
+        pluginPrompts, insertPluginPrompt, templateLabel: settingsSurface ? t('提示词模板') : undefined,
       })),
       saveConversationPreference || floatingChat ? h('div', { className: 'vc-context-notice', role: 'status' }, contextNotice?.text) : null,
       contextMenus.map((request) => h(ContextMenu, {
@@ -2774,6 +2776,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         close: () => setSettingsOpen(false), saveConnection: saveSettings, saveTools,
         VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired,
         navigateLocation: settingsSurface?.navigate, settingsLabel, localPanels,
+        language: applicationPreferences?.language, changeLanguage: applicationPreferences?.changeLanguage,
         restoreFocus: settingsSurface?.restoreFocus,
         focusFallback: () => {
           const entry = Array.from(workbench.current?.querySelectorAll('.vc-sidebar-settings, .vc-header-settings') ?? [])

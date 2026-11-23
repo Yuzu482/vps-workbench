@@ -1,3 +1,4 @@
+import { t } from '../../remote-workbench/vps-chat/client/interface-language.js';
 import { localBackends } from '../local-sdk/providers.mjs';
 
 export const componentWelcomeKey = 'dsh-vps-chat:component-welcome:v1';
@@ -59,12 +60,12 @@ export function createComponentPanel(React, button) {
     if (!status) return null;
     const { checked, pending, results, problem, disabled, toggle, install, finish } = installation;
     const anyReady = status.items.some(({ ready }) => ready);
-    return h('section', { className: 'vc-settings-group local-components', 'aria-label': '可选本机组件', 'aria-busy': pending },
-      h('h4', null, '可选本机组件'),
-      h('p', null, '勾选需要的执行端，一次下载、校验并创建只读本机配置。安装后可单独连接各自的账号。'),
-      status.preview ? h('p', null, '本地演示 · 使用模拟组件和预置账号。') : null,
+    return h('section', { className: 'vc-settings-group local-components', 'aria-label': t('可选本机组件'), 'aria-busy': pending },
+      h('h4', null, t('可选本机组件')),
+      h('p', null, t('勾选需要的执行端，一次下载、校验并创建只读本机配置。安装后可单独连接各自的账号。')),
+      status.preview ? h('p', null, t('本地演示 · 使用模拟组件和预置账号。')) : null,
       h('fieldset', { className: 'local-component-list', disabled },
-        h('legend', { className: 'local-component-legend' }, '选择要安装的执行端'),
+        h('legend', { className: 'local-component-legend' }, t('选择要安装的执行端')),
         status.items.map(({ backend, version, ready, available, source }) => {
           const result = results?.find((item) => item.backend === backend);
           const id = 'component-detail-' + backend;
@@ -73,17 +74,17 @@ export function createComponentPanel(React, button) {
               'aria-label': localBackends[backend].label, 'aria-describedby': id, onChange: () => toggle(backend) }),
             h('span', { className: 'local-component-meta' },
               h('strong', null, localBackends[backend].label),
-              h('span', { id }, 'v' + version + ' · ' + descriptions[backend]),
-              result && !result.ok ? h('span', { role: 'alert' }, componentMessages[result.code] ?? '安装失败，请重试。') : null),
-            h('span', { className: 'local-component-status' }, ready ? '已就绪' :
-              !available ? '记录不可用' : source ? '待创建配置' : pending && checked.includes(backend) ? '安装中' : '未安装'));
+              h('span', { id }, 'v' + version + ' · ' + t(descriptions[backend])),
+              result && !result.ok ? h('span', { role: 'alert' }, t(componentMessages[result.code] ?? '安装失败，请重试。')) : null),
+            h('span', { className: 'local-component-status' }, ready ? t('已就绪') :
+              !available ? t('记录不可用') : source ? t('待创建配置') : pending && checked.includes(backend) ? t('安装中') : t('未安装')));
         })),
-      !status.supported ? h('p', { role: 'status' }, componentMessages.component_platform_unavailable) : null,
+      !status.supported ? h('p', { role: 'status' }, t(componentMessages.component_platform_unavailable)) : null,
       problem ? h('p', { className: 'vc-feedback', role: 'alert' }, problem) : null,
       h('div', { className: 'vc-setup-actions' },
-        button(pending ? '正在安装…' : '安装所选组件', { onClick: () => void install(), disabled: disabled || !checked.length }, 'vc-primary'),
-        pending ? button('取消安装', { onClick: () => void native.cancelLocalComponents().catch(() => {}) }) : null,
-        anyReady ? button('前往模型与账号', { disabled: pending, onClick: () => void finish(true) }) : null,
-        welcome ? button(anyReady ? '完成' : '暂只使用 VPS SSH', { disabled: pending, onClick: () => void finish() }) : null));
+        button(pending ? t('正在安装…') : t('安装所选组件'), { onClick: () => void install(), disabled: disabled || !checked.length }, 'vc-primary'),
+        pending ? button(t('取消安装'), { onClick: () => void native.cancelLocalComponents().catch(() => {}) }) : null,
+        anyReady ? button(t('前往模型与账号'), { disabled: pending, onClick: () => void finish(true) }) : null,
+        welcome ? button(anyReady ? t('完成') : t('暂只使用 VPS SSH'), { disabled: pending, onClick: () => void finish() }) : null));
   };
 }

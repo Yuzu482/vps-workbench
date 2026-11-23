@@ -1,3 +1,4 @@
+import { t } from './interface-language.js';
 import { afterPopupMotion } from './menu-motion.js';
 import { accountStartupMessage, getAccountAction } from './account-routes.js';
 
@@ -19,7 +20,7 @@ export function createAccountDialog(React) {
     const cancelExit = React.useRef(null);
     const closing = React.useRef(false);
     const action = getAccountAction(actionId);
-    const [status, setStatus] = React.useState('正在核对 VPS 连接与出口…');
+    const [status, setStatus] = React.useState(t('正在核对 VPS 连接与出口…'));
     const [attempt, setAttempt] = React.useState(0);
     const [retryable, setRetryable] = React.useState(false);
 
@@ -50,13 +51,13 @@ export function createAccountDialog(React) {
           const { preset } = await rpc('preset', {}, controller.signal);
           if (controller.signal.aborted) return;
           if (!sameVps(settings, preset?.settings) || typeof preset.targetId !== 'string' || !/^[a-f0-9]{64}$/.test(preset.targetId)) {
-            setStatus('请切回已核对指纹的默认 VPS，再打开账号窗口。');
+            setStatus(t('请切回已核对指纹的默认 VPS，再打开账号窗口。'));
             return;
           }
           const { protocol, port } = await rpc('account-view', { targetId: preset.targetId, action: actionId }, controller.signal);
           if (controller.signal.aborted) return;
           if (typeof protocol !== 'string' || !/^dsh-account\.[\w-]{43}$/.test(protocol) ||
-              !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('远程画面凭证无效。');
+              !Number.isInteger(port) || port < 1 || port > 65535) throw new Error(t('远程画面凭证无效。'));
           const { default: RFB } = await import(new URL(accountPlayerPath, window.location.href).href);
           if (controller.signal.aborted) return;
           const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -64,7 +65,7 @@ export function createAccountDialog(React) {
           socket = new WebSocket(`${scheme}://${host}:${port}${accountSocketPath}`, [protocol]);
           socket.addEventListener('close', (event) => {
             if (controller.signal.aborted || event.code !== 1011) return;
-            startupMessage = accountStartupMessage(event.reason);
+            startupMessage = t(accountStartupMessage(event.reason));
             if (startupMessage) {
               setStatus(startupMessage);
               setRetryable(true);
@@ -73,20 +74,20 @@ export function createAccountDialog(React) {
           viewer = new RFB(screen.current, socket, { shared: false });
           viewer.scaleViewport = true;
           viewer.addEventListener('connect', () => {
-            if (!controller.signal.aborted) setStatus(action.terminal ? '已连接 VPS 账号操作窗口' : '已连接 VPS 浏览器');
+            if (!controller.signal.aborted) setStatus(action.terminal ? t('已连接 VPS 账号操作窗口') : t('已连接 VPS 浏览器'));
           });
           viewer.addEventListener('disconnect', () => {
             if (!controller.signal.aborted) {
               setStatus(startupMessage ?? (action.terminal
-                ? 'VPS 操作窗口已断开或未启动。请核对远端浏览器、xterm 和对应 CLI。'
-                : 'VPS 浏览器已断开或未启动。请核对远端浏览器和出口配置。'));
+                ? t('VPS 操作窗口已断开或未启动。请核对远端浏览器、xterm 和对应 CLI。')
+                : t('VPS 浏览器已断开或未启动。请核对远端浏览器和出口配置。')));
               setRetryable(true);
             }
           });
         } catch (error) {
           if (socket && socket.readyState < WebSocket.CLOSING) socket.close();
           if (!controller.signal.aborted) {
-            setStatus(error.code ? error.message : '无法打开 VPS 账号窗口。');
+            setStatus(error.code ? error.message : t('无法打开 VPS 账号窗口。'));
             setRetryable(true);
           }
         }
@@ -104,23 +105,23 @@ export function createAccountDialog(React) {
 
     function retry() {
       setRetryable(false);
-      setStatus('正在核对 VPS 连接与出口…');
+      setStatus(t('正在核对 VPS 连接与出口…'));
       setAttempt(previous => previous + 1);
     }
 
     return h('dialog', {
-      ref: dialog, className: 'vc-account-dialog vc-popup-motion', 'aria-label': action.title,
+      ref: dialog, className: 'vc-account-dialog vc-popup-motion', 'aria-label': t(action.title),
       onCancel: (event) => { event.preventDefault(); dismiss(); },
     },
     h('header', { className: 'vc-account-header' },
-      h('div', null, h('strong', null, action.title), h('div', { role: 'status' }, status)),
+      h('div', null, h('strong', null, t(action.title)), h('div', { role: 'status' }, status)),
       h('div', { className: 'vc-account-header-actions' },
-        retryable ? h('button', { type: 'button', className: 'vc-button vc-settings-outline', onClick: retry }, '重新打开') : null,
-        h('button', { type: 'button', className: 'vc-button', onClick: dismiss }, '关闭账号窗口'))),
+        retryable ? h('button', { type: 'button', className: 'vc-button vc-settings-outline', onClick: retry }, t('重新打开')) : null,
+        h('button', { type: 'button', className: 'vc-button', onClick: dismiss }, t('关闭账号窗口')))),
     h('p', { className: 'vc-account-tip' }, action.terminal
-      ? '在下面的 VPS 画面完成操作。登录地址和验证码只在这个窗口内使用。'
-      : '网页登录仅用于本次窗口。关闭后，下次打开需要重新登录。'),
-    h('div', { ref: screen, className: 'vc-account-screen', 'aria-label': 'VPS 浏览器画面' }));
+      ? t('在下面的 VPS 画面完成操作。登录地址和验证码只在这个窗口内使用。')
+      : t('网页登录仅用于本次窗口。关闭后，下次打开需要重新登录。')),
+    h('div', { ref: screen, className: 'vc-account-screen', 'aria-label': t('VPS 浏览器画面') }));
   };
 }
 

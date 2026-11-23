@@ -1,3 +1,4 @@
+import { t } from '../../remote-workbench/vps-chat/client/interface-language.js';
 import { ConnectionResult } from '../desktop/connection-panel.mjs';
 import { TrialActions, trialResult, useConnectionTrial } from '../desktop/connection-trial.mjs';
 import { trialPrompt, trialState } from '../desktop/setup-trial.mjs';
@@ -245,12 +246,12 @@ export function createLocalWorkspace(React, Workbench) {
       if (!inspector) return h('p', null, '尚未登记本机配置。');
       return h('dl', { className: 'local-config-details' },
         h('dt', null, '名称'), h('dd', null, inspector.name),
-        h('dt', null, '执行端'), h('dd', null, labelFor(inspector)),
+        h('dt', null, t('执行端')), h('dd', null, labelFor(inspector)),
         backendOf(inspector) === 'claude-sdk' && h(React.Fragment, null,
-          h('dt', null, '认证方式'), h('dd', null, subscription ? 'Claude 个人订阅' : 'API Key')),
+          h('dt', null, t('认证方式')), h('dd', null, subscription ? 'Claude 个人订阅' : 'API Key')),
         includeDirectory && h(React.Fragment, null, h('dt', null, '只读工作目录'), h('dd', null, inspector.directory)),
-        h('dt', null, '默认模型'), h('dd', null, inspectedRuntime?.models.find(({ id }) => id === inspector.model)?.label ?? inspector.model),
-        h('dt', null, '推理强度'), h('dd', null, inspector.effort === 'default' ? '账号默认' : effortName(inspector.effort)));
+        h('dt', null, t('默认模型')), h('dd', null, inspectedRuntime?.models.find(({ id }) => id === inspector.model)?.label ?? inspector.model),
+        h('dt', null, t('推理强度')), h('dd', null, inspector.effort === 'default' ? '账号默认' : effortName(inspector.effort)));
     }
 
     async function changeAccount(event) {
@@ -331,10 +332,10 @@ export function createLocalWorkspace(React, Workbench) {
     const localPanels = {
       connection: h(React.Fragment, null,
         h(ComponentPanel, { native, status: componentStatus, welcome: componentSetup.welcome, installation: componentInstallation }),
-        inspector && h('section', { className: 'vc-settings-group', 'aria-label': '本机配置' },
-          h('h4', null, '本机配置'),
-          h('label', { className: 'vc-field' }, '查看配置',
-            h('select', { 'aria-label': '查看配置', value: inspector.id, onChange: (event) => setInspectId(event.target.value) },
+        inspector && h('section', { className: 'vc-settings-group', 'aria-label': t('本机配置') },
+          h('h4', null, t('本机配置')),
+          h('label', { className: 'vc-field' }, t('查看配置'),
+            h('select', { 'aria-label': t('查看配置'), value: inspector.id, onChange: (event) => setInspectId(event.target.value) },
               profiles.map(({ id, name }) => h('option', { key: id, value: id }, name)))),
           profileSummary(true),
           h('div', { className: 'vc-setup-agent-actions vc-setup-actions' },
@@ -346,23 +347,23 @@ export function createLocalWorkspace(React, Workbench) {
               onClick: () => void selectProfile(newProfileKey, setDefaultId),
             }))),
         h('form', { className: 'vc-settings-group', onSubmit: register },
-          h('h4', null, '注册本机配置'),
-          h('label', { className: 'vc-field' }, '本机执行端', h('select', { 'aria-label': '本机执行端', value: formProvider?.backend ?? '',
+          h('h4', null, t('注册本机配置')),
+          h('label', { className: 'vc-field' }, t('本机执行端'), h('select', { 'aria-label': t('本机执行端'), value: formProvider?.backend ?? '',
             disabled: browsing || registerBusy || !formProvider, onChange: (event) => {
               setRegisterBackend(event.target.value); setModelId(''); setEffortId(''); setAuthMode('api-key');
             } }, providers.map(({ backend }) => h('option', { key: backend, value: backend }, localBackends[backend].label)))),
-          offersSubscription && h('label', { className: 'vc-field' }, '认证方式',
-            h('select', { 'aria-label': '认证方式', value: authMode, disabled: browsing || accessPending || registerBusy,
+          offersSubscription && h('label', { className: 'vc-field' }, t('认证方式'),
+            h('select', { 'aria-label': t('认证方式'), value: authMode, disabled: browsing || accessPending || registerBusy,
               onChange: (event) => setAuthMode(event.target.value) },
               h('option', { value: 'api-key' }, 'API Key'),
               h('option', { value: 'subscription' }, 'Claude 个人订阅'))),
           h('label', { className: 'vc-field' }, '配置名称', h('input', { value: name, maxLength: 80, required: true,
             disabled: browsing || registerBusy, onChange: (event) => setName(event.target.value) })),
           h('div', { className: 'vc-settings-address' },
-            h('label', { className: 'vc-field' }, '模型', h('select', { value: selectedModel?.id ?? '',
+            h('label', { className: 'vc-field' }, t('模型'), h('select', { value: selectedModel?.id ?? '',
               disabled: browsing || registerBusy || !selectedModel, onChange: (event) => { setModelId(event.target.value); setEffortId(''); } },
               models.map(({ id, label }) => h('option', { key: id, value: id }, label)))),
-            h('label', { className: 'vc-field' }, '推理强度', h('select', { value: effort ?? '',
+            h('label', { className: 'vc-field' }, t('推理强度'), h('select', { value: effort ?? '',
               disabled: browsing || registerBusy || !selectedModel, onChange: (event) => setEffortId(event.target.value) },
               selectedModel?.efforts.map((item) => h('option', { key: item, value: item }, item === 'default' ? '账号默认' : effortName(item)))))),
           registerError && h('p', { role: 'alert', className: 'vc-feedback' }, registerError),
@@ -374,9 +375,9 @@ export function createLocalWorkspace(React, Workbench) {
         h('section', { className: 'vc-setup-group vc-connection-checks', 'aria-label': '本机连接检查' },
           h('div', { className: 'vc-setup-overview' }, h('h4', null, '连接检查')),
           h('div', { className: 'vc-setup-actions' },
-            button(checking ? '检查中' : '测试本机配置', { disabled: checking, onClick: () => void loadStatus(true) })),
+            button(checking ? t('检查中') : '测试本机配置', { disabled: checking, onClick: () => void loadStatus(true) })),
           h('ol', { className: 'vc-setup-steps' },
-            h(ConnectionResult, { id: 'runtime', label: '本机 SDK', detail: '检查 Windows 上的 SDK 运行文件。',
+            h(ConnectionResult, { id: 'runtime', label: t('本机 SDK'), detail: '检查 Windows 上的 SDK 运行文件。',
               result: statusError ? { state: 'failed', detail: '本机 SDK 状态读取失败。请重试。' } : verified ? {
                 state: inspectedRuntime?.runtimeAvailable ? 'passed' : 'failed',
                 detail: inspectedRuntime?.runtimeAvailable ? `已找到本机 ${labelFor(inspector)} 运行文件。` : `当前安装缺少本机 ${labelFor(inspector)} 运行文件。`,
@@ -385,13 +386,13 @@ export function createLocalWorkspace(React, Workbench) {
             h(ConnectionResult, { id: 'model', label: '本机模型目录', detail: '检查本机 SDK 支持的模型选项。',
               result: verified ? { state: inspectedRuntime?.models.length ? 'passed' : 'failed',
                 detail: backendOf(inspector) === defaultBackend ? '内置目录 · ' + inspectedRuntime?.models.length + ' 个模型选项' : '使用账号默认模型。' } : null }),
-            h(ConnectionResult, { id: 'response', label: '实际模型响应', detail: '试跑使用所选配置的模型和本机网络。',
+            h(ConnectionResult, { id: 'response', label: t('实际模型响应'), detail: '试跑使用所选配置的模型和本机网络。',
               result: trialResult(trial, trialTarget) },
             h(TrialActions, { trial, target: trialTarget,
               allowed: inspecting && !browsing && !accessPending && !checking && (!subscription || !subscriptionAction) }))))),
       tools: h('section', { className: 'vc-settings-group', 'aria-label': '本机配置摘要' },
         profileSummary(),
-        button('编辑本机配置', { onClick: () => settingsSurface.setTab('connection') })),
+        button(t('编辑本机配置'), { onClick: () => settingsSurface.setTab('connection') })),
       accounts: h(React.Fragment, null,
         h('section', { className: 'vc-settings-group', 'aria-label': '凭据来源' },
           h('h4', null, '凭据来源'),
@@ -419,7 +420,7 @@ export function createLocalWorkspace(React, Workbench) {
           accountFeedback && h('p', { role: accountFeedback.ok ? 'status' : 'alert' }, accountFeedback.message),
           button('打开本机连接检查', { onClick: () => settingsSurface.setTab('connection') })),
         h('ol', { className: 'vc-setup-steps' }, credentials(),
-          h(ConnectionResult, { id: 'response', label: '实际模型响应', detail: '试跑使用所选本机配置。',
+          h(ConnectionResult, { id: 'response', label: t('实际模型响应'), detail: '试跑使用所选本机配置。',
             result: trialResult(trial, trialTarget) }))),
     };
 
