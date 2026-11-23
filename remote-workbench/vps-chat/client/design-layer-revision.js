@@ -18,10 +18,10 @@ export function serializeLayerRevision(revision) {
   return snapshot;
 }
 
-export function readLayerRevisionOutcome(projectKey, turnId) {
+export function readLayerRevisionOutcome(projectKey, turnId, storage = workbenchStorage) {
   try {
-    const value = workbenchStorage.getItem(`${layerRevisionKey(projectKey, turnId)}:outcome`);
-    if (value === 'accepted') return workbenchStorage.getItem(layerRevisionKey(projectKey, turnId)) == null ? 'rejected' : value;
+    const value = storage.getItem(`${layerRevisionKey(projectKey, turnId)}:outcome`);
+    if (value === 'accepted') return storage.getItem(layerRevisionKey(projectKey, turnId)) == null ? 'rejected' : value;
     return value === 'rejected' ? value : null;
   } catch {
     return null;
@@ -67,15 +67,15 @@ function reject(message) {
   return { outcome: 'rejected', error: message };
 }
 
-export function readLayerRevision(projectKey, turn) {
+export function readLayerRevision(projectKey, turn, storage = workbenchStorage) {
   let raw;
   try {
-    raw = workbenchStorage.getItem(layerRevisionKey(projectKey, turn.id));
+    raw = storage.getItem(layerRevisionKey(projectKey, turn.id));
   } catch {
     return reject('无法核对本机图层基线。请检查工作台存储后重试。');
   }
   if (raw == null) {
-    const recorded = readLayerRevisionOutcome(projectKey, turn.id);
+    const recorded = readLayerRevisionOutcome(projectKey, turn.id, storage);
     const containsMetadata = typeof turn.reply === 'string' && turn.reply.toLowerCase().includes(layerRevisionMeta) &&
       findMetadata(turn.reply).length > 0;
     return recorded || containsMetadata ? reject('缺少本轮冻结的画板基线。请从原画板重新发起迭代。') : null;

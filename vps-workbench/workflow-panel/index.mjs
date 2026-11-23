@@ -254,8 +254,16 @@ export function createWorkflowPanel(React, { icon } = {}) {
   }
 
   function RunSummary({ run, projects, running, launchAction, controlAction, performLaunch, performControl,
-    onResume, onPause, onStop, onRetry, readArtifacts, targets, archived = false, canExecute = true }) {
+    onResume, onPause, onStop, onRetry, readArtifacts, targets, jump, archived = false, canExecute = true }) {
     const [confirmRetry, setConfirmRetry] = React.useState(null);
+    const focusedStage = React.useRef(null);
+    React.useEffect(() => {
+      const stage = focusedStage.current;
+      if (stage && jump?.runId === run?.id) {
+        stage.scrollIntoView({ block: 'nearest' });
+        stage.focus({ preventScroll: true });
+      }
+    }, [jump, run?.id]);
     if (!run) return null;
     const resumable = run.phase === 'paused' || run.phase === 'running';
     const checkingStop = run.stopRequested;
@@ -290,7 +298,8 @@ export function createWorkflowPanel(React, { icon } = {}) {
           const target = targetForStage(stage, targets);
           const retry = run.mixed && run.phase === 'failed' && row?.state === 'failed';
           const confirming = confirmRetry === row?.turnId;
-          return h('li', { key: stage.id, className: 'vc-workflow-card' },
+          const focused = jump?.runId === run.id && jump.stageIndex === index;
+          return h('li', { key: stage.id, className: 'vc-workflow-card', ...(focused && { ref: focusedStage, tabIndex: -1 }) },
             h('div', { className: 'vc-workflow-title-row' },
               h('strong', null, `第 ${index + 1} 阶段 · ${name}`),
               h('span', null, rowStates[row?.state] ?? row?.state ?? rowStates.waiting)),
@@ -316,12 +325,18 @@ export function createWorkflowPanel(React, { icon } = {}) {
         })));
   }
 
-  function MixedRunHistory({ request, currentId, summaryProps }) {
+  function MixedRunHistory({ request, currentId, summaryProps, jump }) {
     const [expanded, setExpanded] = React.useState(false);
     const [entries, setEntries] = React.useState(null);
     const [selectedId, setSelectedId] = React.useState(null);
     const [detail, setDetail] = React.useState(null);
     const [historyError, setHistoryError] = React.useState('');
+    React.useEffect(() => {
+      if (jump?.runId && jump.runId !== currentId) {
+        setExpanded(true);
+        setSelectedId(jump.runId);
+      }
+    }, [jump, currentId]);
     React.useEffect(() => {
       if (!expanded) return undefined;
       let live = true;
@@ -358,7 +373,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
   return function WorkflowPanel({ open, preferRunPane, onClose, workflows, availableProviders, catalogScope, readModels, onChange, onEditInChat,
     proposal, onDismissProposal, run, running, canStart, onStart, onResume, onPause, onStop, exampleError,
     agentPresets = [], onManageAgentPresets, moduleCatalog, projects = emptyProjects, selectedProject,
-    readFileTarget, saveAttachments, readArtifacts, localSdk, mixed }) {
+    readFileTarget, saveAttachments, readArtifacts, localSdk, mixed, searchSelection, clearSearchSelection }) {
     const titleId = React.useId();
     const memoryProjectErrorId = React.useId();
     const configurationId = React.useId();
@@ -388,6 +403,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
     const [transition, setTransition] = React.useState(null);
     const [transitionError, setTransitionError] = React.useState('');
     const [compactView, setCompactView] = React.useState(run || mixed?.run ? 'run' : 'configuration');
+    const [runJump, setRunJump] = React.useState(null);
     const [editError, setEditError] = React.useState('');
     const [proposalError, setProposalError] = React.useState(null);
     const [runError, setRunError] = React.useState('');
@@ -414,6 +430,7 @@ export function createWorkflowPanel(React, { icon } = {}) {
     }, [open]);
     React.useLayoutEffect(() => {
       if (open && preferRunPane) setCompactView('run');
+      if (!open) setRunJump(null);
     }, [open, preferRunPane]);
     React.useLayoutEffect(() => {
       if (!transition || !open) return undefined;
@@ -481,6 +498,24 @@ export function createWorkflowPanel(React, { icon } = {}) {
         setTransition({ trigger, description, proceed });
       } else proceed();
     }
+
+    React.useEffect(() => {
+      if (!open || !searchSelection || writeBusy || fileBusy || transition) return;
+      clearSearchSelection();
+      if (searchSelection.runId) {
+        setCompactView('run');
+        setRunJump(searchSelection);
+        return;
+      }
+      if (!workflows.some(({ id }) => id === searchSelection.workflowId)) {
+        setEditError('此工作流已删除，请刷新搜索结果。');
+        return;
+      }
+      requestTransition(closeButton.current, '打开搜索结果', () => {
+        choose(searchSelection.workflowId);
+        setCompactView('configuration');
+      });
+    }, [open, searchSelection, writeBusy, fileBusy, transition, workflows]);
 
     function closeTransition(restoreFocus = false) {
       setTransition(null);
@@ -819,15 +854,18 @@ export function createWorkflowPanel(React, { icon } = {}) {
           (explicitExecution || mixedRun) && alert(mixed?.error),
           alert(runError),
           h(RunSummary, { key: mixedRun?.id, run: mixedRun, projects, running: mixed?.running, launchAction, controlAction,
+            jump: runJump?.mixed ? runJump : null,
             performLaunch: launch, performControl: control, targets: mixed?.targets, canExecute: mixed?.canExecute,
             onRetry: mixed?.canExecute && !operationsBusy && !currentRun ? (id, index) => launch('retry', () => mixed.retry(id, index)) : undefined,
             readArtifacts: open && !closing && mixed?.canExecute ? mixed.readArtifacts : undefined,
             onResume: () => mixed.action('resume'), onPause: () => mixed.action('pause'), onStop: () => mixed.action('stop') }),
           open && !closing && mixed?.historyRequest && h(MixedRunHistory, { request: mixed.historyRequest, currentId: mixedRun?.id,
-            summaryProps: { projects, targets: mixed.targets,
+            jump: runJump?.mixed && mixed?.running !== undefined ? runJump : null,
+            summaryProps: { projects, targets: mixed.targets, jump: runJump?.mixed ? runJump : null,
               onRetry: mixed.canExecute && !operationsBusy && !currentRun ? (id, index) => launch('retry', () => mixed.retry(id, index)) : undefined,
               readArtifacts: mixed.canExecute ? mixed.readArtifacts : undefined } }),
           h(RunSummary, { run, projects, running, launchAction, controlAction, performLaunch: launch, performControl: control,
+            jump: runJump && !runJump.mixed ? runJump : null,
             onResume, onPause, onStop, readArtifacts: open && !closing ? readArtifacts : undefined })))));
   };
 }

@@ -732,5 +732,17 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
     await Promise.allSettled(lanes.values());
   }
 
-  return { status, registerProfile, request, credentialConfigured, revokeExecution, close };
+  function searchSnapshot() {
+    const profiles = indexById(store.profiles);
+    return store.sessions.filter(({ background }) => !background).map(({ id, profileId, title, mode, turns }) => ({
+      location, provider: backend, profileId, targetId: profiles.get(profileId).targetId, configuration: profiles.get(profileId).name,
+      id: id.slice(6), title, mode: mode ?? 'chat',
+      turns: turns.map(({ id, prompt, reply, state, steering }) => ({
+        id, prompt, reply, state: state === 'completed' ? 'complete' : state,
+        supplemental: steering?.filter(({ state }) => ['submitted', 'delivered', 'next'].includes(state)).map(({ prompt }) => prompt),
+      })),
+    }));
+  }
+
+  return { status, registerProfile, request, credentialConfigured, searchSnapshot, revokeExecution, close };
 }

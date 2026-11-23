@@ -376,7 +376,18 @@ export function createDesignCanvas(React) {
     React.useLayoutEffect(() => {
       if (!request || openedRequest.current === request) return;
       const version = versions.find((entry) => entry.id === request.turnId);
-      if (!version) return;
+      if (!version) {
+        if (!readDesignRevision) return;
+        openedRequest.current = request;
+        void resolveVersion(request.turnId).then((loaded) => {
+          if (!loaded || openedRequest.current !== request) return;
+          const board = Number.isInteger(request.boardIndex) && request.boardIndex >= 1 &&
+            request.boardIndex <= loaded.sources.length ? request.boardIndex : loaded.revisedBoardIndex ?? 1;
+          chooseVersion(loaded.id, board);
+          panel.current?.focus({ preventScroll: true });
+        });
+        return;
+      }
       openedRequest.current = request;
       setSelectedVersion(versions.at(-1).id === request.turnId ? '' : request.turnId);
       const index = request.boardIndex;

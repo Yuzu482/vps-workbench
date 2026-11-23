@@ -54,7 +54,11 @@ async function fixture(t) {
     return { service, workbench, async close() { workbench.dispose(); await service.close(); } };
   }
   let host = await boot();
-  t.after(async () => { await host.close(); await data.flush(); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => {
+    await host.close();
+    await data.flush();
+    await rm(root, { recursive: true, force: true, maxRetries: 4, retryDelay: 30 });
+  });
   const register = async (name) =>
     (await host.service.registerProfile({ name, directory, model: localModels[0].id, effort: 'medium' })).profile;
   const profile = await register('示例工作目录');

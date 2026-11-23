@@ -489,5 +489,12 @@ export function createPreviewFixtures({ backendPlatform, backendFailure } = {}) 
     return turn ? ok({ session: { id: packet.sessionId, turns: [turn] } }) : fail('session_missing', '示例提炼记录不存在。');
   }
 
-  return { preferences, projects, chat, terminal, extractMemory };
+  function searchSnapshots() {
+    return Array.from(sessions, ([provider, records]) => [...records.values()].map((session) => structuredClone({
+      id: session.id, mode: session.mode, title: session.title, turns: session.turns, provider, location: 'ssh-vps',
+      targetId: targetFor(provider), configuration: previewName,
+    }))).flat();
+  }
+
+  return { preferences, projects, chat, terminal, extractMemory, searchSnapshots };
 }

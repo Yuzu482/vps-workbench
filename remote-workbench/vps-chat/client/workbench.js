@@ -383,7 +383,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
   function Workbench({ projectCatalog, terminalView, active = true, visible = true, resourcesOpen, setResourcesOpen,
     access, accessPending, changeAccess, extensions, agentPresets, workflowStore, onNewChat, newChatRequest = 0,
-    settingsSurface, applicationPreferences, local, chatLink, onChatLinkResult }) {
+    settingsSurface, applicationPreferences, local, chatLink, onChatLinkResult, workflowSearch, onWorkflowSearchOpened }) {
     const workspaceSnapshot = React.useSyncExternalStore(projectCatalog.subscribe, projectCatalog.getSnapshot);
     const SubscriptionTerminal = React.useSyncExternalStore(terminalView.subscribe, terminalView.getSnapshot);
     const [subscriptionOpen, setSubscriptionOpen] = React.useState(false);
@@ -699,6 +699,11 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const workflows = useWorkflows({ store: workflowStore, rpc, readList, connection, remoteEnabled,
       toolIds: toolPreferences.ids, scope, sessionId: selected, prepareChat: prepareWorkflowChat, local,
       savePreference: saveConversationPreference, report: setFeedback });
+    React.useEffect(() => {
+      if (!workflowSearch || !visible || !workflows?.openSearchResult) return;
+      workflows.openSearchResult(workflowSearch);
+      onWorkflowSearchOpened(workflowSearch);
+    }, [workflowSearch, visible, Boolean(workflows)]);
 
     const moduleCatalogEnabled = Boolean(extensions);
     React.useEffect(() => {
@@ -1884,13 +1889,13 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }
 
     function revealSource(session, { turnId, boardIndex }) {
-      if (!session.turns.some((turn) => turn.id === turnId)) return;
       if (session.mode === 'design' && boardIndex) {
         showPlaygroundBoards(false);
         setCanvasHistoryOpen(false);
         setDesignPane(roomy ? 'split' : 'canvas');
         setCanvasRequest({ turnId, boardIndex });
       } else {
+        if (!session.turns.some((turn) => turn.id === turnId)) return;
         setDesignPane('chat');
         if (floatingChat) setCanvasHistoryOpen(true);
         setSourceTurn({ sessionId: session.id, turnId });
@@ -1908,7 +1913,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     React.useEffect(() => {
       if (!chatLink || !visible || settingsTab || setupOpen || working || loadingPreset ||
           (localSdk && !local.profilesReady) || openingLink.current === chatLink) return;
-      const { targetId, provider, sessionId, turnId } = chatLink;
+      const { targetId, provider, sessionId, turnId, boardIndex } = chatLink;
       const fail = (text) => onChatLinkResult(chatLink, text);
       if (localSdk) {
         const profile = local.profiles.find((item) => item.targetId === targetId && (item.backend ?? 'codex') === provider);
@@ -1937,14 +1942,15 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           if ((localSdk || response.targetId !== undefined) && response.targetId !== targetId)
             throw new Error('无法确认链接的执行配置。');
           const record = readSession(response, sessionId, response.session?.mode ?? 'chat');
-          if (!record.session.turns.length || (turnId && !record.session.turns.some(({ id }) => id === turnId))) {
+          if (!record.session.turns.length || (turnId && !(boardIndex && record.session.mode === 'design') &&
+              !record.session.turns.some(({ id }) => id === turnId))) {
             throw new Error('找不到链接中的已保存会话或消息。');
           }
           if (list) activateConnection(settings, list, connectionName);
           setSubscriptionOpen(false);
           prepareSelection(sessionId, null);
           accept(record, targetId, { sent: attempts[sessionId] });
-          if (turnId) revealSource(record.session, { turnId });
+          if (turnId) revealSource(record.session, { turnId, boardIndex });
           onChatLinkResult(chatLink);
         } catch (error) {
           if (!signal.aborted) fail(error instanceof Error ? error.message : '无法打开该会话链接。');

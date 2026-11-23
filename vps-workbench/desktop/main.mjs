@@ -10,7 +10,7 @@ import { agentPresetKey, legacyAgentPresetKey } from '../agent-presets/state.mjs
 import { accessPreference, readAccess, validAccess } from './access.mjs';
 import { importWorkbenchSnapshot } from './migrate.mjs';
 import { agyHashVariable, agyPathVariable, canonicalLocalDirectory, claudeKeyVariable, localCredentialVariable,
-  localMemoryJournalKey, openLocalCredentials, parseConversationLink, readLegacyWorkflowRun, startWorkbenchServer } from './server.mjs';
+  localMemoryJournalKey, openLocalCredentials, parseConversationLink, readLegacyWorkflowRun, searchArtifactsKey, startWorkbenchServer } from './server.mjs';
 
 const localApiKey = process.env[localCredentialVariable];
 const localAgentOptions = { claudeKey: process.env[claudeKeyVariable], agyPath: process.env[agyPathVariable], agyHash: process.env[agyHashVariable] };
@@ -186,8 +186,13 @@ async function start() {
     trustedRenderer(event);
     const preferences = data.preferences();
     delete preferences[mixedWorkflowHistoryKey];
+    delete preferences[searchArtifactsKey];
     return { preferences, projects: data.projects(), access: readAccess(data.preference(accessPreference)),
       dataNotices: data.notices(), localComponents: runtime.localComponentsStatus() };
+  });
+  ipcMain.handle('workbench:local-search', (event, body) => {
+    trustedRenderer(event);
+    return runtime.search(body);
   });
   ipcMain.handle('workbench:take-chat-link', (event) => {
     trustedRenderer(event);
@@ -202,7 +207,7 @@ async function start() {
   ipcMain.handle('workbench:set-preference', (event, key, value) => {
     trustedRenderer(event);
     if ([accessPreference, extensionPreferenceKey, memoryJournalKey, localMemoryJournalKey, workflowKey, agentPresetKey,
-      legacyAgentPresetKey, mixedWorkflowRunKey, mixedWorkflowHistoryKey].includes(key)) {
+      legacyAgentPresetKey, mixedWorkflowRunKey, mixedWorkflowHistoryKey, searchArtifactsKey].includes(key)) {
       throw new Error('use_dedicated_settings');
     }
     if ([localWorkflowRunKey, workflowRunKey].includes(key)) readLegacyWorkflowRun(value);

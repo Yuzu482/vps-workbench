@@ -145,6 +145,57 @@ test('a local link selects its registered profile from VPS history and cannot op
   await message.waitFor();
 });
 
+test('one local search groups both routes and opens exact message, project, board and workflow results', { timeout: 45_000 }, async (t) => {
+  const page = await openPreview(t, { viewport: { width: 420, height: 640 }, previewOptions: { localAgents: true }, seed({ preferences }) {
+    preferences['dsh-vps-chat:desktop-view-location:v1'] = 'ssh-vps';
+  } });
+  await page.evaluate(async () => {
+    const native = window.vpsWorkbench;
+    const { profiles } = await native.localSdkStatus();
+    const profile = profiles.find(({ backend }) => backend === 'codex');
+    const result = await native.localSdkRequest({ location: 'local-sdk', backend: profile.backend, profileId: profile.id,
+      targetId: profile.targetId, sessionId: 'local-' + crypto.randomUUID(), turnId: crypto.randomUUID(),
+      prompt: '本机资料也写到签到', op: 'send' });
+    if (!result.ok) throw new Error(result.code);
+  });
+  await page.getByText('开始一段对话', { exact: true }).waitFor();
+  const traffic = [];
+  page.on('request', (request) => {
+    if (/\/api\/rpc|__preview\/(?:local-sdk|mixed-workflow)/u.test(request.url())) traffic.push(request.url());
+  });
+  await page.keyboard.press('Control+k');
+  const search = page.getByRole('dialog', { name: '本地全局搜索', exact: true });
+  const input = search.getByRole('searchbox', { name: '本地全局搜索', exact: true });
+  await input.fill('签到');
+  await search.getByRole('region', { name: /^本机 SDK/ }).getByRole('button', { name: /本机资料也写到签到/ }).waitFor();
+  await search.getByRole('region', { name: /^VPS SSH/ }).getByRole('button', { name: /读书会 · 开场流程/ }).click();
+  const detail = search.getByRole('region', { name: '搜索结果详情', exact: true });
+  await detail.getByText(/先留五分钟签到/).waitFor();
+  await input.fill('周末读书会');
+  await search.getByRole('button', { name: /^项目\s*周末读书会/ }).click();
+  await detail.getByRole('button', { name: '查看项目内的本机记录', exact: true }).click();
+  await search.getByRole('button', { name: /消息.*读书会 · 开场流程/ }).waitFor();
+  await search.getByRole('button', { name: /清除项目筛选/ }).click();
+  await input.fill('青色分支');
+  await search.getByRole('button', { name: /画板.*青色分支/ }).click();
+  await detail.getByText(/00000000-0000-4000-8000-000000000203/).waitFor();
+  const board = detail.locator('iframe');
+  assert.equal(await board.getAttribute('sandbox'), '');
+  assert.match(await board.getAttribute('srcdoc'), /Content-Security-Policy/u);
+  assert.deepEqual(traffic, []);
+  await detail.getByRole('button', { name: '在画布中打开', exact: true }).click();
+  await search.waitFor({ state: 'hidden' });
+  await page.locator('iframe[title="设计原型预览"][srcdoc*="纸间书店 · 青色分支"]').waitFor();
+  await page.getByRole('button', { name: '本地全局搜索', exact: true }).click();
+  await input.fill('活动页发布');
+  await search.getByRole('button', { name: /^工作流\s*活动页发布/ }).click();
+  await detail.getByText('整理发布简报', { exact: true }).waitFor();
+  await detail.getByRole('button', { name: '打开工作流', exact: true }).click();
+  const workflow = page.getByRole('dialog', { name: '工作流', exact: true });
+  await workflow.getByLabel('工作流名称').waitFor();
+  assert.equal(await workflow.getByLabel('工作流名称').inputValue(), '活动页发布');
+});
+
 async function openVpsSetup(page) {
   const settings = page.getByRole('button', { name: '设置', exact: true });
   if (!(await settings.isVisible())) {
@@ -423,6 +474,18 @@ test('mixed workflow simulates offline, retries a confirmed stage and restores a
   await oldSummary.getByText(original.rows[2].turnId, { exact: true }).waitFor();
   await oldSummary.getByRole('button', { name: '查看产物', exact: true }).click();
   await oldSummary.getByRole('button', { name: artifactList.files[0].path, exact: true }).waitFor();
+  await panel.getByRole('button', { name: '关闭工作流', exact: true }).click();
+  await panel.waitFor({ state: 'hidden' });
+  await page.keyboard.press('Control+k');
+  const search = page.getByRole('dialog', { name: '本地全局搜索', exact: true });
+  await search.getByRole('searchbox', { name: '本地全局搜索' }).fill(artifactList.files[0].path);
+  await search.getByRole('button', { name: /^产物/u }).last().click();
+  const artifactDetail = search.getByRole('region', { name: '搜索结果详情', exact: true });
+  await artifactDetail.getByText(original.rows[2].turnId, { exact: true }).waitFor();
+  await artifactDetail.getByRole('button', { name: '打开原运行阶段', exact: true }).click();
+  await oldSummary.waitFor();
+  await page.waitForFunction(() => document.activeElement?.matches('li.vc-workflow-card[tabindex="-1"]') &&
+    document.activeElement.textContent.includes('混合汇总'));
 });
 
 async function openDesign(page) {

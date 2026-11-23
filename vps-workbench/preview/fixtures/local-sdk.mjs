@@ -78,6 +78,7 @@ export async function createPreviewLocalSdk(access, { runtimeAvailable = () => t
   }
   return {
     status,
+    searchSnapshots: () => Array.from(backends.values()).flatMap(({ service }) => service.searchSnapshot()),
     async request(body, options) {
       const selected = backends.get(body?.backend ?? 'codex');
       if (!selected) return { ok: false, code: 'invalid_request' };

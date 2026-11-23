@@ -208,9 +208,9 @@ function normalizeProject(value) {
   };
 }
 
-export function readDesignProject(key) {
+export function readDesignProject(key, storage = workbenchStorage) {
   try {
-    const saved = workbenchStorage.getItem(key);
+    const saved = storage.getItem(key);
     if (saved && saved.length > maxSavedProject) throw new Error('Project too large');
     return { project: normalizeProject(saved ? JSON.parse(saved) : null), warning: '' };
   } catch {

@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { createWorkbench } from '../../remote-workbench/vps-chat/client/workbench.js';
 import { menuIcon } from '../../remote-workbench/vps-chat/client/menu-icons.js';
 import { parseConversationLink } from '../../remote-workbench/vps-chat/client/chat-reference.js';
+import { GlobalSearchDialog } from './global-search-dialog.mjs';
 import { readPreferences, workbenchPreferenceKey } from '../../remote-workbench/vps-chat/client/workbench-preferences.js';
 import { setWorkbenchStorage } from '../../remote-workbench/vps-chat/client/workbench-storage.js';
 import { createResourceLibrary } from '../resource-library/index.mjs';
@@ -200,6 +201,20 @@ try {
     const [resourcesOpen, setResourcesOpen] = React.useState(false);
     const [chatLinkDialog, setChatLinkDialog] = React.useState(false);
     const [chatLink, setChatLink] = React.useState(null);
+    const [searchOpen, setSearchOpen] = React.useState(false);
+    const [workflowSearch, setWorkflowSearch] = React.useState(null);
+    React.useEffect(() => {
+      if (!native.localSearch) return undefined;
+      function shortcut(event) {
+        if (event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey &&
+            !event.isComposing && event.key.toLowerCase() === 'k' && !document.querySelector('dialog:modal')) {
+          event.preventDefault();
+          setSearchOpen(true);
+        }
+      }
+      window.addEventListener('keydown', shortcut);
+      return () => window.removeEventListener('keydown', shortcut);
+    }, []);
     const openChatLink = React.useCallback((link) => {
       setVisited((previous) => previous.has(link.location) ? previous : new Set([...previous, link.location]));
       setLocation(link.location);
@@ -235,6 +250,14 @@ try {
       setVisited((previous) => previous.has(next) ? previous : new Set([...previous, next]));
       setLocation(next);
       void saveLocalPreference(viewLocationKey, next).catch(reportChromeError);
+    }
+    function openSearchWorkflow({ group, workflowId, runId, runLocation, stageIndex, mixed }) {
+      const destination = runLocation ?? (group.location === 'shared' ? location : group.location);
+      openLocation(destination);
+      setWorkflowSearch({ location: destination, workflowId, runId, stageIndex, mixed });
+    }
+    function onWorkflowSearchOpened(value) {
+      setWorkflowSearch((previous) => previous === value ? null : previous);
     }
     function navigateSettings(next, tab) {
       setVisited((previous) => previous.has(next) ? previous : new Set([...previous, next]));
@@ -339,7 +362,7 @@ try {
     return h(React.Fragment, null,
       h(DesktopChrome, { native, projectCatalog, location, newLocation, locations, openLocation, changeNewLocation,
         onError: reportChromeError,
-        onOpenChatLink: () => setChatLinkDialog(true),
+        onOpenChatLink: () => setChatLinkDialog(true), onOpenSearch: native.localSearch ? () => setSearchOpen(true) : undefined,
         onOpenResources: () => setResourcesOpen(true) }),
       h('div', { className: 'desktop-location-bar' },
         h('div', { role: 'group', 'aria-label': '打开会话历史', className: 'desktop-location-tabs' },
@@ -349,6 +372,7 @@ try {
           h('select', { 'aria-label': '新建位置', value: newLocation, onChange: (event) => changeNewLocation(event.target.value) },
             locations.map(([id, label]) => h('option', { key: id, value: id }, label))))),
       visited.has('ssh-vps') ? h(Workbench, { projectCatalog, terminalView, resourcesOpen, setResourcesOpen,
+        workflowSearch: workflowSearch?.location === 'ssh-vps' ? workflowSearch : null, onWorkflowSearchOpened,
         chatLink: chatLink?.location === 'ssh-vps' ? chatLink : null, onChatLinkResult,
         access, accessPending, changeAccess, visible: sshVisible, active: sshVisible, newChatRequest: sshNew,
         settingsSurface: settingsSurface('ssh-vps'),
@@ -359,6 +383,7 @@ try {
         workflowStore: { items: workflowItems, change: changeWorkflows, initialRun: initialWorkflowRun,
           saveRun: saveWorkflowRun, saveAttachments: saveWorkflowAttachments, mixedRequest: native.mixedWorkflow, error: workflowError } }) : null,
       visited.has('local-sdk') ? h(LocalWorkspace, { native, active: !sshVisible, access, accessPending, changeAccess,
+        workflowSearch: workflowSearch?.location === 'local-sdk' ? workflowSearch : null, onWorkflowSearchOpened,
         chatLink: chatLink?.location === 'local-sdk' ? chatLink : null, onChatLinkResult,
         projectCatalog, terminalView: noTerminal, resourcesOpen, setResourcesOpen,
         newChatRequest: localNew, onNewChat: startChat,
@@ -371,6 +396,8 @@ try {
           saveRun: saveLocalRun, saveAttachments: saveWorkflowAttachments, mixedRequest: native.mixedWorkflow,
           error: workflowError || localRunError } }) : null,
       chatLinkDialog ? h(ConversationLinkDialog, { onOpen: openChatLink, onClose: () => setChatLinkDialog(false) }) : null,
+      searchOpen ? h(GlobalSearchDialog, { request: native.localSearch, onClose: () => setSearchOpen(false),
+        onOpenConversation: openChatLink, onOpenWorkflow: openSearchWorkflow }) : null,
       h('div', { ref: settingsLayer, className: 'desktop-settings-surface' }));
   }
   root.render(h(DesktopApp));

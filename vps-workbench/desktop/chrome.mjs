@@ -111,7 +111,7 @@ function TitleMenu({ kind, label, children, items }) {
 }
 
 export function DesktopChrome({ native, projectCatalog, location, newLocation, locations, openLocation, changeNewLocation,
-  onError, onOpenResources, onOpenChatLink }) {
+  onError, onOpenResources, onOpenChatLink, onOpenSearch }) {
   const header = React.useRef(null);
   const sidebar = React.useRef(null);
   const sidebarButton = React.useRef(null);
@@ -237,5 +237,8 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
       h('span', { className: 'desktop-title-divider', 'aria-hidden': true }),
       h(TitleMenu, { kind: 'file', label: '文件', items: fileItems }, '文件', glyph('chevron')),
       h(TitleMenu, { kind: 'edit', label: '编辑', items: editItems }, '编辑', glyph('chevron')),
-      h(TitleMenu, { kind: 'projects', label: '项目', items: projectItems }, '项目', glyph('chevron'))));
+      h(TitleMenu, { kind: 'projects', label: '项目', items: projectItems }, '项目', glyph('chevron')),
+      onOpenSearch && h('button', { type: 'button', className: 'desktop-title-button desktop-search-trigger',
+        'aria-keyshortcuts': 'Control+k', title: '本地全局搜索 (Ctrl+K)', 'aria-label': '本地全局搜索',
+        onClick: onOpenSearch }, glyph('search'))));
 }

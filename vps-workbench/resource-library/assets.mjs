@@ -13,11 +13,11 @@ function codeLanguage(token) {
   return start[2].replace(/[\p{C}]/gu, '').slice(0, 32);
 }
 
-export function extractResources(scope, row, session) {
+export function extractResources(scope, row, session, { storage, includeBoardText = false } = {}) {
   if (session?.id !== row.id || !Array.isArray(session.turns)) throw new Error('Invalid session');
   const designMode = (session.mode ?? row.mode) === 'design';
   const designKey = `dsh-vps-design:v1:${scope}:${row.id}`;
-  const design = designMode ? readDesignProject(designKey) : null;
+  const design = designMode ? readDesignProject(designKey, storage) : null;
   const items = [];
   let partial = Boolean(design?.warning);
   for (const turn of session.turns.slice().reverse()) {
@@ -38,7 +38,7 @@ export function extractResources(scope, row, session) {
       partial = true;
       continue;
     }
-    const revision = designMode ? readLayerRevision(designKey, turn) : null;
+    const revision = designMode ? readLayerRevision(designKey, turn, storage) : null;
     const sources = revision ? revision.sources ?? [] : designMode ? extractHtmlFences(turn.reply) : [];
     const boards = new Map();
     if (sources.length) {
@@ -51,7 +51,8 @@ export function extractResources(scope, row, session) {
           partial = true;
           return;
         }
-        const asset = { kind: 'design', title: board.title, boardIndex, source: board.html };
+        const asset = { kind: 'design', title: board.title, boardIndex, source: board.html,
+          ...(includeBoardText && { text: board.layers.map(({ text }) => text).filter(Boolean).join('\n') }) };
         if (revision) add(asset);
         else boards.set(htmlFences[offset], asset);
       });

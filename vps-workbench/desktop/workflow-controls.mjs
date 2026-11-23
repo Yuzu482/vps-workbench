@@ -22,6 +22,7 @@ export function useWorkflowControls({ store, rpc, readList, connection, remoteEn
   scope, sessionId, prepareChat, savePreference, report }) {
   const [open, setOpen] = React.useState(false);
   const [preferRunPane, setPreferRunPane] = React.useState(false);
+  const [searchSelection, setSearchSelection] = React.useState(null);
   const [edit, setEdit] = React.useState(null);
   const [proposal, setProposal] = React.useState(null);
   const [run, setRun] = React.useState(store.initialRun);
@@ -186,13 +187,15 @@ export function useWorkflowControls({ store, rpc, readList, connection, remoteEn
 
   return {
     openPanel: () => { setPreferRunPane(false); setOpen(true); },
+    openSearchResult(item) { setSearchSelection(item); setPreferRunPane(Boolean(item.runId)); setOpen(true); },
     editLabel: activeEdit && (activeEdit.workflow?.name ?? '新建工作流'),
     clearEdit: () => setEdit(null),
     prepareEdit,
     describeEdit,
     example: { blocked: exampleBlocked, start: startExample, showRun: showExampleRun },
     panel: {
-      open, preferRunPane, onClose: () => { setOpen(false); setProposal(null); setExampleError(''); }, workflows: store.items, exampleError,
+      open, preferRunPane, searchSelection, clearSearchSelection: () => setSearchSelection(null),
+      onClose: () => { setOpen(false); setSearchSelection(null); setProposal(null); setExampleError(''); }, workflows: store.items, exampleError,
       availableProviders, catalogScope: scope, readModels: readPanelModels, onChange: store.change, onEditInChat: startChatEdit,
       proposal, onDismissProposal: () => setProposal(null), run, running,
       mixed: mixedRequest ? { ...mixedStatus, targets: mixedTargets, canExecute: remoteEnabled,

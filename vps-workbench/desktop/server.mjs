@@ -23,12 +23,16 @@ import { mixedLocalRoute, mixedVpsRoute, openMixedWorkflow, requestMixedWorkflow
 import { workflowProviders } from '../workflow-engine/state.mjs';
 import { readToolPreferences } from '../../remote-workbench/vps-chat/client/tool-preferences.js';
 import { readModelCatalog } from '../../remote-workbench/vps-chat/client/model-catalog.js';
+import { createGlobalSearch } from './global-search.mjs';
+import { readVpsSearchSnapshots } from './search-snapshots.mjs';
+import { createSearchArtifactJournal } from './search-artifacts.mjs';
 
 export { canonicalLocalDirectory, localCredentialVariable } from './codex-runtime.mjs';
 export { localMemoryJournalKey } from '../local-sdk/workbench.mjs';
 export { agyHashVariable, agyPathVariable, claudeKeyVariable } from './local-agent-runtime.mjs';
 export { openLocalCredentials } from './local-credentials.mjs';
 export { readLegacyWorkflowRun } from '../workflow-engine/runner.mjs';
+export { searchArtifactsKey } from './search-artifacts.mjs';
 
 const staticRoutes = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -59,6 +63,11 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
   const ticket = randomBytes(32).toString('base64url');
   const readRoute = createWorkbenchRouteReader(workbenchRoot);
   const local = new Map();
+  const artifactJournal = createSearchArtifactJournal(data);
+  const search = createGlobalSearch({ data, artifacts: artifactJournal.entries, async source() {
+    const vps = await readVpsSearchSnapshots(workbenchRoot);
+    return { ...vps, sessions: [...Array.from(local.values()).flatMap(({ service }) => service.searchSnapshot()), ...vps.sessions] };
+  } });
   const components = componentRoot && makeComponentInstaller({ root: componentRoot });
   let installation;
   let closing = false;
@@ -214,10 +223,10 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     },
     async dispatch(op, payload, route, options) {
       const body = { op, ...payload };
-      if (route.settings.location === 'local-sdk') return local.get('codex').workbench.request(body, options);
-      if (op === 'workflow-artifacts') return readWorkflowArtifacts(body, { readRun: options.workflowRun,
+      if (route.settings.location === 'local-sdk') return artifactJournal.remember(body, await local.get('codex').workbench.request(body, options));
+      if (op === 'workflow-artifacts') return artifactJournal.remember(body, await readWorkflowArtifacts(body, { readRun: options.workflowRun,
         backend: { request: (packet) => backend.request(packet, { current: true, pinnedRelay: route.pinnedRelay }) },
-        isAllowed: options.isLive });
+        isAllowed: options.isLive }));
       if (op === 'send') {
         for (const kind of ['model', 'account']) {
           if (!options.isLive()) return { ok: false, code: 'mixed_route_changed' };
@@ -252,7 +261,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
         return readWorkflowArtifacts(body, {
           readRun: () => readLegacyWorkflowRun(data.preference(workflowRunKey) ?? null), backend,
           isAllowed: () => permitsChat(access(), body.op) && (!options?.isLive || options.isLive()),
-        });
+        }).then((result) => artifactJournal.remember(body, result));
       }
       const saved = body.op === 'preset' ? data?.preference(setupConnectionKey) : undefined;
       if (saved !== undefined) {
@@ -350,6 +359,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     origin,
     cookie: { url: origin, name: cookieName, value: ticket, path: '/', httpOnly: true, sameSite: 'strict' },
     localStatus,
+    search: (body) => closing ? { ok: false, message: '工作台正在关闭。' } : search(body),
     requestMixedWorkflow: (body) => requestMixedWorkflow(closing ? null : mixed, body),
     localComponentsStatus,
     installLocalComponents(ids) {
@@ -395,7 +405,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
         if (Object.keys(body).length !== 4 || !Object.hasOwn(body, 'payload')) return {
           ok: false, code: 'invalid_request', message: '本机工作台请求格式不正确。',
         };
-        return selected.workbench.request(body.payload);
+        return artifactJournal.remember(body.payload, await selected.workbench.request(body.payload));
       }
       if (!selected.sdk.runtimeAvailable && body.op === 'send')
         return { ok: false, code: 'runtime_unavailable', message: '找不到所选执行端的本机运行时。' };

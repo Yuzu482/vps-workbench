@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('vpsWorkbench', {
     return () => ipcRenderer.removeListener('workbench:local-status', listener);
   },
   writeClipboard: (value) => ipcRenderer.invoke('workbench:write-clipboard', value),
+  localSearch: (body) => ipcRenderer.invoke('workbench:local-search', body),
   takeChatLink: () => ipcRenderer.invoke('workbench:take-chat-link'),
   registerChatLinks: () => ipcRenderer.invoke('workbench:register-chat-links'),
   onChatLink(callback) {

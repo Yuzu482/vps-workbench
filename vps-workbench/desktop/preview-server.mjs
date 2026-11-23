@@ -23,6 +23,8 @@ import { readSetupPreset, setupConnectionKey } from './setup-state.mjs';
 import { runSetupTrial } from './setup-trial.mjs';
 import { componentCatalog } from './component-catalog.mjs';
 import { validComponentSelection } from './component-install.mjs';
+import { createGlobalSearch } from './global-search.mjs';
+import { createSearchArtifactJournal } from './search-artifacts.mjs';
 
 const previewPort = 47823;
 const localAgentsPort = 47828;
@@ -132,6 +134,10 @@ export async function startPreview({ localAgents = false, localComponents = fals
       return state;
     },
   };
+  const artifactJournal = createSearchArtifactJournal(data);
+  const search = createGlobalSearch({ data, artifacts: artifactJournal.entries, async source() {
+    return { partial: false, sessions: [...(await localSdk()).searchSnapshots(), ...fixtures.searchSnapshots()] };
+  } });
   const chat = createProjectMemoryBridge({
     data, backend: { request: fixtures.chat }, extractor: { request: fixtures.extractMemory }, access: () => access,
     readRun: (id) => workflowRuns.get(id),
@@ -161,8 +167,10 @@ export async function startPreview({ localAgents = false, localComponents = fals
     }
     if (body.op === 'get' && failedStage?.session.id === body.sessionId && failedStage.targetId === body.targetId) return failedStage;
     if (body.op === 'workflow-artifacts' && body.settings.location !== 'local-sdk') return readWorkflowArtifacts(body,
-      { readRun: options.workflowRun, backend: { request: previewArtifacts }, isAllowed: options.isLive });
-    return body.settings.location === 'local-sdk' ? localPacket(body, options) : chat.request(body, options);
+      { readRun: options.workflowRun, backend: { request: previewArtifacts }, isAllowed: options.isLive })
+      .then((result) => artifactJournal.remember(body, result));
+    return body.settings.location === 'local-sdk'
+      ? localPacket(body, options).then((result) => artifactJournal.remember(body, result)) : chat.request(body, options);
   }
   const mixed = openMixedWorkflow({ data, canExecute: () => access.mode === 'execute', pollInterval: 150,
     async targets() {
@@ -389,6 +397,10 @@ export async function startPreview({ localAgents = false, localComponents = fals
         }
         return json(response, { ok: true });
       } catch { return json(response, { ok: false, code: 'invalid_preview_workflow' }, 400); }
+    }
+    if (method === 'POST' && request.headers.origin === origin && url === previewPrefix + 'local-search') {
+      try { return json(response, await search(await readPacket(request))); }
+      catch { return json(response, { ok: false, message: '搜索请求无效。' }, 400); }
     }
     if (method === 'POST' && request.headers.origin === origin && url === previewPrefix + 'mixed-workflow') {
       try {

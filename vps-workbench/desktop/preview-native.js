@@ -42,6 +42,11 @@
   }
 
   window.vpsWorkbench = {
+    async localSearch(body) {
+      const response = await fetch('/__preview/local-search', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      return response.json();
+    },
     mixedWorkflow,
     async bootstrap() {
       const response = await fetch('/__preview/state');
