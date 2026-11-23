@@ -1907,7 +1907,21 @@ test('design materials reuse the settings switches and keep persistent and per-m
     const style = getComputedStyle(input);
     return [style.appearance, style.width, style.height, style.borderRadius];
   });
-  assert.deepEqual(styles, ['none', '38px', '22px', '999px']);
+  assert.deepEqual(styles, ['none', '32px', '18px', '999px']);
+  const imports = dialog.getByRole('group', { name: '导入设计资料', exact: true });
+  async function checkLayout(minImportHeight) {
+    const buttons = await imports.locator('label').evaluateAll((labels) => labels.map((label) => {
+      const { x, y, width, height } = label.getBoundingClientRect();
+      return { x, y, width, height };
+    }));
+    assert.equal(buttons.length, 3);
+    assert.ok(buttons.every(({ y, width, height }) =>
+      y === buttons[0].y && Math.abs(width - buttons[0].width) < 1 && height >= minImportHeight));
+    const gaps = buttons.slice(1).map(({ x }, index) => x - buttons[index].x - buttons[index].width);
+    assert.ok(gaps.every((gap) => gap >= 6 && gap <= 8.1));
+    assert.ok(await next.locator('label').evaluateAll((rows) => rows.every((row) => row.getBoundingClientRect().height >= 36)));
+  }
+  await checkLayout(36);
   await dialog.getByText('后续设计轮次附带简报', { exact: true }).click();
   await auto.press('Space');
   assert.equal(await brief.isChecked(), true);
@@ -1919,6 +1933,7 @@ test('design materials reuse the settings switches and keep persistent and per-m
   assert.equal(await system.isChecked(), false);
 
   await page.setViewportSize({ width: 365, height: 480 });
+  await checkLayout(46);
   await references.press('Space');
   assert.equal(await references.isChecked(), true);
   await references.scrollIntoViewIfNeeded();

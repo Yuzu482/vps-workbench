@@ -68,9 +68,13 @@ const canvasCss = `
   [data-vps-chat] .vc-design-brief {min-width:0; margin:12px 0; padding:8px 10px 10px; border:1px solid var(--vc-line); border-radius:8px}
   [data-vps-chat] .vc-design-brief-fields {display:grid; grid-template-columns:repeat(auto-fit,minmax(min(185px,100%),1fr)); gap:7px}
   [data-vps-chat] .vc-design-materials .vc-design-switch-row {
-    display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:34px;
-    padding:4px 7px; border-radius:8px; cursor:pointer; transition:background-color var(--vc-control-duration) ease;
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    box-sizing:border-box; min-height:36px; padding:5px 9px; border-radius:7px;
+    cursor:pointer; transition:background-color var(--vc-control-duration) ease;
   }
+  [data-vps-chat] .vc-design-switch-row .vc-settings-switch {width:32px; height:18px}
+  [data-vps-chat] .vc-design-switch-row .vc-settings-switch::before {inset:2px auto 2px 2px}
+  [data-vps-chat] .vc-design-switch-row .vc-settings-switch:checked::before {transform:translateX(14px)}
   [data-vps-chat] .vc-design-switch-row > span {min-width:0; overflow-wrap:anywhere}
   [data-vps-chat] .vc-design-switch-row:not(:has(input:disabled)):hover {background:var(--vc-hover)}
   [data-vps-chat] .vc-design-switch-row:has(input:disabled) {color:var(--vc-muted); cursor:default}
@@ -113,11 +117,14 @@ const canvasCss = `
     [data-vps-chat] :is(.vc-design-style-trigger,.vc-design-review-trigger) {justify-content:center; min-width:30px}
     [data-vps-chat] :is(.vc-design-style-trigger,.vc-design-review-trigger) > span:not(.vc-menu-icon) {display:none}
   }
-  [data-vps-chat] .vc-design-imports {display:grid; gap:3px; margin-block:4px 12px}
-  [data-vps-chat] .vc-design-file {
-    position:relative; align-content:center; min-height:33px; padding:4px 8px;
-    border-radius:6px; font-size:13px; cursor:pointer;
+  [data-vps-chat] .vc-design-imports {
+    display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-block:8px 12px;
   }
+  [data-vps-chat] .vc-design-file {
+    position:relative; align-content:center; min-height:36px; padding:5px 7px;
+    border:1px solid var(--vc-line); border-radius:7px; font-size:12px; cursor:pointer;
+  }
+  [data-vps-chat] .vc-design-file .vc-menu-label {justify-content:center; text-align:center; line-height:1.3}
   [data-vps-chat] .vc-design-file:hover:not(:has(input:disabled)) {background:var(--vc-hover)}
   [data-vps-chat] .vc-design-file:has(input:focus-visible) {outline:2px solid var(--vc-accent)}
   [data-vps-chat] .vc-design-file:has(input:disabled) {opacity:.55; cursor:default}
@@ -128,7 +135,15 @@ const canvasCss = `
   [data-vps-chat] .vc-design-library {display:flex; gap:8px; align-items:end; margin-block:8px}
   [data-vps-chat] .vc-design-library label {flex:1}
   [data-vps-chat] .vc-design-library button {flex:none}
-  [data-vps-chat] .vc-design-share {border:1px solid var(--vc-line); border-radius:8px; margin-block:12px}
+  [data-vps-chat] .vc-design-share {
+    min-width:0; border:1px solid var(--vc-line); border-radius:8px; margin-block:12px 10px; padding:4px 6px 6px;
+  }
+  [data-vps-chat] .vc-design-materials .vc-dialog-actions > .vc-button {min-inline-size:72px; min-block-size:36px}
+  @media (max-width:450px) {
+    [data-vps-chat] .vc-design-imports {gap:6px}
+    [data-vps-chat] .vc-design-file {min-height:46px; padding-inline:4px}
+    [data-vps-chat] .vc-design-file .vc-menu-label {flex-direction:column; gap:3px}
+  }
   [data-vps-chat] .vc-design-image-list li {display:flex; gap:8px; align-items:center; padding:4px}
   [data-vps-chat] .vc-design-image-list img {object-fit:cover; border-radius:5px}
   [data-vps-chat] .vc-design-image-list span {min-width:0; flex:1; overflow-wrap:anywhere}
