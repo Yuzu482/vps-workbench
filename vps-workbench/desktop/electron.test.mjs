@@ -1385,7 +1385,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
     await page.getByRole('option', { name: 'Claude Code（订阅终端）', exact: true }).click();
     await page.keyboard.press('Escape');
     await page.getByRole('region', { name: 'Claude Code 订阅终端' }).waitFor();
-    if (!legacyBaseline) await verifyFooter(false);
+    if (!legacyBaseline) await verifyFooter(await page.evaluate(() => innerWidth > 620));
     const nativeStatus = await page.evaluate(async () =>
       (await fetch('/dsh-terminal-workbench/api/bootstrap', { headers: { 'x-rtw-bootstrap': '1' } })).status);
     assert.equal(nativeStatus, 200);

@@ -1711,7 +1711,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           setSubscriptionActivation(visit => visit + 1);
           setComposerPanels([]);
           setAccountOpen(null);
-          setHistoryOpen(false);
+          if (!sidebarActions) setHistoryOpen(false);
           setSubscriptionOpen(true);
         };
       }
@@ -1778,6 +1778,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       setAllRows((previous) => ({
         ...previous, [scope]: [row, ...rows.filter(({ id }) => id !== row.id)],
       }));
+      setSubscriptionOpen(false);
       prepareSelection(row.id, emptySession(row.id, sessionMode));
       if (playground) setPlaygroundView('boards');
       return row.id;
@@ -1787,7 +1788,6 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       if (!remoteEnabled || (localSdk && !local.runtimeReady) || !chatEnabled || providerSwitchLocked || action.current) return null;
       const sessionId = newSession('chat', { projectId: '' });
       if (!sessionId) return null;
-      setSubscriptionOpen(false);
       requestAnimationFrame(() => editor.current?.focus({ preventScroll: true }));
       return { targetId: scope, sessionId };
     }
@@ -1816,6 +1816,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     function openPlayground() {
       if (!designAvailable || action.current) return;
       if (!design) return newSession('design', { projectId: category ?? selectedProject, playground: true });
+      setSubscriptionOpen(false);
       showPlaygroundBoards(true);
     }
 
@@ -1926,6 +1927,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
     function openChat(row, source) {
       if (!ready || action.current) return;
+      setSubscriptionOpen(false);
       const rowMode = row.mode ?? 'chat';
       if (sidebarActions) {
         const project = projectFor(row);
@@ -2541,7 +2543,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       'data-vc-text-size': activePreferences.textSize, 'data-vc-width': activePreferences.width,
       'data-vc-motion': activePreferences.motion,
 
-      onKeyDown: showingSubscription ? undefined : (event) => {
+      onKeyDown: (event) => {
+        if (showingSubscription && (!sidebarActions || event.target.closest('.vc-subscription-session'))) return;
         if (historyOpen && event.key === 'Escape' && !event.defaultPrevented && !event.nativeEvent.isComposing &&
             !workbench.current.querySelector('dialog[open], :popover-open')) {
           setHistoryOpen(false);
@@ -2551,7 +2554,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         } else cycleAreaFocus(event);
       } },
       h('style', null, css),
-      sidebarActions && !showingSubscription ? h('nav', { className: 'vc-compact-rail vc-rail-shortcuts', 'aria-label': '快捷侧栏' },
+      sidebarActions ? h('nav', { className: 'vc-compact-rail vc-rail-shortcuts', 'aria-label': '快捷侧栏' },
         h(SidebarShortcut, { className: 'vc-compact-history', icon: 'history', label: '会话与项目',
           detail: '展开会话历史与项目。', 'aria-expanded': historyOpen, 'aria-controls': historyPanelId,
           onClick: (event) => { historyTrigger.current = event.currentTarget; setHistoryOpen((open) => !open); } }),
@@ -2562,7 +2565,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         ...sidebarShortcuts) : null,
       h('aside', {
         id: historyPanelId, className: 'vc-rail', 'data-open': historyOpen, 'data-design': design,
-        style: showingSubscription ? { display: 'none' } : undefined,
+        style: showingSubscription && !sidebarActions ? { display: 'none' } : undefined,
         'aria-label': localSdk ? '本地对话历史' : 'VPS 对话列表', tabIndex: -1, 'data-vc-focus-area': 'history',
       },
         sidebarActions ? h('div', { className: 'vc-rail-content' },
@@ -2629,7 +2632,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         h('header', { className: 'vc-header', 'data-design': design, 'data-playground': floatingChat },
           h('button', {
             type: 'button', className: 'vc-button vc-history-toggle', 'aria-expanded': historyOpen,
-            hidden: showingSubscription, style: showingSubscription ? { display: 'none' } : undefined,
+            hidden: showingSubscription && !sidebarActions,
             onClick: () => { historyTrigger.current = null; setHistoryOpen((open) => !open); },
           }, '会话'),
           h('div', { className: 'vc-heading' },

@@ -118,15 +118,14 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
   const historyButton = React.useRef(null);
   const lastContentFocus = React.useRef(null);
   const [sidebarId, setSidebarId] = React.useState('desktop-workbench-sidebar');
-  const [layout, setLayout] = React.useState({ history: false, subscription: false });
+  const [sidebarVisible, setSidebarVisible] = React.useState(false);
   const { items: projects } = React.useSyncExternalStore(projectCatalog.subscribe, projectCatalog.getSnapshot);
-  const sidebarVisible = !layout.subscription && layout.history;
   const run = (action) => { void action().catch(onError); };
 
   React.useLayoutEffect(() => {
     const root = header.current.parentElement;
     const workbench = root.querySelector(location === 'local-sdk' ? ':scope > [data-local-sdk]' : ':scope > [data-vps-chat]:not([data-local-sdk])');
-    // The standalone toggle uses the same narrow history state and automatic closing as the Workbench.
+    // Keep the title-bar toggle in sync with the Workbench history panel.
     const toggle = workbench.querySelector('.vc-history-toggle');
     historyButton.current = toggle;
     sidebar.current = workbench.querySelector('.vc-rail');
@@ -136,15 +135,12 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
 
     function rememberFocus(event) { lastContentFocus.current = event.target; }
     function synchronize() {
-      const { vcColor, vcMotion, subscriptionOpen } = workbench.dataset;
+      const { vcColor, vcMotion } = workbench.dataset;
       const theme = vcColor === 'light' || vcColor === 'dark' ? vcColor : systemDark.matches ? 'dark' : 'light';
       root.dataset.chromeTheme = theme;
       root.dataset.chromeMotion = vcMotion;
       chromeColors.sync(theme);
-      const history = toggle.getAttribute('aria-expanded') === 'true';
-      const subscription = subscriptionOpen === 'true';
-      setLayout((previous) => previous.history === history && previous.subscription === subscription
-        ? previous : { history, subscription });
+      setSidebarVisible(toggle.getAttribute('aria-expanded') === 'true');
     }
     function closeHistoryOnNarrow(event) {
       if (event.matches && toggle.getAttribute('aria-expanded') === 'true') toggle.click();
@@ -224,7 +220,7 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
       h('button', {
         ref: sidebarButton, type: 'button', className: 'desktop-title-button desktop-sidebar-button',
         title: sidebarLabel, 'aria-label': sidebarLabel, 'aria-controls': sidebarId,
-        'aria-expanded': sidebarVisible, disabled: layout.subscription, onClick: toggleSidebar,
+        'aria-expanded': sidebarVisible, onClick: toggleSidebar,
         onKeyDown(event) {
           if (event.key === 'Escape' && sidebarVisible && !event.nativeEvent.isComposing) {
             event.preventDefault();

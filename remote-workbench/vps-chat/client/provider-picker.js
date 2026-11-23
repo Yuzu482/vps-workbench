@@ -8,8 +8,7 @@ export const readToolPreferences = (settings, knownTools) =>
 function positionPalette(palette, button, count, openingIndex, docked) {
   const workbench = button.closest('[data-vps-chat]');
   const bounds = workbench.getBoundingClientRect();
-  const inlineRail = docked && workbench.dataset.subscriptionOpen !== 'true' &&
-    window.matchMedia('(width > 620px)').matches;
+  const inlineRail = docked && window.matchMedia('(width > 620px)').matches;
   palette.toggleAttribute('data-inline-rail', inlineRail);
   const anchor = button.getBoundingClientRect();
   const reveal = docked ? button.querySelector('.vc-tool-badge').getBoundingClientRect() : anchor;

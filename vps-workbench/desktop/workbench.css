@@ -423,7 +423,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 }
 #root .vc-rail-shortcut > .vc-button[aria-current="page"] { color: var(--vc-accent); }
 @media (width > 620px) {
-  #root > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) {
+  #root > :is([data-vps-chat], [data-local-sdk]) {
     --desktop-actions-height: 178px;
     --desktop-history-width: 0px;
     grid-template-columns: 52px var(--desktop-history-width) minmax(0, 1fr);
@@ -432,7 +432,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   #root > :is([data-vps-chat], [data-local-sdk]):has(> .vc-rail[data-open="true"]) {
     --desktop-history-width: clamp(180px, 30vw, 232px);
   }
-  #root > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) > .vc-main {
+  #root > :is([data-vps-chat], [data-local-sdk]) > .vc-main {
     grid-area: 1 / 3 / -1 / -1;
   }
   #root > :is([data-vps-chat], [data-local-sdk]) > .vc-compact-rail { display: grid; z-index: 5; }
@@ -446,14 +446,14 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   #root .vc-compact-history[aria-expanded="true"] + .vc-rail-shortcut-tip {
     opacity: 0; visibility: hidden; pointer-events: none;
   }
-  #root > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) > .vc-sidebar-actions {
+  #root > :is([data-vps-chat], [data-local-sdk]) > .vc-sidebar-actions {
     grid-column: 1; flex-direction: column; align-items: stretch; justify-content: flex-end;
     padding-inline: 6px; background: var(--vc-rail); border-inline-end: 1px solid var(--vc-line);
   }
-  #root > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) .vc-sidebar-quota {
+  #root > :is([data-vps-chat], [data-local-sdk]) .vc-sidebar-quota {
     flex-direction: column; min-block-size: 66px;
   }
-  #root > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) .vc-quota-subscriptions {
+  #root > :is([data-vps-chat], [data-local-sdk]) .vc-quota-subscriptions {
     inset: auto auto 104px 58px;
   }
   #root .vc-sidebar-actions :is(.vc-tool-trigger, .vc-tool-summary, .vc-sidebar-settings) {

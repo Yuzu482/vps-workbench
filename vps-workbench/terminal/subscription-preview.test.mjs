@@ -148,6 +148,44 @@ function frameStats(intervals) {
   return { count: sorted.length, p50: at(0.5), p95: at(0.95), max: at(1), over33: sorted.filter((ms) => ms > 33).length };
 }
 
+test('subscription terminal keeps the sidebar and can return through history without closing the terminal', { timeout: 35_000 }, async (t) => {
+  const fixture = await openTerminalPreview(t, { enter: false });
+  const { page, terminal, calls } = fixture;
+  const compact = page.getByRole('navigation', { name: '快捷侧栏', exact: true });
+  const history = page.getByRole('complementary', { name: 'VPS 对话列表', exact: true });
+  const dockToggle = compact.getByRole('button', { name: '会话与项目', exact: true });
+  await dockToggle.click();
+  await history.waitFor();
+  await fixture.choose(subscriptionLabel);
+  await terminal.waitFor();
+  await compact.waitFor();
+  await history.waitFor();
+  const [panel, surface] = await Promise.all([history.boundingBox(), terminal.boundingBox()]);
+  assert.ok(panel.x + panel.width <= surface.x);
+  await fixture.start();
+  await dockToggle.click();
+  await history.waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: '展开会话侧栏', exact: true }).click();
+  await history.getByRole('button', { name: '周末读书会', exact: true }).click();
+  await history.getByRole('button', { name: '读书会 · 开场流程', exact: true }).click();
+  await terminal.waitFor({ state: 'hidden' });
+  await page.getByText(/先留五分钟签到/u).first().waitFor();
+  await fixture.choose(subscriptionLabel);
+  await terminal.locator('.xterm-rows').getByText('Claude Code · 本地演示', { exact: true }).waitFor();
+  assert.equal(calls.filter(({ op }) => op === 'native-subscription-start').length, 1);
+  assert.equal(calls.some(({ op }) => op === 'native-close'), false);
+
+  await page.setViewportSize({ width: 365, height: 480 });
+  await history.waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: '展开会话侧栏', exact: true }).click();
+  await history.getByRole('button', { name: '新建对话', exact: true }).waitFor();
+  await page.getByRole('button', { name: '收起会话侧栏', exact: true }).click();
+  await history.waitFor({ state: 'hidden' });
+  await fixture.choose('Codex');
+  await terminal.waitFor({ state: 'hidden' });
+  await page.getByText(/先留五分钟签到/u).first().waitFor();
+});
+
 test('subscription terminal burst benchmark measures the tail and confirms the receipt', { timeout: 45_000 }, async (t) => {
   const fixture = await openTerminalPreview(t);
   const { page, calls, events, terminal } = fixture;
@@ -318,13 +356,15 @@ test('subscription entry and exit use the same brief arrival and preserve focus 
           const animation = main.getAnimations({ subtree: true }).find(({ id }) => id === 'vc-subscription-arrival');
           if (root.dataset.subscriptionOpen === String(entering) && animation && first === undefined) {
             first = now;
+            const content = main.getBoundingClientRect();
+            const dock = root.querySelector('.vc-sidebar-actions').getBoundingClientRect();
             snapshot = {
               duration: animation.effect.getTiming().duration,
               from: animation.effect.getKeyframes()[0].transform,
               oldRipple: root.hasAttribute('data-theme-ripple'),
               menuVisible: getComputedStyle(root.querySelector('.vc-tool-palette')).display !== 'none',
-              mainOverlapsDock: main.getBoundingClientRect().bottom >
-                root.querySelector('.vc-sidebar-actions').getBoundingClientRect().top + 1 && entering,
+              mainOverlapsDock: content.left < dock.right - 1 && content.right > dock.left + 1 &&
+                content.bottom > dock.top + 1 && content.top < dock.bottom - 1,
               chatVisible: main.querySelector('.vc-main-body').getClientRects().length > 0,
               terminalVisible: main.querySelector('[aria-label="VPS 订阅会话"]').getClientRects().length > 0,
             };
