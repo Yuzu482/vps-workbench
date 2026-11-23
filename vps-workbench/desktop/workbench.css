@@ -350,6 +350,10 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   background: conic-gradient(var(--vc-accent) var(--vc-quota-fill), var(--vc-line-strong) 0);
   color: var(--vc-ink); font-size: 10px; font-variant-numeric: tabular-nums;
 }
+.vc-sidebar-quota .vc-quota-ring {
+  inline-size: 24px; block-size: 24px; padding: 1.5px;
+  font-size: 9px; letter-spacing: -.2px;
+}
 .vc-quota-ring > span {
   display: grid; place-items: center; inline-size: 100%; block-size: 100%;
   border-radius: inherit; background: var(--vc-rail);
