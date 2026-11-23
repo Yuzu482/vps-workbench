@@ -2520,7 +2520,15 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
                 h('div', { className: 'vc-disclosure-clip' },
                   h('div', { className: 'vc-project-session-rows', role: 'group', 'aria-label': '已归档会话' },
                     archivedRows.map(renderSession))))) : null,
-            rows.length || projects.size ? null : h('p', null, '暂无会话')))
+            rows.length || projects.size ? null : h('p', null, '暂无会话')),
+          h('section', { className: 'vc-sidebar-quota', 'aria-label': '用量与限额' },
+            h('h2', null, '用量与限额'),
+            h('dl', null,
+              h('dt', null, '账户剩余额度'), h('dd', null, '暂无数据'),
+              h('dt', null, '单轮输出上限'),
+              h('dd', null, modelParameters?.maxOutputTokens
+                ? parametersBlocked ? '待校验' : `${modelParameters.maxOutputTokens.toLocaleString('zh-CN')} Token`
+                : '执行端默认'))))
         : h(React.Fragment, null,
         h('div', { className: 'vc-rail-label' }, '会话'),
         newActions,

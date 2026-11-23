@@ -1712,6 +1712,12 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     const settingsButton = footer.getByRole('button', { name: '设置', exact: true });
     const provider = await providerButton.boundingBox();
     const settings = await settingsButton.boundingBox();
+    const quota = rail.getByRole('region', { name: '用量与限额', exact: true });
+    await assertWithinViewport(quota);
+    const quotaBounds = await quota.boundingBox();
+    assert.ok(quotaBounds.y + quotaBounds.height <= provider.y);
+    await quota.getByText('暂无数据', { exact: true }).waitFor();
+    await quota.getByText('执行端默认', { exact: true }).waitFor();
     assert.ok(viewport.width > 620 ? provider.y + provider.height <= settings.y : provider.x + provider.width <= settings.x);
     const iconCenters = [];
     for (const button of [newChat, providerButton, settingsButton]) {
