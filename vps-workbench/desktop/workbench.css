@@ -286,6 +286,18 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 .vc-rail-shortcuts {
   position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px;
 }
+.vc-compact-rail {
+  display: none; grid-area: 1 / 1 / 2 / 2;
+  grid-auto-flow: row; grid-auto-columns: minmax(0, 1fr); align-content: start;
+  gap: 4px; min-width: 0; padding: 12px 6px;
+  background: var(--vc-rail); border-inline-end: 1px solid var(--vc-line);
+}
+#root .vc-compact-rail .vc-compact-new-chat { color: var(--vc-accent); }
+.vc-compact-rail .vc-rail-shortcut-tip {
+  inset: 0 auto auto calc(100% + 8px);
+  width: max-content; max-width: 190px;
+}
+.vc-compact-rail .vc-rail-shortcut-tip::before { inset: 0 100% 0 -8px; }
 .vc-rail-shortcut { min-width: 0; }
 #root .vc-rail-shortcut > .vc-button {
   position: relative; display: grid; place-items: center; width: 100%; height: 38px; min-height: 0;
@@ -432,12 +444,18 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
     grid-template-columns: var(--vc-footer-icon-column) minmax(0, 1fr) 18px;
   }
   #root .vc-sidebar-actions :is(.vc-menu-icon, .vc-tool-badge):first-child { justify-self: center; }
-  #root[data-sidebar-collapsed="true"] > :is([data-vps-chat], [data-local-sdk]) { --desktop-sidebar-width: 0px; }
+  #root[data-sidebar-collapsed="true"] > :is([data-vps-chat], [data-local-sdk]) { --desktop-sidebar-width: 52px; }
+  #root[data-sidebar-collapsed="true"] > :is([data-vps-chat], [data-local-sdk]) > .vc-compact-rail {
+    display: grid;
+    animation: vc-compact-rail-in var(--desktop-sidebar-motion) ease both;
+    z-index: 2;
+  }
   #root[data-sidebar-collapsed="true"] > :is([data-vps-chat], [data-local-sdk]) > .vc-rail {
     opacity: 0; transform: translateX(-10px); visibility: hidden; pointer-events: none;
     transition-delay: 0s, 0s, var(--desktop-sidebar-motion);
   }
 }
+@keyframes vc-compact-rail-in { from { opacity: 0; } to { opacity: 1; } }
 @media (max-width: 620px) {
   #root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail { display: flex; inset-block-end: var(--desktop-actions-height); }
   #root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail:not([data-open="true"]) {

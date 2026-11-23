@@ -359,10 +359,11 @@ try {
       return updated;
     }
     const sshVisible = location === 'ssh-vps';
+    const openSearch = native.localSearch ? () => setSearchOpen(true) : undefined;
     return h(React.Fragment, null,
       h(DesktopChrome, { native, projectCatalog, location, newLocation, locations, openLocation, changeNewLocation,
         onError: reportChromeError,
-        onOpenChatLink: () => setChatLinkDialog(true), onOpenSearch: native.localSearch ? () => setSearchOpen(true) : undefined,
+        onOpenChatLink: () => setChatLinkDialog(true), onOpenSearch: openSearch,
         onOpenResources: () => setResourcesOpen(true) }),
       h('div', { className: 'desktop-location-bar' },
         h('div', { role: 'group', 'aria-label': '打开会话历史', className: 'desktop-location-tabs' },
@@ -371,7 +372,7 @@ try {
         h('label', null, '新建位置',
           h('select', { 'aria-label': '新建位置', value: newLocation, onChange: (event) => changeNewLocation(event.target.value) },
             locations.map(([id, label]) => h('option', { key: id, value: id }, label))))),
-      visited.has('ssh-vps') ? h(Workbench, { projectCatalog, terminalView, resourcesOpen, setResourcesOpen,
+      visited.has('ssh-vps') ? h(Workbench, { projectCatalog, terminalView, resourcesOpen, setResourcesOpen, onQuickSearch: openSearch,
         workflowSearch: workflowSearch?.location === 'ssh-vps' ? workflowSearch : null, onWorkflowSearchOpened,
         chatLink: chatLink?.location === 'ssh-vps' ? chatLink : null, onChatLinkResult,
         access, accessPending, changeAccess, visible: sshVisible, active: sshVisible, newChatRequest: sshNew,
@@ -385,7 +386,7 @@ try {
       visited.has('local-sdk') ? h(LocalWorkspace, { native, active: !sshVisible, access, accessPending, changeAccess,
         workflowSearch: workflowSearch?.location === 'local-sdk' ? workflowSearch : null, onWorkflowSearchOpened,
         chatLink: chatLink?.location === 'local-sdk' ? chatLink : null, onChatLinkResult,
-        projectCatalog, terminalView: noTerminal, resourcesOpen, setResourcesOpen,
+        projectCatalog, terminalView: noTerminal, resourcesOpen, setResourcesOpen, onQuickSearch: openSearch,
         newChatRequest: localNew, onNewChat: startChat,
         settingsSurface: settingsSurface('local-sdk'),
         componentSetup: { initial: localComponents, welcome: componentWelcome, continue: completeComponentWelcome },

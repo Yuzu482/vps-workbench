@@ -398,7 +398,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
   function Workbench({ projectCatalog, terminalView, active = true, visible = true, resourcesOpen, setResourcesOpen,
     access, accessPending, changeAccess, extensions, agentPresets, workflowStore, onNewChat, newChatRequest = 0,
-    settingsSurface, applicationPreferences, local, chatLink, onChatLinkResult, workflowSearch, onWorkflowSearchOpened }) {
+    settingsSurface, applicationPreferences, local, chatLink, onChatLinkResult, workflowSearch, onWorkflowSearchOpened, onQuickSearch }) {
     const workspaceSnapshot = React.useSyncExternalStore(projectCatalog.subscribe, projectCatalog.getSnapshot);
     const SubscriptionTerminal = React.useSyncExternalStore(terminalView.subscribe, terminalView.getSnapshot);
     const [subscriptionOpen, setSubscriptionOpen] = React.useState(false);
@@ -2503,6 +2503,19 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
               void workflows.example.start('codex', local.profile.model, local.profile.targetId);
             },
           }, '运行示例工作流'))) } : local?.panels;
+    const newChatDisabled = !onNewChat && (!chatEnabled || Boolean(working));
+    const sidebarShortcuts = [
+      ResourceLibrary ? h(SidebarShortcut, { className: 'vc-resource-entry', icon: 'library', label: '项目资源库',
+        detail: '浏览项目里的画板、图片和代码块。', 'aria-haspopup': 'dialog', onClick: () => setResourcesOpen(true) }) : null,
+      workflows ? h(SidebarShortcut, { className: 'vc-resource-entry', icon: 'fork', label: '工作流',
+        detail: workflows.panel.running ? '有工作流正在运行，打开可查看进度。' : '编辑阶段、运行工作流或查看回执。',
+        running: workflows.panel.running, 'aria-haspopup': 'dialog', onClick: workflows.openPanel,
+        disabled: localSdk && providerId !== 'codex' && !workflows.panel.mixed }) : null,
+      h(SidebarShortcut, { className: 'vc-resource-entry vc-playground-entry', icon: 'canvas', label: '设计工作台',
+        detail: designAvailable ? '在画布中编辑画板、查看版本。' : '切换到 Codex 后可打开设计工作台。',
+        disabled: !designAvailable || Boolean(working), onClick: openPlayground,
+        'aria-current': floatingChat ? 'page' : undefined })
+    ];
     return h('div', { ref: workbench, 'data-vps-chat': '', 'data-local-sdk': localSdk ? '' : undefined,
       'data-resizing': resizing, hidden: !visible, inert: !visible,
       'data-subscription-open': showingSubscription,
@@ -2517,6 +2530,12 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         } else cycleAreaFocus(event);
       } },
       h('style', null, css),
+      sidebarActions && !showingSubscription ? h('nav', { className: 'vc-compact-rail vc-rail-shortcuts', 'aria-label': '快捷侧栏' },
+        h(SidebarShortcut, { className: 'vc-compact-new-chat', icon: 'new-chat', label: '新建对话',
+          detail: '在所选位置开始对话。', onClick: onNewChat ?? startNewChat, disabled: newChatDisabled }),
+        onQuickSearch ? h(SidebarShortcut, { className: 'vc-compact-search', icon: 'search', label: '查找会话和资源',
+          detail: '搜索会话、项目、画板和工作流。', 'aria-haspopup': 'dialog', onClick: onQuickSearch }) : null,
+        ...sidebarShortcuts) : null,
       h('aside', {
         className: 'vc-rail', 'data-open': historyOpen, 'data-design': design,
         style: showingSubscription ? { display: 'none' } : undefined,
@@ -2525,19 +2544,9 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         sidebarActions ? h('div', { className: 'vc-rail-content' },
           h('button', {
             type: 'button', className: 'vc-button vc-new vc-sidebar-new vc-primary', onClick: onNewChat ?? startNewChat,
-            disabled: !onNewChat && (!chatEnabled || Boolean(working)),
+            disabled: newChatDisabled,
           }, menuIcon(h, 'new-chat'), h('span', { className: 'vc-sidebar-new-label' }, '新建对话')),
-          h('div', { className: 'vc-rail-shortcuts', role: 'group', 'aria-label': '工作台快捷入口' },
-            ResourceLibrary ? h(SidebarShortcut, { className: 'vc-resource-entry', icon: 'library', label: '项目资源库',
-              detail: '浏览项目里的画板、图片和代码块。', 'aria-haspopup': 'dialog', onClick: () => setResourcesOpen(true) }) : null,
-            workflows ? h(SidebarShortcut, { className: 'vc-resource-entry', icon: 'fork', label: '工作流',
-              detail: workflows.panel.running ? '有工作流正在运行，打开可查看进度。' : '编辑阶段、运行工作流或查看回执。',
-              running: workflows.panel.running, 'aria-haspopup': 'dialog', onClick: workflows.openPanel,
-              disabled: localSdk && providerId !== 'codex' && !workflows.panel.mixed }) : null,
-            h(SidebarShortcut, { className: 'vc-resource-entry vc-playground-entry', icon: 'canvas', label: '设计工作台',
-              detail: designAvailable ? '在画布中编辑画板、查看版本。' : '切换到 Codex 后可打开设计工作台。',
-              disabled: !designAvailable || Boolean(working), onClick: openPlayground,
-              'aria-current': floatingChat ? 'page' : undefined })),
+          h('div', { className: 'vc-rail-shortcuts', role: 'group', 'aria-label': '工作台快捷入口' }, ...sidebarShortcuts),
           h('nav', { className: 'vc-list', 'aria-label': '会话记录' },
             h('h2', { className: 'vc-rail-label vc-session-list-heading' }, '会话'),
             pinnedRows.length ? h('section', { className: 'vc-pinned-sessions', 'aria-label': '置顶会话' },

@@ -52,6 +52,41 @@ async function openPreview(t, { viewport = { width: 1280, height: 720 }, seed, p
   return page;
 }
 
+test('the compact rail keeps chat, search and workspace tools reachable when history is hidden', { timeout: 30_000 }, async (t) => {
+  const page = await openPreview(t);
+  const compact = page.getByRole('navigation', { name: '快捷侧栏', exact: true });
+  const history = page.getByRole('complementary', { name: 'VPS 对话列表' });
+  await history.waitFor();
+  await compact.waitFor({ state: 'hidden' });
+  await (await sidebarButton(page, '纸间书店')).click();
+  await (await sidebarButton(page, '纸间书店 · 周末发布清单')).click();
+  await page.getByRole('button', { name: '收起会话侧栏', exact: true }).click();
+  await history.waitFor({ state: 'hidden' });
+  await compact.waitFor();
+  assert.equal((await compact.boundingBox()).width, 52);
+  assert.deepEqual(await compact.getByRole('button').allTextContents(), ['', '', '', '', '']);
+  const searchButton = compact.getByRole('button', { name: '查找会话和资源', exact: true });
+  await searchButton.press('Enter');
+  const search = page.getByRole('dialog', { name: '本地全局搜索', exact: true });
+  await search.getByRole('searchbox').waitFor();
+  await page.keyboard.press('Escape');
+  await search.waitFor({ state: 'hidden' });
+  await compact.getByRole('button', { name: '项目资源库', exact: true }).press('Enter');
+  const library = page.getByRole('dialog', { name: '项目资源库', exact: true });
+  await library.getByRole('searchbox').waitFor();
+  await page.keyboard.press('Escape');
+  await library.waitFor({ state: 'hidden' });
+  await compact.getByRole('button', { name: '新建对话', exact: true }).press('Enter');
+  await page.getByRole('heading', { name: '开始一段对话', exact: true }).waitFor();
+  await page.getByRole('button', { name: '展开会话侧栏', exact: true }).click();
+  await history.waitFor();
+  await compact.waitFor({ state: 'hidden' });
+  await page.setViewportSize({ width: 365, height: 480 });
+  await compact.waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: '展开会话侧栏', exact: true }).click();
+  await history.getByRole('button', { name: '新建对话', exact: true }).waitFor();
+});
+
 test('subscription rings distinguish exhausted, unavailable and weekly-only observations', { timeout: 30_000 }, async (t) => {
   const page = await openPreview(t);
   await page.route('**/dsh-vps-chat/api/rpc', async (route) => {
@@ -1810,7 +1845,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     await canvas.getByRole('heading', { name: '设计工作台', exact: true }).waitFor();
     await assertWithinViewport(canvas.getByRole('button', { name: '适应全部画板', exact: true }));
 
-    const selectedShortcut = page.locator('.vc-playground-entry[aria-current="page"]');
+    const selectedShortcut = page.locator('.vc-rail .vc-playground-entry[aria-current="page"]');
     assert.notEqual((await fills(selectedShortcut)).background, clear);
 
     const entry = await sidebarButton(page, '项目资源库');
