@@ -116,6 +116,18 @@ test('the provider palette expands inline to the right and puts the current tool
   const trigger = page.getByRole('button', { name: '切换 VPS 执行端', exact: true });
   const palette = page.getByRole('listbox', { name: '已配置的 VPS 执行端', exact: true });
   const badge = trigger.locator('.vc-tool-badge');
+  await page.evaluate(() => {
+    window.fixtureProviderMoves = [];
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (frames, timing) {
+      const animation = animate.call(this, frames, timing);
+      if (this.matches('.vc-tool-option') && frames[0]?.translate) {
+        window.fixtureProviderMoves.push({ label: this.getAttribute('aria-label'),
+          distance: Number.parseFloat(frames[0].translate), duration: animation.effect.getTiming().duration });
+      }
+      return animation;
+    };
+  });
   await trigger.waitFor();
   const anchor = await badge.boundingBox();
   await trigger.click();
@@ -132,6 +144,7 @@ test('the provider palette expands inline to the right and puts the current tool
   await palette.getByRole('option', { name: 'Claude API', selected: true }).waitFor();
   assert.equal(await first.getAttribute('aria-label'), 'Claude API');
   assert.equal(await first.evaluate((button) => document.activeElement === button), true);
+  assert.deepEqual(await page.evaluate(() => window.fixtureProviderMoves), []);
   await page.keyboard.press('Escape');
   await palette.waitFor({ state: 'hidden' });
   assert.equal(await trigger.evaluate((button) => document.activeElement === button), true);
@@ -139,6 +152,16 @@ test('the provider palette expands inline to the right and puts the current tool
   await palette.waitFor();
   assert.equal(await first.getAttribute('aria-label'), 'Claude API');
   await page.locator('.desktop-brand').click();
+  await palette.waitFor({ state: 'hidden' });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await trigger.click();
+  await current.click();
+  await palette.getByRole('option', { name: 'Codex', selected: true }).waitFor();
+  assert.equal(await first.getAttribute('aria-label'), 'Codex');
+  const moves = await page.evaluate(() => window.fixtureProviderMoves);
+  assert.deepEqual(moves.map(({ label, distance }) => [label, Math.sign(distance)]), [['Codex', 1], ['Claude API', -1]]);
+  assert.ok(moves.every(({ duration }) => duration === 180));
+  await page.keyboard.press('Escape');
   await palette.waitFor({ state: 'hidden' });
 });
 

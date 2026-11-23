@@ -45,6 +45,7 @@ export function createProviderPicker(React) {
     const button = React.useRef(null);
     const palette = React.useRef(null);
     const openingIndex = React.useRef(0);
+    const optionPositions = React.useRef(new Map());
     const [open, setOpen] = React.useState(false);
     const current = tools.find((tool) => tool.id === value);
     const options = docked && current ? [current, ...tools.filter((tool) => tool !== current)] : tools;
@@ -109,6 +110,35 @@ export function createProviderPicker(React) {
       if (docked && open && selected >= 0 && palette.current.matches(':popover-open')) focusOption(selected);
     }, [docked, open, value, selected]);
 
+    React.useLayoutEffect(() => {
+      const panel = palette.current;
+      const previous = optionPositions.current;
+      const next = new Map();
+      if (docked && open && panel.matches(':popover-open')) {
+        const { length } = options;
+        const motion = getComputedStyle(panel);
+        const duration = Number.parseFloat(motion.getPropertyValue('--vc-popup-duration'));
+        const easing = motion.getPropertyValue('--vc-motion-curve').trim() || 'ease-out';
+        for (let index = 0; index < length; index++) {
+          const option = panel.children[index + 1];
+          const left = option.offsetLeft;
+          const before = previous.get(option);
+          const inMotion = before?.animation?.playState === 'running';
+          const offset = inMotion ? Number.parseFloat(getComputedStyle(option).translate) || 0 : 0;
+          before?.animation?.cancel();
+          const distance = before ? before.left - left + offset : 0;
+          const animation = duration > 0 && Math.abs(distance) >= 1
+            ? option.animate([{ translate: `${distance}px` }, { translate: '0px' }], { duration, easing })
+            : null;
+          next.set(option, { left, animation });
+        }
+      }
+      for (const [option, { animation }] of previous) {
+        if (!next.has(option)) animation?.cancel();
+      }
+      optionPositions.current = next;
+    }, [docked, open, value, options.length]);
+
     function onPaletteKey(event) {
       if (event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return;
       if (event.key === 'Tab') {
@@ -148,7 +178,7 @@ export function createProviderPicker(React) {
       h('div', {
         ref: palette, id, popover: 'auto', className: 'vc-tool-palette', role: 'listbox',
         'aria-label': '已配置的 VPS 执行端', 'aria-orientation': 'horizontal', onKeyDown: onPaletteKey,
-        'data-selected': selected >= 0, style: { '--vc-selected-index': Math.max(0, selected) },
+        'data-docked': docked, 'data-selected': selected >= 0, style: { '--vc-selected-index': Math.max(0, selected) },
       },
       h('span', { className: 'vc-tool-highlight', 'aria-hidden': true }),
       options.map((tool, index) => h('button', {
@@ -220,6 +250,13 @@ export const providerPickerCss = `
     place-self:stretch; display:grid; place-items:center; min-width:0; padding:0; position:relative;
     border:0; border-radius:999px; background:transparent; color:var(--vc-accent);
     transition:color var(--vc-control-duration) ease, background-color var(--vc-control-duration) ease;
+  }
+  [data-vps-chat] .vc-tool-palette[data-docked=true] .vc-tool-highlight {display:none}
+  [data-vps-chat] .vc-tool-palette[data-docked=true] .vc-tool-option[aria-selected=true] {
+    z-index:1; isolation:isolate;
+  }
+  [data-vps-chat] .vc-tool-palette[data-docked=true] .vc-tool-option[aria-selected=true]::before {
+    content:''; position:absolute; inset:0 2px; z-index:-1; border-radius:inherit; background:var(--vc-accent);
   }
   [data-vps-chat] .vc-tool-palette[data-inline-rail] .vc-tool-option .vc-tool-icon {width:24px; height:24px}
   [data-vps-chat] .vc-tool-option[aria-disabled=true] {opacity:1}
