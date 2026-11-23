@@ -328,11 +328,11 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 }
 #root .vc-sidebar-actions .vc-sidebar-new {
   position: relative; display: flex; justify-content: center; align-items: center;
-  flex: none; width: auto; min-inline-size: 108px; height: 40px; padding: 0 8px;
+  flex: none; width: auto; min-inline-size: 116px; height: 40px; padding: 0 8px;
   border-radius: 8px;
 }
 #root .vc-sidebar-new .vc-menu-icon {
-  position: absolute; inset-inline-start: 6px; width: 16px; height: 16px;
+  position: absolute; inset-inline-start: 8px; width: 18px; height: 18px;
 }
 .vc-sidebar-new-label { text-align: center; line-height: 1.25; }
 #root .vc-sidebar-actions .vc-tool-picker { inline-size: 100%; min-inline-size: 0; flex: 0 1 auto; }
@@ -346,11 +346,11 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 8px;
   background: var(--vc-surface); color: var(--vc-accent);
 }
-#root .vc-tool-badge .vc-tool-icon { width: 25px; height: 25px; }
+#root .vc-tool-badge .vc-tool-icon { width: 24px; height: 24px; }
 .vc-tool-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vc-tool-caret {
   position: absolute; inset-inline-end: 9px; inset-block-start: calc(50% - 2px);
-  width: 6px; height: 6px; color: var(--vc-accent);
+  width: 6px; height: 6px; color: var(--vc-muted);
   border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(225deg);
 }
 #root .vc-sidebar-settings {
