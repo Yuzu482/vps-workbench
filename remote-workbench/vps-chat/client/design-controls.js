@@ -1,3 +1,4 @@
+import { compareArtboards, comparisonLabels, markComparisonLayers } from './design-comparison.js';
 import {
   designBriefFields, designStyleLevels, designText, makeDesignReference, readDesignSystems, saveDesignSystem,
 } from './design-state.js';
@@ -265,55 +266,119 @@ export function createDesignControls(React) {
       h('button', { type: 'button', className: 'vc-button', onClick: dismiss, disabled: busy }, busy ? '正在读取' : '完成')));
   }
 
-  function ComparisonSide({ label, version, firstBoard, width }) {
-    const stage = React.useRef(null);
-    const [index, setIndex] = React.useState(Math.min(firstBoard, version.boards.length) - 1);
-    const [space, setSpace] = React.useState({ width, height: 300 });
-    const board = version.boards[index];
-    const scale = Math.min(1, space.width / width);
-    React.useLayoutEffect(() => {
-      const observer = new ResizeObserver(([entry]) => {
-        const { width, height } = entry.contentRect;
-        if (width > 0 && height > 0) setSpace({ width, height });
-      });
-      observer.observe(stage.current);
-      return () => observer.disconnect();
-    }, []);
+  function ComparisonSide({ label, number, entry, width, scale, stage, height, changes, side, picked, toggle, pending }) {
+    const html = React.useMemo(() => entry
+      ? markComparisonLayers(entry.preview.html, changes, side) : '', [entry, changes, side]);
     return h('section', { 'aria-label': label },
-      h('header', null, h('strong', null, `${label} · 版本 ${version.number}`),
-        h('select', { value: index, 'aria-label': `${label}画板`, onChange: (event) => setIndex(Number(event.target.value)) },
-          version.boards.map(({ title }, offset) => h('option', { key: offset, value: offset }, title)))),
-      h('div', { ref: stage, className: 'vc-design-comparison-frame' }, board?.html
-        ? h('iframe', { title: `${label}画板预览`, srcDoc: board.html, sandbox: '', referrerPolicy: 'no-referrer',
-          style: { width, height: space.height / scale, transform: `scale(${scale})` } })
-        : h('p', null, '这张画板暂无可用预览。')));
+      h('header', null, h('strong', null, `${label} · 版本 ${number}`),
+        h('span', { className: 'vc-comparison-board-title' }, entry?.preview.title ?? '此侧无对应画板'),
+        entry?.preview.html ? h('label', { className: 'vc-comparison-pick' },
+          h('input', { type: 'checkbox', checked: picked, onChange: toggle, disabled: pending,
+            'aria-label': `带入${label}画板 ${entry.preview.title}` }), '带入画板') : null),
+      h('div', { ref: stage, className: 'vc-design-comparison-frame', tabIndex: 0, 'aria-label': `${label}预览滚动区` },
+        html ? h('div', { className: 'vc-comparison-sized-frame', style: { width: width * scale, height } },
+          h('iframe', { title: `${label}画板预览`, tabIndex: -1, srcDoc: html, sandbox: '', referrerPolicy: 'no-referrer',
+            style: { width, height: height / Math.min(1, scale), transform: `scale(${scale})` } }))
+          : h('p', null, '无可用预览')));
   }
 
-  function DesignComparison({ original, candidate, firstBoard, width, close }) {
+  function DesignComparison({ original, candidate, firstBoard, width, close, carry }) {
     const ref = React.useRef(null);
+    const beforeStage = React.useRef(null);
+    const afterStage = React.useRef(null);
     const cancelMotion = React.useRef(null);
+    const busy = React.useRef(false);
+    const pairs = React.useMemo(() => compareArtboards(original, candidate), [original, candidate]);
+    const [pairIndex, setPairIndex] = React.useState(() => Math.max(0, pairs.findIndex(({ after }) => after?.index === firstBoard)));
+    const [zoom, setZoom] = React.useState('fit');
+    const [size, setSize] = React.useState({ width, height: 240 });
+    const [selected, setSelected] = React.useState([]);
+    const [pending, setPending] = React.useState(false);
+    const [error, setError] = React.useState('');
+    const pair = pairs[pairIndex];
+    const scale = zoom === 'fit' ? Math.min(1, size.width / width) : Number(zoom) / 100;
     React.useLayoutEffect(() => {
       const dialog = ref.current;
       dialog.showModal();
+      const stages = [beforeStage.current, afterStage.current];
+      const resize = () => {
+        if (!dialog.open) return;
+        setSize({ width: Math.max(1, Math.min(...stages.map((stage) => stage.clientWidth))),
+          height: Math.max(1, Math.min(...stages.map((stage) => stage.clientHeight))) });
+      };
+      const observer = new ResizeObserver(resize);
+      for (const stage of stages) observer.observe(stage);
+      resize();
       return () => {
+        observer.disconnect();
         cancelMotion.current?.();
         if (dialog.open) dialog.close();
       };
     }, []);
+
     function dismiss() {
-      if (!ref.current.open) return;
+      if (busy.current || !ref.current?.open) return;
       ref.current.close();
       ref.current.inert = true;
       cancelMotion.current = afterPopupMotion(ref.current, close);
     }
+
+    function toggle(entry) {
+      setError('');
+      if (selected.includes(entry)) setSelected(selected.filter((item) => item !== entry));
+      else if (selected.length === 6) setError('一个新版本最多带入 6 张画板。');
+      else setSelected([...selected, entry]);
+    }
+
+    async function save() {
+      if (busy.current || !selected.length) return;
+      busy.current = true;
+      setPending(true);
+      setError('');
+      try {
+        await carry(selected);
+        busy.current = false;
+        dismiss();
+      } catch (failure) {
+        setError(failure.message);
+      } finally {
+        busy.current = false;
+        setPending(false);
+      }
+    }
+
+    const side = (entry, options) => h(ComparisonSide, { entry, width, scale, height: size.height, changes: pair.layers,
+      picked: selected.includes(entry), toggle: () => toggle(entry), pending, ...options });
     return h('dialog', { ref, className: 'vc-settings vc-design-comparison vc-popup-motion', 'aria-label': '对比来源版本',
       onCancel: (event) => { event.preventDefault(); dismiss(); } },
-    h('h2', null, '对比来源版本'),
-    h('div', { className: 'vc-design-comparison-grid' },
-      h(ComparisonSide, { label: '来源', version: original, firstBoard, width }),
-      h(ComparisonSide, { label: '当前', version: candidate, firstBoard, width })),
-    h('div', { className: 'vc-dialog-actions' },
-      h('button', { type: 'button', className: 'vc-button', onClick: dismiss }, '完成')));
+      h('h2', null, '对比来源版本'),
+      h('div', { className: 'vc-comparison-controls' },
+        h('label', null, '画板变化', h('select', { 'aria-label': '画板变化', value: pairIndex, onChange: (event) => setPairIndex(Number(event.target.value)) },
+          pairs.map(({ before, after, status }, offset) => h('option', { key: offset, value: offset },
+            `${comparisonLabels[status]} · ${after?.preview.title ?? before.preview.title}`)))),
+        h('label', null, '同步缩放', h('select', { 'aria-label': '同步缩放', value: zoom, onChange: (event) => setZoom(event.target.value) },
+          [['fit', '适应两栏'], ['25', '25%'], ['50', '50%'], ['75', '75%'], ['100', '100%'], ['125', '125%']].map(([value, label]) =>
+            h('option', { key: value, value }, label))))),
+      h('div', { className: 'vc-design-comparison-grid' },
+        side(pair.before, { label: '父版', number: original.number, stage: beforeStage, side: 'left' }),
+        side(pair.after, { label: '子版', number: candidate.number, stage: afterStage, side: 'right' })),
+      h('details', { className: 'vc-comparison-changes' },
+        h('summary', null, `图层变化（${pair.layers.length}）`),
+        pair.layers.length ? h('ul', null, pair.layers.map(({ status, left, right }, offset) =>
+          h('li', { key: offset }, h('strong', { 'data-change': status }, comparisonLabels[status]), ' ',
+            left && right && left.label !== right.label ? `${left.label} → ${right.label}` : right?.label ?? left?.label)))
+          : h('p', null, pair.status === 'changed' ? '画板的标题、顺序、样式表或整体结构有变化。' : '没有检测到可标记的图层变化。')),
+      selected.length ? h('div', { className: 'vc-comparison-changes' },
+        h('span', null, '带入顺序'),
+        h('ol', { 'aria-label': '带入顺序' }, selected.map((entry) => h('li', { key: `${entry.versionId}:${entry.index}` },
+          h('button', { type: 'button', className: 'vc-button', disabled: pending, onClick: () => toggle(entry),
+            'aria-label': `移除${entry.versionId === original.id ? '父版' : '子版'}画板 ${entry.preview.title}` },
+          `${entry.versionId === original.id ? '父版' : '子版'} · ${entry.preview.title} ×`))))) : null,
+      error ? h('p', { className: 'vc-canvas-status', role: 'alert' }, error) : null,
+      h('div', { className: 'vc-dialog-actions' },
+        h('button', { type: 'button', className: 'vc-button', onClick: dismiss, disabled: pending }, '完成'),
+        h('button', { type: 'button', className: 'vc-button vc-primary', onClick: () => void save(), disabled: pending || !selected.length },
+          pending ? '正在保存…' : `带入新版本（${selected.length}）`)));
   }
 
   function LayerInspector({ layers, layer, edit, board, select, patch, add, duplicate, align, addComment, removeComment,

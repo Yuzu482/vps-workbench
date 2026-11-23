@@ -20,17 +20,34 @@ export function extractResources(scope, row, session, { storage, includeBoardTex
   const design = designMode ? readDesignProject(designKey, storage) : null;
   const items = [];
   let partial = Boolean(design?.warning);
+  const resource = (turnId, offset, asset) => ({
+    id: `${row.id}:${turnId}:${offset}`,
+    sessionId: row.id,
+    sessionTitle: session.title || row.title || '未命名会话',
+    turnId,
+    projectId: row.projectId,
+    ...asset,
+  });
+  function readBoard(source, turnId, boardIndex, baseline) {
+    const board = createArtboard(source, design.project.versions[turnId]?.[boardIndex] ?? baseline, `画板 ${boardIndex}`);
+    if (!board) {
+      partial = true;
+      return null;
+    }
+    return { kind: 'design', title: board.title, boardIndex, source: board.html,
+      ...(includeBoardText && { text: board.layers.map(({ text }) => text).filter(Boolean).join('\n') }) };
+  }
+  const localVersions = design?.project.localVersions ?? [];
+  for (const [versionIndex, { id, sources }] of [...localVersions.entries()].reverse()) {
+    sources.forEach((source, offset) => {
+      const board = readBoard(source, id, offset + 1);
+      if (board) items.push(resource(id, offset, { ...board, title: `${board.title} · 本机版本 ${versionIndex + 1}` }));
+    });
+  }
   for (const turn of session.turns.slice().reverse()) {
     if (turn.state !== 'complete' || typeof turn.id !== 'string' || typeof turn.reply !== 'string') continue;
     let resourceIndex = 0;
-    const add = (asset) => items.push({
-      id: `${row.id}:${turn.id}:${resourceIndex++}`,
-      sessionId: row.id,
-      sessionTitle: session.title || row.title || '未命名会话',
-      turnId: turn.id,
-      projectId: row.projectId,
-      ...asset,
-    });
+    const add = (asset) => items.push(resource(turn.id, resourceIndex++, asset));
     let tokens;
     try {
       tokens = Lexer.lex(turn.reply, { gfm: true });
@@ -45,14 +62,8 @@ export function extractResources(scope, row, session, { storage, includeBoardTex
       const htmlFences = tokens.filter((token) => isClosedHtmlFence(token) && token.text.trim());
       sources.forEach((source, offset) => {
         const boardIndex = offset + 1;
-        const board = createArtboard(source, design.project.versions[turn.id]?.[boardIndex] ?? revision?.boards[boardIndex],
-          `画板 ${boardIndex}`);
-        if (!board) {
-          partial = true;
-          return;
-        }
-        const asset = { kind: 'design', title: board.title, boardIndex, source: board.html,
-          ...(includeBoardText && { text: board.layers.map(({ text }) => text).filter(Boolean).join('\n') }) };
+        const asset = readBoard(source, turn.id, boardIndex, revision?.boards[boardIndex]);
+        if (!asset) return;
         if (revision) add(asset);
         else boards.set(htmlFences[offset], asset);
       });

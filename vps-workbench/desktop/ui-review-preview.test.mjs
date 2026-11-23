@@ -1726,3 +1726,90 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     }
   });
 }
+
+test('design comparison aligns parent and child, shares zoom, and durably carries selected boards', { timeout: 45_000 }, async (t) => {
+  const page = await openPreview(t);
+  const requests = [];
+  await page.route('**/dsh-vps-chat/api/rpc', (route) => {
+    requests.push(route.request().postDataJSON().op);
+    return route.continue();
+  });
+  const scene = await openDesign(page);
+  const child = scene.getByRole('button', { name: '纸间书店 · 青色分支', exact: true });
+  const comparison = page.getByRole('dialog', { name: '对比来源版本', exact: true });
+  const openComparison = async () => {
+    await page.getByRole('button', { name: '对比来源版本', exact: true }).click();
+    await comparison.waitFor();
+  };
+  await child.click();
+  await openComparison();
+  const boardChange = comparison.getByLabel('画板变化', { exact: true });
+  const options = await boardChange.locator('option').allTextContents();
+  assert.deepEqual(options, ['修改 · 纸间书店 · 青色分支', '移除 · 纸间书店 · 活动详情']);
+  const left = comparison.getByTitle('父版画板预览');
+  const right = comparison.getByTitle('子版画板预览');
+  const zoom = comparison.getByLabel('同步缩放', { exact: true });
+  const getScales = () => comparison.locator('iframe').evaluateAll((frames) => frames.map((frame) => frame.style.transform));
+  await zoom.selectOption('50');
+  assert.deepEqual(await getScales(), ['scale(0.5)', 'scale(0.5)']);
+  await comparison.getByText('图层变化（1）', { exact: true }).click();
+  await comparison.getByText('查看本月荐书 → 浏览秋日荐书', { exact: false }).waitFor();
+  assert.equal(await right.getAttribute('sandbox'), '');
+  assert.match(await left.getAttribute('srcdoc'), /outline:2px solid/);
+  assert.match(await right.getAttribute('srcdoc'), /outline:2px solid/);
+  for (const width of [420, 365]) {
+    await page.setViewportSize({ width, height: width === 365 ? 480 : 640 });
+    await zoom.selectOption('fit');
+    const boxes = [await left.boundingBox(), await right.boundingBox()];
+    assert.ok(boxes[0].x < boxes[1].x);
+    assert.ok(boxes[0].y === boxes[1].y);
+    assert.equal(...await getScales());
+    await assertWithinViewport(zoom);
+  }
+  const save = comparison.getByRole('button', { name: '带入新版本（2）', exact: true });
+  await comparison.getByRole('checkbox', { name: '带入子版画板 纸间书店 · 青色分支' }).check();
+  await boardChange.selectOption('1');
+  await comparison.getByText('此侧无对应画板', { exact: true }).waitFor();
+  await comparison.getByRole('checkbox', { name: '带入父版画板 纸间书店 · 活动详情' }).check();
+  assert.deepEqual(await comparison.getByRole('list', { name: '带入顺序' }).getByRole('button').allTextContents(),
+    ['子版 · 纸间书店 · 青色分支 ×', '父版 · 纸间书店 · 活动详情 ×']);
+  await page.evaluate(() => {
+    const savePreference = window.vpsWorkbench.setPreference;
+    window.vpsWorkbench.setPreference = async (key, value) => {
+      if (key.startsWith('dsh-vps-design:v1:') && JSON.parse(value).localVersions?.length) throw new Error('fixture write failure');
+      return savePreference(key, value);
+    };
+    window.restoreDesignSave = () => { window.vpsWorkbench.setPreference = savePreference; };
+  });
+  await save.press('Enter');
+  await comparison.getByRole('alert').getByText(/本机保存失败/).waitFor();
+  assert.equal(await save.isEnabled(), true);
+  await page.evaluate(() => window.restoreDesignSave());
+  await save.press('Enter');
+  await comparison.waitFor({ state: 'hidden' });
+  const stored = () => page.evaluate((key) => {
+    const { preferences } = JSON.parse(sessionStorage.getItem(key));
+    return Object.entries(preferences).filter(([name]) => name.startsWith('dsh-vps-design:v1:'))
+      .flatMap(([, value]) => JSON.parse(value).localVersions ?? []);
+  }, previewStorageKey);
+  const [saved] = await stored();
+  assert.equal((await stored()).length, 1);
+  assert.deepEqual(saved.origins.map(({ versionId, index }) => [versionId.slice(-3), index]), [['203', 1], ['102', 2]]);
+  assert.equal(saved.parentId.slice(-3), '203');
+  assert.match(saved.sources[0], /浏览秋日荐书/);
+  assert.match(saved.sources[1], /沿江散步读书会/);
+  await page.reload();
+  const reloadedScene = await openDesign(page);
+  await reloadedScene.locator(`[data-board-id="${saved.id}:1"]`).waitFor();
+  await reloadedScene.locator(`[data-board-id="${saved.id}:2"]`).waitFor();
+  assert.deepEqual(await stored(), [saved]);
+  await page.keyboard.press('Control+k');
+  const search = page.getByRole('dialog', { name: '本地全局搜索', exact: true });
+  await search.getByRole('searchbox').fill('浏览秋日荐书');
+  await search.getByRole('button', { name: /画板.*青色分支.*本机版本 1/ }).click();
+  await search.getByRole('button', { name: '在画布中打开', exact: true }).click();
+  await search.waitFor({ state: 'hidden' });
+  const current = page.getByLabel('设计版本', { exact: true });
+  await current.locator(`option:checked[value="${saved.id}"]`).waitFor({ state: 'attached' });
+  assert.ok(!requests.includes('send'));
+});

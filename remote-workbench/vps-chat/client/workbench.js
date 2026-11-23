@@ -2600,7 +2600,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             openCanvasMenu: floatingChat ? openCanvasMenu : undefined, openExportMenu: openCanvasMenu, copyBoardHtml,
             canGenerate: remoteEnabled && designAvailable && !working, canBranch: canBranchDesign,
             readDesignRevision: sidebarActions ? readDesignRevision : undefined,
-            scopedLayerRevisions: Boolean(sidebarActions && saveConversationPreference),
+            scopedLayerRevisions: Boolean(sidebarActions && saveConversationPreference), savePreference: saveConversationPreference,
             onContext: setDesignSubmission,
             onCycleFocus: cycleAreaFocus,
             submitted: designReceipt?.targetId === scope && designReceipt.sessionId === selected ? designReceipt.turnId : null,

@@ -1,8 +1,7 @@
 import { Lexer } from 'marked';
 import { parse } from 'parse5';
-import { designText, emptyBoard, rasterDataUrl } from './design-state.js';
+import { designText, emptyBoard, rasterDataUrl, maxArtboardSourceLength } from './design-state.js';
 
-const maxSourceLength = 128 * 1024;
 const maxElementDepth = 100;
 const maxLayers = 600;
 const htmlNamespace = 'http://www.w3.org/1999/xhtml';
@@ -56,7 +55,7 @@ export function isClosedHtmlFence(token) {
 }
 
 export function extractHtmlFences(markdown, limit = 6) {
-  if (markdown.length > maxSourceLength) return [];
+  if (markdown.length > maxArtboardSourceLength) return [];
   try {
     return Lexer.lex(markdown, { gfm: true }).filter((token) =>
       isClosedHtmlFence(token) && token.text.trim()).slice(0, limit).map((token) => token.text);
@@ -180,7 +179,7 @@ function serialize(node, state, depth = 0, visible = true) {
 }
 
 export function createArtboard(source, board = emptyBoard, fallbackTitle = '画板', { prototypeDestination } = {}) {
-  if (!source || source.length > maxSourceLength) return null;
+  if (!source || source.length > maxArtboardSourceLength) return null;
   try {
     const parsed = parse(source, { scriptingEnabled: false });
     const html = parsed.childNodes.find((node) => node.tagName === 'html');

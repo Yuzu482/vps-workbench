@@ -1,9 +1,10 @@
 import { createDesignExport, downloadDesign } from '../design-export/index.js';
 import { createArtboard, extractHtmlFences } from './design-preview.js';
+import { carriedBoard } from './design-comparison.js';
 import { createDesignControls } from './design-controls.js';
 import {
   buildDesignContext, emptyBoard, maxLayerEdits, normalizeDesignStyle, normalizeEdit, readDesignProject, saveDesignProject,
-  setDesignBoard, setPlaygroundLink, setPlaygroundPositions,
+  addLocalDesignVersion, serializeDesignProject, setDesignBoard, setPlaygroundLink, setPlaygroundPositions,
 } from './design-state.js';
 import { createDesignPlayground } from './design-playground.js';
 import { designExportMenu } from './design-export-menu.js';
@@ -83,17 +84,25 @@ const canvasCss = `
   [data-vps-chat] .vc-style-endpoints {display:flex; justify-content:space-between; color:var(--vc-muted); font-size:11px}
   [data-vps-chat] .vc-design-style-popover p {margin:8px 0 0; line-height:1.5}
   [data-vps-chat] .vc-design-style-popover .vc-style-scope {color:var(--vc-muted); font-size:11px}
-  [data-vps-chat] .vc-design-comparison {width:min(1040px,calc(100vw - 24px)); max-width:none; max-height:88vh; overflow:auto}
-  [data-vps-chat] .vc-design-comparison-grid {display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px}
-  [data-vps-chat] .vc-design-comparison-grid section {min-width:0; border:1px solid var(--vc-line); border-radius:8px; overflow:hidden}
-  [data-vps-chat] .vc-design-comparison-grid header {display:grid; gap:6px; padding:9px; background:var(--vc-surface)}
-  [data-vps-chat] .vc-design-comparison-grid select {width:100%; min-width:0; background:var(--vc-surface); color:var(--vc-ink)}
-  [data-vps-chat] .vc-design-comparison-frame {height:clamp(200px,46vh,480px); overflow:hidden; background:#fff}
-  [data-vps-chat] .vc-design-comparison-frame iframe {display:block; border:0; transform-origin:top left}
-  [data-vps-chat] .vc-design-comparison-frame p {padding:12px; color:var(--vc-muted); background:var(--vc-surface); margin:0}
-  @media (max-width:620px) {
-    [data-vps-chat] .vc-design-comparison-grid {grid-template-columns:1fr}
-  }
+  [data-vps-chat] .vc-design-comparison {width:min(1120px,calc(100vw - 24px)); max-width:none; max-height:90vh; overflow:auto}
+  [data-vps-chat] .vc-design-comparison h2 {margin:0 0 10px}
+  [data-vps-chat] .vc-comparison-controls {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;margin-bottom:10px}
+  [data-vps-chat] .vc-comparison-controls label {display:grid;gap:4px;min-width:0;color:var(--vc-muted)}
+  [data-vps-chat] .vc-comparison-controls select {width:100%;min-width:0;padding:5px;color:var(--vc-ink);background:var(--vc-surface);border:1px solid var(--vc-line);border-radius:6px}
+  [data-vps-chat] .vc-design-comparison-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  [data-vps-chat] .vc-design-comparison-grid section {display:flex;flex-direction:column;min-width:0;border:1px solid var(--vc-line);border-radius:8px;overflow:hidden}
+  [data-vps-chat] .vc-design-comparison-grid header {display:grid;gap:4px;padding:8px;background:var(--vc-surface)}
+  [data-vps-chat] .vc-comparison-board-title {overflow-wrap:anywhere}
+  [data-vps-chat] .vc-comparison-pick {display:flex;align-items:center;gap:4px}
+  [data-vps-chat] .vc-comparison-pick input {accent-color:var(--vc-accent)}
+  [data-vps-chat] .vc-design-comparison-frame {margin-top:auto;height:clamp(144px,38vh,410px);overflow:auto;background:#fff}
+  [data-vps-chat] .vc-comparison-sized-frame {overflow:hidden}
+  [data-vps-chat] .vc-design-comparison-frame iframe {display:block;border:0;transform-origin:top left}
+  [data-vps-chat] .vc-design-comparison-frame p {height:100%;box-sizing:border-box;padding:10px;color:var(--vc-muted);background:var(--vc-surface);margin:0}
+  [data-vps-chat] .vc-comparison-changes {margin:8px 0;overflow-wrap:anywhere}
+  [data-vps-chat] .vc-comparison-changes ul {max-height:112px;overflow:auto;margin:4px 0;padding-inline-start:22px}
+  [data-vps-chat] .vc-comparison-changes ol {display:flex;flex-wrap:wrap;gap:4px 8px;margin:4px 0;padding-left:20px}
+  [data-vps-chat] .vc-comparison-changes [data-change] {color:var(--vc-accent)}
   @container (max-width:450px) {
     [data-vps-chat] :is(.vc-design-style-trigger,.vc-design-review-trigger) {justify-content:center; min-width:30px}
     [data-vps-chat] :is(.vc-design-style-trigger,.vc-design-review-trigger) > span:not(.vc-menu-icon) {display:none}
@@ -204,7 +213,7 @@ function collectPlaygroundBoards(versions, saved, previous) {
       }
       const preview = createArtboard(source, board, `画板 ${index}`);
       if (preview?.html) next.set(id, { source, board, id, index, versionId: version.id, version: version.number,
-        provisional: version.provisional, ...preview });
+        provisional: version.provisional, localCopy: version.localCopy, ...preview });
     });
   }
   return next;
@@ -220,7 +229,7 @@ export function createDesignCanvas(React) {
   return function DesignCanvas({ id, turns, generating, loading, targetId, sessionId, onContext, onCycleFocus,
     submitted, waitingForReceipt, request, materialsOpen, setMaterialsOpen, playgroundEnabled, playgroundOpen,
     setPlaygroundOpen, canGenerate, canBranch, readDesignRevision, onPrompt, conversation, openCanvasMenu, openExportMenu, copyBoardHtml,
-    scopedLayerRevisions }) {
+    scopedLayerRevisions, savePreference }) {
     const floatingConversation = Boolean(conversation);
     const storageKey = `dsh-vps-design:v1:${targetId}:${sessionId}`;
     const [{ project, warning }, setSaved] = React.useState(() => readDesignProject(storageKey));
@@ -273,9 +282,14 @@ export function createDesignCanvas(React) {
     }, [turns, olderTurns]);
     const versionCache = React.useMemo(() => collectVersions(versionTurns, previousVersions.current, playgroundOpen, playgroundEnabled, storageKey),
       [versionTurns, playgroundOpen, playgroundEnabled, storageKey]);
-    const { versions } = versionCache;
+    const nativeVersions = versionCache.versions;
+    const localVersions = React.useMemo(() => (project.localVersions ?? []).map((version, offset) => ({
+      ...version, number: `本机 ${offset + 1}`, localCopy: true,
+    })), [project.localVersions]);
+    const versions = React.useMemo(() => [...nativeVersions, ...localVersions], [nativeVersions, localVersions]);
+    const isLocalCopy = (id) => localVersions.some((version) => version.id === id);
     const selected = versions.find((version) => version.id === selectedVersion);
-    const active = selected ?? versions.at(-1);
+    const active = selected ?? nativeVersions.at(-1) ?? localVersions.at(-1);
     const index = selectedBoard?.version === active?.id ? selectedBoard?.index ?? 1 : active?.revisedBoardIndex ?? 1;
     const boardKey = active ? `${active.id}:${index}` : '';
     const board = boardEdits(active, project.versions, index);
@@ -314,10 +328,11 @@ export function createDesignCanvas(React) {
           revision: playgroundTarget.revision, retryReason: playgroundTarget.retryReason, fork: base?.fork }
           : playgroundTarget?.continueLabel ? { continueBranch: true } : null;
       const sourceId = base?.parentTurnId ?? targetBoard?.versionId;
-      const sourceVersion = sourceId ? versions.find((entry) => entry.id === sourceId) : active;
+      const sourceVersion = sourceId ? versions.find((entry) => entry.id === sourceId) :
+        active?.localCopy ? nativeVersions.at(-1) : active;
       const attachApproved = sourceVersion?.initialBoards && (branch?.continueBranch || !playgroundTarget);
-      const sourceBoards = sourceVersion === active || !(choices.revision || attachApproved) ? boards
-        : collectArtboards(sourceVersion, project.versions).boards;
+      const sourceBoards = sourceVersion === active || (!active?.localCopy && !(choices.revision || attachApproved))
+        ? boards : collectArtboards(sourceVersion, project.versions).boards;
       const target = attachApproved ? { ...branch, approvedBoards: sourceBoards.flatMap((preview, offset) => preview.html
         ? [{ ...preview, versionId: sourceVersion.id, version: sourceVersion.number, index: offset + 1,
           board: boardEdits(sourceVersion, project.versions, offset + 1) }] : []) } : branch;
@@ -335,8 +350,12 @@ export function createDesignCanvas(React) {
         links: effectiveLinks.filter(({ from }) => from.startsWith(`${sourceVersion.id}:`)),
       } : undefined;
       return { ...result, base, revision };
-    }, [project, active, boards, choices, targetBoard, playgroundTarget, playgroundBoards, versions, playgroundEnabled, effectiveLinks]);
-    const nodes = React.useMemo(() => designVersionNodes(versionHistory, turns, versions), [versionHistory, turns, versions]);
+    }, [project, active, boards, choices, targetBoard, playgroundTarget, playgroundBoards, versions, nativeVersions, playgroundEnabled, effectiveLinks]);
+    const nodes = React.useMemo(() => [
+      ...designVersionNodes(versionHistory, turns, nativeVersions),
+      ...localVersions.map(({ id, parentId, number }) => ({ id, parentId, number, title: '带入的画板',
+        localCopy: true, status: 'ready', canContinue: false })),
+    ], [versionHistory, turns, nativeVersions, localVersions]);
     const lastNativeTurn = turns.at(-1);
     const lastRevision = versionCache.replies.get(lastNativeTurn?.id)?.revision;
     const retryLayer = lastRevision?.retryTarget;
@@ -389,7 +408,7 @@ export function createDesignCanvas(React) {
         return;
       }
       openedRequest.current = request;
-      setSelectedVersion(versions.at(-1).id === request.turnId ? '' : request.turnId);
+      setSelectedVersion(nativeVersions.at(-1)?.id === request.turnId ? '' : request.turnId);
       const index = request.boardIndex;
       setSelectedBoard(Number.isInteger(index) && index >= 1 && index <= version.sources.length
         ? { version: version.id, index } : null);
@@ -678,7 +697,8 @@ export function createDesignCanvas(React) {
 
     function comparisonSource(id) {
       const parentId = nodes.find((entry) => entry.id === id && entry.status === 'ready')?.parentId;
-      return nodes.find((entry) => entry.id === parentId && entry.status === 'ready');
+      return nodes.find((entry) => entry.id === parentId && entry.status === 'ready') ??
+        (parentId && isLocalCopy(id) ? { id: parentId } : undefined);
     }
 
     async function compareVersion(id) {
@@ -689,14 +709,44 @@ export function createDesignCanvas(React) {
       const original = await resolveVersion(source.id);
       if (!original) return;
       const capture = (version) => ({
-        number: version.number, boards: collectArtboards(version, latestProject.current.versions).boards,
+        id: version.id, number: version.number, origins: version.origins,
+        entries: collectArtboards(version, latestProject.current.versions).entries,
       });
       setComparison({ original: capture(original), candidate: capture(candidate), firstBoard: id === active?.id ? index : 1, width });
     }
 
+    async function carryComparisonBoards(entries) {
+      const id = globalThis.crypto.randomUUID();
+      const origins = entries.map(({ versionId, index }) => ({ versionId, index }));
+      const destinations = new Map(origins.map(({ versionId, index }, offset) =>
+        [`${versionId}:${index}`, `${id}:${offset + 1}`]));
+      const current = latestProject.current;
+      const overrides = [...inheritedLinks, ...current.playground.links];
+      const copies = entries.map(({ source, board, versionId, index }) => {
+        const currentBoard = current.versions[versionId]?.[index] ?? board;
+        return { board: currentBoard, ...carriedBoard(source, createArtboard(source)?.html ?? '',
+          `${versionId}:${index}`, overrides, destinations) };
+      });
+      const next = addLocalDesignVersion(current, {
+        id, parentId: comparison.candidate.id, origins, sources: copies.map(({ source }) => source),
+      }, copies.map(({ board }) => board), copies.flatMap(({ links }) => links));
+      const serialized = serializeDesignProject(next);
+      try {
+        if (savePreference) await savePreference(storageKey, serialized);
+        else if (saveDesignProject(storageKey, next)) throw new Error('storage');
+      } catch {
+        throw new Error('本机保存失败。选中的画板仍保留，可以再试一次。');
+      }
+      latestProject.current = next;
+      setSaved({ project: next, warning: '' });
+      setFollowSubmitted(null);
+      clearVersionTarget();
+      chooseVersion(id);
+    }
+
     async function stageVersionBranch(id, fork) {
       const node = nodes.find((entry) => entry.id === id && entry.status === 'ready');
-      if (!canBranch || waitingForReceipt || loadingVersion || !node || (!fork && !node.canContinue)) return;
+      if (!canBranch || waitingForReceipt || loadingVersion || !node || node.localCopy || (!fork && !node.canContinue)) return;
       const version = await resolveVersion(id);
       if (!version) return;
       const versionBoards = fork ? [...collectPlaygroundBoards([version], latestProject.current.versions,
@@ -731,7 +781,7 @@ export function createDesignCanvas(React) {
 
     function attachPlaygroundBoard(id, intent, layerId, suggestion, retryReason) {
       const entry = findPlaygroundBoard(id);
-      if (!entry || entry.provisional || !canGenerate || generating || waitingForReceipt ||
+      if (!entry || entry.provisional || isLocalCopy(entry.versionId) || !canGenerate || generating || waitingForReceipt ||
           (readDesignRevision && !canBranch) || (layerId && !entry.layers.some((entry) => entry.id === layerId))) return;
       selectPlaygroundBoard(id, layerId);
       const base = designBaseFor(entry.versionId);
@@ -748,8 +798,8 @@ export function createDesignCanvas(React) {
     function openBoardMenu(event, anchor, entry, { layerId, ...placement } = {}) {
       const { id, html, provisional, versionId } = entry;
       const editingLocked = provisional || generating || loading || waitingForReceipt;
-      const generationLocked = editingLocked || !canGenerate || Boolean(readDesignRevision && !canBranch);
-      const forkLocked = editingLocked || !canBranch || loadingVersion ||
+      const generationLocked = editingLocked || isLocalCopy(versionId) || !canGenerate || Boolean(readDesignRevision && !canBranch);
+      const forkLocked = editingLocked || isLocalCopy(versionId) || !canBranch || loadingVersion ||
         !nodes.some((node) => node.id === versionId && node.status === 'ready');
       const layerItems = layerId && entry.layers.some((layer) => layer.id === layerId) ? [{
         id: 'edit-layer', label: '编辑此图层', icon: 'rename', disabled: editingLocked,
@@ -851,8 +901,8 @@ export function createDesignCanvas(React) {
         }]]);
         return;
       }
-      const parent = nodes.find(({ id, status }) => id === node.parentId && status === 'ready');
-      const branchLocked = !canBranch || loadingVersion || waitingForReceipt || generating;
+      const parent = comparisonSource(node.id);
+      const branchLocked = node.localCopy || !canBranch || loadingVersion || waitingForReceipt || generating;
       openCanvasMenu(event, event.currentTarget, '版本操作', [
         [
           { id: 'open', label: '查看此版本', icon: 'canvas', run: () => void openHistoricalVersion(node.id) },
@@ -983,7 +1033,7 @@ export function createDesignCanvas(React) {
     function exportCurrentVersion(event) {
       if (exportDisabled) return;
       const entries = boards.map((entry, index) => ({ ...entry, id: `${active.id}:${index + 1}`, version: active.number }));
-      showExportFormats(event, entries);
+      showExportFormats(event, entries, active.localCopy ? { playgroundLinks: effectiveLinks } : undefined);
     }
 
     const topology = hasTopology ? h('div', {
@@ -1065,7 +1115,7 @@ export function createDesignCanvas(React) {
             h('button', { type: 'button', className: 'vc-button', disabled: !history.undo.length, onClick: undo }, '撤销'),
             h('button', { type: 'button', className: 'vc-button', disabled: !history.redo.length, onClick: redo }, '重做'),
             playgroundEnabled && layer ? h('button', { type: 'button', className: 'vc-button',
-              disabled: !canGenerate || generating || waitingForReceipt, onClick: attachDesignLayer }, '迭代选中图层') : null) : null)) : null,
+              disabled: active.localCopy || !canGenerate || generating || waitingForReceipt, onClick: attachDesignLayer }, '迭代选中图层') : null) : null)) : null,
       alert || warning || exporting ? h('p', { className: 'vc-canvas-status', role: 'status' }, alert || warning || '正在导出画板') : null,
       noNewBoard && !loading ? h('p', { className: 'vc-canvas-status', 'data-outcome': true, role: 'status' },
         h('span', null, lastRevision?.error ?? '本轮回复已完成，暂无可显示的新画板。可在对话历史查看回复。'),
@@ -1120,7 +1170,7 @@ export function createDesignCanvas(React) {
           commentRequest: commentRequest?.board === boardKey && commentRequest.layer === layer?.id ? commentRequest : null,
           onCommentFocus: () => setCommentRequest(null),
           useComment: playgroundEnabled ? (entry) => attachPlaygroundBoard(boardKey, 'iterate', entry.layer || undefined, entry.text) : null,
-          canUseComment: canGenerate && !generating && !waitingForReceipt && (!readDesignRevision || canBranch),
+          canUseComment: !active?.localCopy && canGenerate && !generating && !waitingForReceipt && (!readDesignRevision || canBranch),
           addComment: (text) => changeBoard({
             ...board, comments: [...board.comments, { layer: layer?.id ?? '', label: layer?.label ?? preview.title, text }],
           }),
@@ -1129,7 +1179,7 @@ export function createDesignCanvas(React) {
     return h(React.Fragment, null, canvas, materialsOpen
       ? h(MaterialsDialog, { project, update: updateProject, choices, setChoices, workflow: playgroundEnabled,
         close: () => setMaterialsOpen(false) }) : null,
-    comparison ? h(DesignComparison, { ...comparison, close: () => setComparison(null) }) : null,
+    comparison ? h(DesignComparison, { ...comparison, carry: carryComparisonBoards, close: () => setComparison(null) }) : null,
     linkSource && playgroundBoards.has(linkSource) ? h(ConnectorDialog, {
       source: playgroundBoards.get(linkSource), boards: playgroundEntries, links: playgroundLinks,
       save: (from, layer, to) => {

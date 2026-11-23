@@ -1,3 +1,4 @@
+import { readDesignProject } from '../../remote-workbench/vps-chat/client/design-state.js';
 import { randomBytes } from 'node:crypto';
 import { watch as watchDirectory } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -72,13 +73,13 @@ function json(response, value, status = 200) {
   reply(response, status, 'application/json; charset=utf-8', JSON.stringify(value));
 }
 
-async function readPacket(request) {
+async function readPacket(request, maxBytes = 2 * 1024 * 1024) {
   if (request.headers['content-type'] !== 'application/json') throw new Error('invalid_content_type');
   const chunks = [];
   let length = 0;
   for await (const chunk of request) {
     length += chunk.length;
-    if (length > 2 * 1024 * 1024) throw new Error('body_too_large');
+    if (length > maxBytes) throw new Error('body_too_large');
     chunks.push(chunk);
   }
   const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -397,6 +398,19 @@ export async function startPreview({ localAgents = false, localComponents = fals
         }
         return json(response, { ok: true });
       } catch { return json(response, { ok: false, code: 'invalid_preview_workflow' }, 400); }
+    }
+    if (method === 'POST' && request.headers.origin === origin && url === previewPrefix + 'design-project') {
+      try {
+        // The design record is capped in UTF-16; this route also includes the JSON envelope.
+        const { op, name, value } = await readPacket(request, 7 * 1024 * 1024);
+        if (op !== 'save-design-project' || typeof name !== 'string' ||
+            !/^dsh-vps-design:v1:[a-f0-9]{64}:(?:local-)?[a-f0-9-]{36}$/i.test(name) ||
+            (value !== null && typeof value !== 'string') ||
+            readDesignProject(name, { getItem: () => value }).warning) throw new Error('invalid_preview_design');
+        if (value === null) delete fixtures.preferences[name];
+        else await data.setPreference(name, value);
+        return json(response, { ok: true });
+      } catch { return json(response, { ok: false, code: 'invalid_preview_design' }, 400); }
     }
     if (method === 'POST' && request.headers.origin === origin && url === previewPrefix + 'local-search') {
       try { return json(response, await search(await readPacket(request))); }

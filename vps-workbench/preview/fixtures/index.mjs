@@ -81,7 +81,8 @@ function seed(provider) {
     { ...first, id: fixtureId(202), parentTurnId: first.id, fork: false, prompt: '尝试更温暖的秋季配色。',
       reply: storeBoard.replace('纸间书店 · 首页', '纸间书店 · 秋日首页').replace('#f2eee5', '#f3dfcb') },
     { ...first, id: fixtureId(203), parentTurnId: first.id, fork: true, prompt: '从初稿探索冷青色方向。',
-      reply: storeBoard.replace('纸间书店 · 首页', '纸间书店 · 青色分支').replace('#f2eee5', '#dcebe6') },
+      reply: storeBoard.replace('纸间书店 · 首页', '纸间书店 · 青色分支').replace('#f2eee5', '#dcebe6')
+        .replace('查看本月荐书', '浏览秋日荐书') },
   );
   return [
     seededSession(1, '纸间书店 · 周末发布清单', '帮我整理周末活动页的上线检查清单。', checkList, 'preview-codex'),

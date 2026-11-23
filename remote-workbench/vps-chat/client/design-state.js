@@ -1,6 +1,7 @@
 import { workbenchStorage } from './workbench-storage.js';
 
 export const maxDesignContextText = 24000;
+export const maxArtboardSourceLength = 128 * 1024;
 export const maxLayerEdits = 180;
 export const playgroundPositionLimit = 100000;
 export const designBriefFields = [
@@ -20,6 +21,7 @@ export const designStyleLevels = [
 export function normalizeDesignStyle(value) {
   return Number.isInteger(value) && value >= 0 && value < designStyleLevels.length ? value : 2;
 }
+const maxLocalVersions = 100;
 const maxSavedProject = 2 * 1024 * 1024;
 const systemLibraryKey = 'dsh-vps-design-systems:v1';
 const maxSystems = 20;
@@ -179,6 +181,18 @@ export function normalizeBoard(value) {
   };
 }
 
+function normalizeLocalVersion(value) {
+  if (typeof value?.id !== 'string' || typeof value.parentId !== 'string' ||
+      !uuid.test(value.id) || !uuid.test(value.parentId) || value.id === value.parentId ||
+      !Array.isArray(value.sources) || value.sources.length < 1 || value.sources.length > 6 ||
+      value.sources.some((source) => typeof source !== 'string' || !source.trim() || source.length > maxArtboardSourceLength) ||
+      !Array.isArray(value.origins) || value.origins.length !== value.sources.length ||
+      value.origins.some((origin) => typeof origin?.versionId !== 'string' || !uuid.test(origin.versionId) ||
+        !Number.isInteger(origin?.index) || origin.index < 1 || origin.index > 6)) return null;
+  const { id, parentId, sources, origins } = value;
+  return { id, parentId, sources, origins: origins.map(({ versionId, index }) => ({ versionId, index })) };
+}
+
 function normalizeProject(value) {
   const versions = {};
   for (const [id, boards] of Object.entries(value?.versions ?? {})) {
@@ -193,7 +207,13 @@ function normalizeProject(value) {
     const dataUrl = rasterDataUrl(image?.dataUrl);
     return name && dataUrl ? [{ name, dataUrl }] : [];
   }) : [];
+  const localVersions = new Map();
+  for (const valueVersion of Array.isArray(value?.localVersions) ? value.localVersions.slice(0, maxLocalVersions) : []) {
+    const version = normalizeLocalVersion(valueVersion);
+    if (version && !localVersions.has(version.id)) localVersions.set(version.id, version);
+  }
   return {
+    ...(localVersions.size && { localVersions: [...localVersions.values()] }),
     brief: {
       enabled: value?.brief?.enabled === true,
       ...Object.fromEntries(designBriefFields.map(([key, , limit]) => [key, designText(value?.brief?.[key], limit)])),
@@ -220,13 +240,35 @@ export function readDesignProject(key, storage = workbenchStorage) {
 
 export function saveDesignProject(key, project) {
   try {
-    const body = JSON.stringify(project);
-    if (body.length > maxSavedProject) throw new Error('Project too large');
-    workbenchStorage.setItem(key, body);
+    workbenchStorage.setItem(key, serializeDesignProject(project));
     return '';
   } catch {
     return '无法保存到本机，当前修改仅在本次打开期间保留。';
   }
+}
+
+export function serializeDesignProject(project) {
+  const body = JSON.stringify(project);
+  if (body.length > maxSavedProject) throw new Error('本机会话的设计记录已达到容量上限，请减少带入的画板。');
+  return body;
+}
+
+export function addLocalDesignVersion(project, version, boards, links) {
+  const saved = normalizeLocalVersion(version);
+  const localVersions = project.localVersions ?? [];
+  if (!saved || boards.length !== saved.sources.length || localVersions.some(({ id }) => id === saved.id)) {
+    throw new Error('无法创建本机版本，请重新打开对比后再试。');
+  }
+  if (localVersions.length >= maxLocalVersions) throw new Error('本机会话的设计版本已达到上限。');
+  if (project.playground.links.length + links.length > maxPrototypeLinks) {
+    throw new Error('原型连线已达到保存上限，请减少带入的画板。');
+  }
+  return {
+    ...project, localVersions: [...localVersions, saved],
+    versions: { ...project.versions, [saved.id]: Object.fromEntries(boards.map((board, offset) =>
+      [offset + 1, normalizeBoard(board)])) },
+    playground: { ...project.playground, links: [...project.playground.links, ...links] },
+  };
 }
 
 export function setDesignBoard(project, version, index, board) {

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createArtboard, extractHtmlFences } from './design-preview.js';
-import { buildDesignContext } from './design-state.js';
+import { compareArtboards, markComparisonLayers, carriedBoard } from './design-comparison.js';
+import { addLocalDesignVersion, buildDesignContext, readDesignProject, serializeDesignProject, emptyBoard } from './design-state.js';
 import { layerRevisionKey, readLayerRevision, serializeLayerRevision } from './design-layer-revision.js';
 import { setWorkbenchStorage } from './workbench-storage.js';
 
@@ -77,4 +78,46 @@ test('scoped revision requires a single record physically inside head and inheri
     fenced(html('属性越界', '', meta({ ...change, changes: { width: 200 } })))]) {
     assert.equal(apply(source).outcome, 'rejected', source);
   }
+});
+
+test('comparison preserves identity across inserted layers and marks sanitized previews', () => {
+  const capture = (id, sources) => ({
+    id, entries: sources.map((source) => ({ source, preview: createArtboard(source) })),
+  });
+  const source = html('首页', '<main><p>记录</p><button id="cta">报名</button><p id="obsolete">旧通知</p></main>');
+  const changed = html('首页', '<main><p>新公告</p><p>记录</p><button id="cta" style="color:red">确认报名</button></main>');
+  const additional = html('新建页面', '<h1>新画板</h1>');
+  const diffs = compareArtboards(capture(version.id, [source, fixtures[1]]), capture(turnId, [changed, additional]));
+  assert.deepEqual(diffs.map(({ status }) => status), ['changed', 'added', 'removed']);
+  assert.deepEqual(diffs[0].layers.map(({ status, left, right }) => [status, left?.label, right?.label]), [
+    ['added', undefined, '新公告'], ['changed', '报名', '确认报名'], ['removed', '旧通知', undefined],
+  ]);
+  const marked = markComparisonLayers(diffs[0].after.preview.html, diffs[0].layers, 'right');
+  assert.match(marked, /data-dsh-layer="e4"\]\{outline:2px solid/);
+  assert.match(marked, /Content-Security-Policy/);
+  const layoutBefore = html('布局', '<main><div id="one"><p id="text">原文</p></div><div id="two"></div></main>');
+  const layoutAfter = html('布局', '<main><div id="one"></div><div id="two"><p id="text">原文</p></div></main>');
+  const [layout] = compareArtboards(capture(version.id, [layoutBefore]), capture(turnId, [layoutAfter]));
+  assert.deepEqual(layout.layers.map(({ status, right }) => [status, right.label]), [['changed', '原文']]);
+});
+
+test('carried boards retain edits, record provenance, and preserve only eligible original jumps', () => {
+  const current = readDesignProject('fixture', { getItem: () => null }).project;
+  const order = new Map([[version.id + ':2', turnId + ':1'], [version.id + ':1', turnId + ':2']]);
+  const overrides = [{ from: version.id + ':2', layer, to: version.id + ':3' }];
+  const first = carriedBoard(fixtures[1], detail.html, version.id + ':2', overrides, order);
+  assert.deepEqual(first.links, []);
+  assert.doesNotMatch(first.source, /data-dsh-go/);
+  const second = carriedBoard(fixtures[0], boards[0].html, version.id + ':1', overrides, order);
+  assert.deepEqual(second.links, [{ from: turnId + ':2', layer: 'e2', to: turnId + ':1' }]);
+  const draft = { id: turnId, parentId: version.id, sources: [first.source, second.source],
+    origins: [{ versionId: version.id, index: 2 }, { versionId: version.id, index: 1 }] };
+  const edited = { ...emptyBoard, edits: { e1: { text: '来自父版的手动修改' } } };
+  const next = addLocalDesignVersion(current, draft, [edited, emptyBoard], second.links);
+  const restored = readDesignProject('fixture', { getItem: () => serializeDesignProject(next) }).project;
+  assert.deepEqual(restored.localVersions, [draft]);
+  assert.equal(restored.versions[turnId][1].edits.e1.text, '来自父版的手动修改');
+  assert.deepEqual(restored.playground.links, second.links);
+  assert.deepEqual(current.versions, {});
+  assert.throws(() => serializeDesignProject({ payload: 'x'.repeat(2 * 1024 * 1024) }), /容量上限/);
 });

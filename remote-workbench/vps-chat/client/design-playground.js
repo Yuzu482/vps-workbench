@@ -544,8 +544,8 @@ export function createDesignPlayground(React) {
     }
 
     const boardActions = selected ? [
-      { id: 'iterate', label: '迭代所选', icon: 'chat', disabled: locked || !canGenerate, run: () => onIterate(selected.id) },
-      { id: 'variants', label: '生成变体', icon: 'variants', disabled: locked || !canGenerate, run: () => onVariants(selected.id) },
+      { id: 'iterate', label: '迭代所选', icon: 'chat', disabled: locked || selected.localCopy || !canGenerate, run: () => onIterate(selected.id) },
+      { id: 'variants', label: '生成变体', icon: 'variants', disabled: locked || selected.localCopy || !canGenerate, run: () => onVariants(selected.id) },
       { id: 'link', label: '连接画板', icon: 'link', disabled: locked, run: () => onLink(selected.id) },
       { id: 'play', label: '播放原型', icon: 'play', disabled: loading || selected.provisional, run: () => onPlay(selected.id) },
     ] : [];

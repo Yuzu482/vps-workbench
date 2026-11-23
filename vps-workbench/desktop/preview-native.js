@@ -123,6 +123,11 @@
           body: JSON.stringify({ op: 'set-memberships', targetId: membership[1], value }) });
         if (!response.ok) throw new Error('preview_memberships_unavailable');
       }
+      if (/^dsh-vps-design:v1:[a-f0-9]{64}:(?:local-)?[a-f0-9-]{36}$/i.test(name)) {
+        const response = await fetch('/__preview/design-project', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ op: 'save-design-project', name, value }) });
+        if (!response.ok) throw new Error('preview_design_unavailable');
+      }
       if (value === null) delete state.preferences[name];
       else state.preferences[name] = value;
       save();
