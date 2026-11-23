@@ -415,53 +415,47 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 }
 #root .vc-rail-shortcut > .vc-button[aria-current="page"] { color: var(--vc-accent); }
 @media (width > 620px) {
-  #root > :is([data-vps-chat], [data-local-sdk]) {
-    grid-template-columns: var(--desktop-sidebar-width, 216px) minmax(0, 1fr);
+  #root > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) {
+    --desktop-actions-height: 104px;
+    --desktop-history-width: 0px;
+    grid-template-columns: 52px var(--desktop-history-width) minmax(0, 1fr);
     transition: grid-template-columns var(--desktop-sidebar-motion) cubic-bezier(.25,.72,.32,1);
   }
-  #root > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) > .vc-main { grid-column: 2; }
-  #root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail { grid-area: 1 / 1 / 2 / 2; }
-  .vc-rail-content { inline-size: 215px; }
-  #root:not([data-sidebar-collapsed="true"]) > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) {
-    --desktop-actions-height: 104px;
+  #root > :is([data-vps-chat], [data-local-sdk]):has(> .vc-rail[data-open="true"]) {
+    --desktop-history-width: clamp(180px, 30vw, 232px);
   }
-  #root:not([data-sidebar-collapsed="true"]) > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) > .vc-main {
-    grid-area: 1 / 2 / -1 / -1;
+  #root > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) > .vc-main {
+    grid-area: 1 / 3 / -1 / -1;
   }
-  #root:not([data-sidebar-collapsed="true"]) > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) > .vc-sidebar-actions {
+  #root > :is([data-vps-chat], [data-local-sdk]) > .vc-compact-rail { display: grid; z-index: 5; }
+  #root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail {
+    display: flex; grid-area: 1 / 2 / -1 / 3; position: static;
+    inline-size: auto; border: 0; box-shadow: inset -1px 0 var(--vc-line);
+  }
+  #root .vc-rail-content { inline-size: clamp(180px, 30vw, 232px); }
+  #root .vc-rail-content > :is(.vc-sidebar-new, .vc-rail-shortcuts) { display: none; }
+  #root .vc-compact-history[aria-expanded="true"] { background: var(--vc-tint); color: var(--vc-accent); }
+  #root .vc-compact-history[aria-expanded="true"] + .vc-rail-shortcut-tip {
+    opacity: 0; visibility: hidden; pointer-events: none;
+  }
+  #root > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) > .vc-sidebar-actions {
     grid-column: 1; flex-direction: column; align-items: stretch; justify-content: flex-end;
-    background: var(--vc-rail); border-inline-end: 1px solid var(--vc-line);
-  }
-  #root .vc-sidebar-actions {
-    --vc-footer-icon-column: 44px;
+    padding-inline: 6px; background: var(--vc-rail); border-inline-end: 1px solid var(--vc-line);
   }
   #root .vc-sidebar-actions :is(.vc-tool-trigger, .vc-tool-summary, .vc-sidebar-settings) {
-    display: grid; grid-template-columns: var(--vc-footer-icon-column) minmax(0, 1fr);
-    align-items: center; justify-items: start; gap: 0; padding: 0;
-    border: 1px solid transparent; text-align: start;
+    position: relative; display: grid; place-items: center; padding: 0;
   }
-  #root .vc-sidebar-actions .vc-tool-trigger {
-    grid-template-columns: var(--vc-footer-icon-column) minmax(0, 1fr) 18px;
+  .vc-sidebar-actions :is(.vc-tool-label, .vc-sidebar-settings-label) {
+    position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%);
   }
-  #root .vc-sidebar-actions :is(.vc-menu-icon, .vc-tool-badge):first-child { justify-self: center; }
-  #root[data-sidebar-collapsed="true"] > :is([data-vps-chat], [data-local-sdk]) { --desktop-sidebar-width: 52px; }
-  #root[data-sidebar-collapsed="true"] > :is([data-vps-chat], [data-local-sdk]) > .vc-compact-rail {
-    display: grid;
-    animation: vc-compact-rail-in var(--desktop-sidebar-motion) ease both;
-    z-index: 2;
-  }
-  #root[data-sidebar-collapsed="true"] > :is([data-vps-chat], [data-local-sdk]) > .vc-rail {
-    opacity: 0; transform: translateX(-10px); visibility: hidden; pointer-events: none;
-    transition-delay: 0s, 0s, var(--desktop-sidebar-motion);
-  }
+  .vc-sidebar-actions .vc-tool-caret { display: none; }
 }
-@keyframes vc-compact-rail-in { from { opacity: 0; } to { opacity: 1; } }
 @media (max-width: 620px) {
   #root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail { display: flex; inset-block-end: var(--desktop-actions-height); }
-  #root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail:not([data-open="true"]) {
-    opacity: 0; transform: translateX(-10px); visibility: hidden; pointer-events: none;
-    transition-delay: 0s, 0s, var(--desktop-sidebar-motion);
-  }
+}
+#root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail:not([data-open="true"]) {
+  opacity: 0; transform: translateX(-10px); visibility: hidden; pointer-events: none;
+  transition-delay: 0s, 0s, var(--desktop-sidebar-motion);
 }
 @media (max-width: 520px) {
   .desktop-app-title, .desktop-title-controls .desktop-glyph[data-glyph="chevron"] { display: none; }

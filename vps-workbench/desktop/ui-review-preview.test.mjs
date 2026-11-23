@@ -52,19 +52,43 @@ async function openPreview(t, { viewport = { width: 1280, height: 720 }, seed, p
   return page;
 }
 
-test('the compact rail keeps chat, search and workspace tools reachable when history is hidden', { timeout: 30_000 }, async (t) => {
+test('the persistent shortcut rail docks conversation history beside the workspace', { timeout: 30_000 }, async (t) => {
   const page = await openPreview(t);
   const compact = page.getByRole('navigation', { name: '快捷侧栏', exact: true });
   const history = page.getByRole('complementary', { name: 'VPS 对话列表' });
+  const main = page.locator('#root > [data-vps-chat] > .vc-main');
+  await compact.waitFor();
+  await history.waitFor({ state: 'hidden' });
+  assert.equal((await compact.boundingBox()).width, 52);
+  const initial = await main.boundingBox();
+  const toggle = compact.getByRole('button', { name: '会话与项目', exact: true });
+  await toggle.press('Enter');
   await history.waitFor();
-  await compact.waitFor({ state: 'hidden' });
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+  const docked = await main.boundingBox();
+  assert.ok(docked.x > initial.x && docked.width < initial.width);
+  assert.equal(docked.x + docked.width, initial.x + initial.width);
+  const panel = await history.boundingBox();
+  assert.equal(docked.x, panel.x + panel.width);
+  await history.getByRole('button', { name: '纸间书店', exact: true }).focus();
+  await page.keyboard.press('Escape');
+  await history.waitFor({ state: 'hidden' });
+  assert.equal(await toggle.evaluate((button) => document.activeElement === button), true);
+  await toggle.click();
+  await history.waitFor();
+  await page.getByRole('textbox', { name: '消息', exact: true }).click();
+  await history.waitFor();
   await (await sidebarButton(page, '纸间书店')).click();
   await (await sidebarButton(page, '纸间书店 · 周末发布清单')).click();
-  await page.getByRole('button', { name: '收起会话侧栏', exact: true }).click();
+  await history.waitFor();
+  await toggle.click();
   await history.waitFor({ state: 'hidden' });
-  await compact.waitFor();
-  assert.equal((await compact.boundingBox()).width, 52);
-  assert.deepEqual(await compact.getByRole('button').allTextContents(), ['', '', '', '', '']);
+  assert.deepEqual(await main.boundingBox(), initial);
+  const titleToggle = page.locator('.desktop-sidebar-button');
+  await titleToggle.press('Enter');
+  await history.waitFor();
+  await titleToggle.press('Escape');
+  await history.waitFor({ state: 'hidden' });
   const searchButton = compact.getByRole('button', { name: '查找会话和资源', exact: true });
   await searchButton.press('Enter');
   const search = page.getByRole('dialog', { name: '本地全局搜索', exact: true });
@@ -78,11 +102,11 @@ test('the compact rail keeps chat, search and workspace tools reachable when his
   await library.waitFor({ state: 'hidden' });
   await compact.getByRole('button', { name: '新建对话', exact: true }).press('Enter');
   await page.getByRole('heading', { name: '开始一段对话', exact: true }).waitFor();
-  await page.getByRole('button', { name: '展开会话侧栏', exact: true }).click();
+  await toggle.click();
   await history.waitFor();
-  await compact.waitFor({ state: 'hidden' });
   await page.setViewportSize({ width: 365, height: 480 });
   await compact.waitFor({ state: 'hidden' });
+  await history.waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '展开会话侧栏', exact: true }).click();
   await history.getByRole('button', { name: '新建对话', exact: true }).waitFor();
 });
@@ -121,7 +145,7 @@ test('a selected excerpt attaches to one draft and copied VPS links open the exi
     return route.continue();
   });
   const source = page.getByRole('button', { name: '读书会 · 开场流程', exact: true });
-  await page.getByRole('button', { name: '周末读书会', exact: false }).first().click();
+  await (await sidebarButton(page, '周末读书会')).click();
   await source.click();
   const messages = page.getByRole('region', { name: '对话消息', exact: true });
   const paragraph = messages.getByText(/先留五分钟签到/).first();
@@ -431,10 +455,14 @@ async function browseLocally(page) {
 }
 
 async function sidebarButton(page, name) {
-  const button = page.getByRole('complementary', { name: 'VPS 对话列表' }).getByRole('button', { name, exact: true });
-  await page.getByRole('button', { name: /会话侧栏$/ }).first().waitFor();
-  if (!(await button.isVisible())) await page.getByRole('button', { name: /^(展开|收起)会话侧栏$/ }).click();
-  return button;
+  const shortcut = page.getByRole('navigation', { name: '快捷侧栏' }).getByRole('button', { name, exact: true });
+  if (await shortcut.isVisible()) return shortcut;
+  const history = page.getByRole('complementary', { name: 'VPS 对话列表' });
+  const toggle = page.locator('.desktop-sidebar-button');
+  await toggle.waitFor();
+  if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+  await history.waitFor();
+  return history.getByRole('button', { name, exact: true });
 }
 
 test('mixed workflow simulates offline, retries a confirmed stage and restores archived details', { timeout: 50_000 }, async (t) => {
@@ -1426,10 +1454,11 @@ test('from local history an unvisited VPS loads only connection metadata and kee
   await settings.waitFor({ state: 'hidden' });
   const history = page.getByRole('group', { name: '打开会话历史', exact: true });
   assert.equal(await history.getByRole('button', { name: '本机 SDK', exact: true }).getAttribute('aria-pressed'), 'true');
-  assert.equal(await originalRow.getAttribute('aria-current'), 'true');
   assert.equal(await draft.inputValue(), '本机会话草稿');
   assert.equal(await page.getByLabel('新建位置').inputValue(), 'ssh-vps');
   assert.equal(await entry.evaluate((node) => node === document.activeElement), true);
+  await page.locator('.desktop-sidebar-button').click();
+  assert.equal(await originalRow.getAttribute('aria-current'), 'true');
   assert.deepEqual(packets, [{ op: 'configuration' }]);
 });
 
@@ -1748,31 +1777,29 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
   test(`P5 keeps workspace, board and resource controls distinct at ${viewport.width}×${viewport.height}`, { timeout: 30_000 }, async (t) => {
     const page = await openPreview(t, { viewport });
     await page.getByText('本地演示 · VPS 已配置', { exact: true }).waitFor();
+    const wide = viewport.width > 620;
+    const rail = page.getByRole('complementary', { name: 'VPS 对话列表' });
+    const shortcuts = wide ? page.getByRole('navigation', { name: '快捷侧栏' })
+      : rail.getByRole('group', { name: '工作台快捷入口', exact: true });
     const first = await sidebarButton(page, '项目资源库');
     await first.waitFor();
-    const rail = page.getByRole('complementary', { name: 'VPS 对话列表' });
-    const entries = [first, ...['工作流', '设计工作台'].map((name) => rail.getByRole('button', { name, exact: true }))];
+    const entries = [first, ...['工作流', '设计工作台'].map((name) => shortcuts.getByRole('button', { name, exact: true }))];
     const boxes = await Promise.all(entries.map((entry) => entry.boundingBox()));
-    assert.ok(boxes.every(({ y, width, height }) => y === boxes[0].y && Math.abs(width - boxes[0].width) < 1 && height === 38));
-    assert.ok(boxes.slice(1).every(({ x }, index) => Math.abs(x - boxes[index].x - boxes[index].width - 6) < 0.5));
-    const shortcuts = rail.getByRole('group', { name: '工作台快捷入口', exact: true });
-    assert.deepEqual(await shortcuts.getByRole('button').allTextContents(), ['', '', '']);
+    assert.ok(boxes.every(({ x, y, height }) => (wide ? x === boxes[0].x : y === boxes[0].y) && height === 38));
     const footer = page.getByRole('group', { name: 'VPS 操作', exact: true });
-    const newChat = rail.getByRole('button', { name: '新建对话', exact: true });
-    await assertWithinViewport(newChat);
-    const primary = await newChat.boundingBox();
-    assert.equal(primary.height, 40);
-    assert.ok(primary.width > boxes[0].width && primary.y + primary.height < boxes[0].y);
+    const newChat = (wide ? shortcuts : rail).getByRole('button', { name: '新建对话', exact: true });
+    for (const button of [newChat, footer.getByRole('button', { name: '设置', exact: true }),
+      footer.getByRole('button', { name: '切换 VPS 执行端', exact: true })]) await assertWithinViewport(button);
     assert.equal(await footer.getByRole('button').count(), 2);
-    assert.equal(primary.x, boxes[0].x);
     const providerButton = footer.getByRole('button', { name: '切换 VPS 执行端', exact: true });
     const settingsButton = footer.getByRole('button', { name: '设置', exact: true });
-    const provider = await providerButton.boundingBox();
-    const settings = await settingsButton.boundingBox();
+    if (wide) await page.getByRole('button', { name: '展开会话侧栏', exact: true }).click();
     const quota = rail.locator('.vc-sidebar-quota');
     await assertWithinViewport(quota);
     const quotaBounds = await quota.boundingBox();
-    assert.ok(quotaBounds.y + quotaBounds.height <= provider.y);
+    const providerBounds = await providerButton.boundingBox();
+    assert.ok(wide ? quotaBounds.x >= providerBounds.x + providerBounds.width
+      : quotaBounds.y + quotaBounds.height <= providerBounds.y + 4);
     const quotaToggle = quota.locator('summary');
     assert.equal(await quotaToggle.getByRole('img').count(), 2);
     await quotaToggle.getByRole('img', { name: '5 小时额度，暂无数据', exact: true }).waitFor();
@@ -1781,29 +1808,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     await quota.getByRole('region', { name: 'Codex', exact: true }).waitFor();
     assert.equal(await quota.getByRole('region', { name: 'Claude API', exact: true }).count(), 0);
     await quotaToggle.press('Enter');
-    assert.ok(viewport.width > 620 ? provider.y + provider.height <= settings.y : provider.x + provider.width <= settings.x);
-    const iconCenters = [];
-    for (const button of [newChat, providerButton, settingsButton]) {
-      await assertWithinViewport(button);
-      const { iconCenter, textOffsetX, textOffsetY, height } = await button.evaluate((element) => {
-        const bounds = element.getBoundingClientRect();
-        const icon = element.firstElementChild.getBoundingClientRect();
-        const label = document.createRange();
-        label.selectNodeContents(element.querySelector('.vc-sidebar-new-label, .vc-tool-label') ?? element.lastChild);
-        const text = label.getBoundingClientRect();
-        return {
-          iconCenter: (icon.left + icon.right) / 2,
-          textOffsetX: (text.left + text.right - bounds.left - bounds.right) / 2,
-          textOffsetY: (text.top + text.bottom - bounds.top - bounds.bottom) / 2,
-          height: bounds.height,
-        };
-      });
-      iconCenters.push(iconCenter);
-      if (button === newChat) assert.ok(Math.abs(textOffsetX) < 1);
-      assert.ok(Math.abs(textOffsetY) < 2);
-      assert.equal(height, 40);
-    }
-    if (viewport.width > 620) assert.ok(iconCenters.every((x) => Math.abs(x - iconCenters[0]) < 1));
+    if (wide) await page.getByRole('button', { name: '收起会话侧栏', exact: true }).click();
     const fills = (button) => button.evaluate((element) => {
       const style = getComputedStyle(element);
       return { border: style.borderTopColor, background: style.backgroundColor };
@@ -1813,7 +1818,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
       assert.deepEqual(await fills(button), { border: clear, background: clear });
     }
     assert.equal((await fills(newChat)).border, clear);
-    assert.notEqual((await fills(newChat)).background, clear);
+    if (!wide) assert.notEqual((await fills(newChat)).background, clear);
     assert.equal(await shortcuts.getByRole('tooltip').count(), 0);
     await first.hover();
     await shortcuts.getByRole('tooltip').getByText('浏览项目里的画板、图片和代码块。', { exact: true }).waitFor();
@@ -1826,8 +1831,10 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     assert.equal(await entries[1].evaluate((button) => document.activeElement === button), true);
     await shortcuts.getByRole('tooltip').getByText('工作流', { exact: true }).waitFor();
     assert.notEqual((await fills(entries[1])).background, clear);
-    const heading = await page.getByRole('navigation', { name: '会话记录', exact: true }).getByRole('heading').boundingBox();
-    assert.equal(heading.y - (boxes[0].y + boxes[0].height), 10);
+    if (!wide) {
+      const heading = await rail.getByRole('navigation', { name: '会话记录', exact: true }).getByRole('heading').boundingBox();
+      assert.equal(heading.y - (boxes[0].y + boxes[0].height), 10);
+    }
     await page.keyboard.press('Escape');
     await shortcuts.getByRole('tooltip').waitFor({ state: 'hidden' });
     await (await sidebarButton(page, '纸间书店')).click();
@@ -1845,8 +1852,8 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     await canvas.getByRole('heading', { name: '设计工作台', exact: true }).waitFor();
     await assertWithinViewport(canvas.getByRole('button', { name: '适应全部画板', exact: true }));
 
-    const selectedShortcut = page.locator('.vc-rail .vc-playground-entry[aria-current="page"]');
-    assert.notEqual((await fills(selectedShortcut)).background, clear);
+    const selectedShortcut = page.locator('.vc-playground-entry:visible[aria-current="page"]');
+    if (wide) assert.notEqual((await fills(selectedShortcut)).background, clear);
 
     const entry = await sidebarButton(page, '项目资源库');
     await entry.press('Enter');

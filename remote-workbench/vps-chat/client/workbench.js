@@ -467,6 +467,18 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [settingsError, setSettingsError] = React.useState('');
     const [pinConfirmationRequired, setPinConfirmationRequired] = React.useState(false);
     const [historyOpen, setHistoryOpen] = React.useState(false);
+    const historyTrigger = React.useRef(null);
+    React.useEffect(() => {
+      if (!sidebarActions || !historyOpen || !visible) return undefined;
+      function dismissHistory(event) {
+        if (!window.matchMedia('(max-width: 620px)').matches) return;
+        if (!event.target.closest('.vc-rail, .vc-compact-history, .desktop-sidebar-button, .vc-context-menu, dialog, :popover-open')) {
+          setHistoryOpen(false);
+        }
+      }
+      document.addEventListener('pointerdown', dismissHistory);
+      return () => document.removeEventListener('pointerdown', dismissHistory);
+    }, [historyOpen, visible]);
     const [designPane, setDesignPane] = React.useState('split');
     const [playgroundView, setPlaygroundView] = React.useState(null);
     const [canvasHistoryOpen, setCanvasHistoryOpen] = React.useState(false);
@@ -498,6 +510,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [sshRpc] = React.useState(createRpc);
     const rpc = localSdk ? local.request : sshRpc;
     const viewId = React.useId();
+    const historyPanelId = sidebarActions ? `desktop-history-${viewId}` : undefined;
     const workbench = React.useRef(null);
     const body = React.useRef(null);
     const editor = React.useRef(null);
@@ -1149,12 +1162,16 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       }
     }
 
+    function closeFloatingHistory() {
+      if (!sidebarActions || window.matchMedia('(max-width: 620px)').matches) setHistoryOpen(false);
+    }
+
     function prepareSelection(id, nextView) {
       setSelected(id);
       setView(nextView);
       setFeedback('');
       setPollPaused(false);
-      setHistoryOpen(false);
+      closeFloatingHistory();
       setDesignPane('split');
       setPlaygroundView(null);
       setCanvasHistoryOpen(false);
@@ -1466,7 +1483,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       if (!settingsSurface) {
         presetRequest.current?.abort();
         setLoadingPreset(false);
-        setHistoryOpen(false);
+        closeFloatingHistory();
       }
       setSettingsError('');
       dismissComposerPanel();
@@ -1915,7 +1932,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         expandProject(project);
       }
       if (row.id === selected && snapshot) {
-        setHistoryOpen(false);
+        closeFloatingHistory();
         if (source) revealSource(snapshot.session, source);
         return;
       }
@@ -2522,22 +2539,28 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       'data-vc-color': activePreferences.color, 'data-vc-accent': activePreferences.accent,
       'data-vc-text-size': activePreferences.textSize, 'data-vc-width': activePreferences.width,
       'data-vc-motion': activePreferences.motion,
+
       onKeyDown: showingSubscription ? undefined : (event) => {
         if (historyOpen && event.key === 'Escape' && !event.defaultPrevented && !event.nativeEvent.isComposing &&
             !workbench.current.querySelector('dialog[open], :popover-open')) {
           setHistoryOpen(false);
-          workbench.current.parentElement.querySelector('.desktop-sidebar-button')?.focus({ preventScroll: true });
+          const trigger = historyTrigger.current?.getClientRects().length
+            ? historyTrigger.current : workbench.current.parentElement.querySelector('.desktop-sidebar-button');
+          trigger?.focus({ preventScroll: true });
         } else cycleAreaFocus(event);
       } },
       h('style', null, css),
       sidebarActions && !showingSubscription ? h('nav', { className: 'vc-compact-rail vc-rail-shortcuts', 'aria-label': '快捷侧栏' },
+        h(SidebarShortcut, { className: 'vc-compact-history', icon: 'history', label: '会话与项目',
+          detail: '展开会话历史、项目和订阅额度。', 'aria-expanded': historyOpen, 'aria-controls': historyPanelId,
+          onClick: (event) => { historyTrigger.current = event.currentTarget; setHistoryOpen((open) => !open); } }),
         h(SidebarShortcut, { className: 'vc-compact-new-chat', icon: 'new-chat', label: '新建对话',
           detail: '在所选位置开始对话。', onClick: onNewChat ?? startNewChat, disabled: newChatDisabled }),
         onQuickSearch ? h(SidebarShortcut, { className: 'vc-compact-search', icon: 'search', label: '查找会话和资源',
           detail: '搜索会话、项目、画板和工作流。', 'aria-haspopup': 'dialog', onClick: onQuickSearch }) : null,
         ...sidebarShortcuts) : null,
       h('aside', {
-        className: 'vc-rail', 'data-open': historyOpen, 'data-design': design,
+        id: historyPanelId, className: 'vc-rail', 'data-open': historyOpen, 'data-design': design,
         style: showingSubscription ? { display: 'none' } : undefined,
         'aria-label': localSdk ? '本地对话历史' : 'VPS 对话列表', tabIndex: -1, 'data-vc-focus-area': 'history',
       },
@@ -2598,14 +2621,14 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         toolPicker,
         h('button', {
           type: 'button', className: 'vc-button vc-sidebar-settings', disabled: providerSwitchLocked,
-          onClick: () => openSettings(), title: localSdk && local.profile ? '配置 · ' + local.profile.name : undefined,
-        }, menuIcon(h, 'settings'), settingsLabel)) : null,
+          onClick: () => openSettings(), title: localSdk && local.profile ? '配置 · ' + local.profile.name : settingsLabel,
+        }, menuIcon(h, 'settings'), h('span', { className: 'vc-sidebar-settings-label' }, settingsLabel))) : null,
       h('main', { className: 'vc-main', 'aria-label': localSdk ? '本地 Codex SDK 对话' : undefined },
         h('header', { className: 'vc-header', 'data-design': design, 'data-playground': floatingChat },
           h('button', {
             type: 'button', className: 'vc-button vc-history-toggle', 'aria-expanded': historyOpen,
             hidden: showingSubscription, style: showingSubscription ? { display: 'none' } : undefined,
-            onClick: () => setHistoryOpen((open) => !open),
+            onClick: () => { historyTrigger.current = null; setHistoryOpen((open) => !open); },
           }, '会话'),
           h('div', { className: 'vc-heading' },
             h('div', { className: 'vc-heading-title' },

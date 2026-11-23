@@ -117,11 +117,10 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
   const sidebarButton = React.useRef(null);
   const historyButton = React.useRef(null);
   const lastContentFocus = React.useRef(null);
-  const [wideSidebar, setWideSidebar] = React.useState(true);
   const [sidebarId, setSidebarId] = React.useState('desktop-workbench-sidebar');
-  const [layout, setLayout] = React.useState({ narrow: narrowViewport.matches, narrowSidebar: false, subscription: false });
+  const [layout, setLayout] = React.useState({ history: false, subscription: false });
   const { items: projects } = React.useSyncExternalStore(projectCatalog.subscribe, projectCatalog.getSnapshot);
-  const sidebarVisible = !layout.subscription && (layout.narrow ? layout.narrowSidebar : wideSidebar);
+  const sidebarVisible = !layout.subscription && layout.history;
   const run = (action) => { void action().catch(onError); };
 
   React.useLayoutEffect(() => {
@@ -142,11 +141,13 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
       root.dataset.chromeTheme = theme;
       root.dataset.chromeMotion = vcMotion;
       chromeColors.sync(theme);
-      const narrow = narrowViewport.matches;
-      const narrowSidebar = toggle.getAttribute('aria-expanded') === 'true';
+      const history = toggle.getAttribute('aria-expanded') === 'true';
       const subscription = subscriptionOpen === 'true';
-      setLayout((previous) => previous.narrow === narrow && previous.narrowSidebar === narrowSidebar &&
-        previous.subscription === subscription ? previous : { narrow, narrowSidebar, subscription });
+      setLayout((previous) => previous.history === history && previous.subscription === subscription
+        ? previous : { history, subscription });
+    }
+    function closeHistoryOnNarrow(event) {
+      if (event.matches && toggle.getAttribute('aria-expanded') === 'true') toggle.click();
     }
     const attributes = new MutationObserver(synchronize);
     attributes.observe(workbench, {
@@ -155,7 +156,7 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
     });
     attributes.observe(toggle, { attributeFilter: ['aria-expanded'] });
     workbench.addEventListener('focusin', rememberFocus);
-    narrowViewport.addEventListener('change', synchronize);
+    narrowViewport.addEventListener('change', closeHistoryOnNarrow);
     systemDark.addEventListener('change', synchronize);
     reducedMotion.addEventListener('change', synchronize);
     synchronize();
@@ -163,7 +164,7 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
       attributes.disconnect();
       chromeColors.disconnect();
       workbench.removeEventListener('focusin', rememberFocus);
-      narrowViewport.removeEventListener('change', synchronize);
+      narrowViewport.removeEventListener('change', closeHistoryOnNarrow);
       systemDark.removeEventListener('change', synchronize);
       reducedMotion.removeEventListener('change', synchronize);
     };
@@ -176,13 +177,7 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
   }, [sidebarVisible, location]);
 
   function toggleSidebar() {
-    if (narrowViewport.matches) {
-      historyButton.current.click();
-      return;
-    }
-    const next = !wideSidebar;
-    header.current.parentElement.dataset.sidebarCollapsed = String(!next);
-    setWideSidebar(next);
+    historyButton.current.click();
   }
 
   const fileItems = [
@@ -230,6 +225,12 @@ export function DesktopChrome({ native, projectCatalog, location, newLocation, l
         ref: sidebarButton, type: 'button', className: 'desktop-title-button desktop-sidebar-button',
         title: sidebarLabel, 'aria-label': sidebarLabel, 'aria-controls': sidebarId,
         'aria-expanded': sidebarVisible, disabled: layout.subscription, onClick: toggleSidebar,
+        onKeyDown(event) {
+          if (event.key === 'Escape' && sidebarVisible && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            toggleSidebar();
+          }
+        },
       }, glyph('sidebar')),
       h('div', { className: 'desktop-brand' },
         h('img', { className: 'desktop-app-icon', src: '/app-icon.png', draggable: false, alt: '' }),

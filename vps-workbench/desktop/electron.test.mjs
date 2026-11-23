@@ -98,6 +98,10 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
     const sidebar = page.getByRole('complementary', { name: 'VPS 对话列表' });
     const hideSidebar = titleBar.getByRole('button', { name: '收起会话侧栏' });
     const showSidebar = titleBar.getByRole('button', { name: '展开会话侧栏' });
+    async function openHistory() {
+      const trigger = page.locator('.desktop-sidebar-button');
+      if (await trigger.getAttribute('aria-expanded') === 'false') await trigger.click();
+    }
     const footer = page.getByRole('group', { name: 'VPS 操作', exact: true });
     const chooser = footer.getByRole('button', { name: '切换 VPS 执行端', exact: true });
     assert.equal(await desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()), null);
@@ -121,19 +125,20 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
         const rail = element.parentElement.querySelector('.vc-rail').getBoundingClientRect();
         const logo = element.querySelector('.vc-tool-badge img');
         return Math.abs(dock.left - root.left) < 1 && Math.abs(dock.bottom - root.bottom) < 1 &&
-          rail.bottom <= dock.top + 1 && logo?.naturalWidth > 0 && logo.clientWidth >= 24 &&
+          logo?.naturalWidth > 0 && logo.clientWidth >= 24 &&
           (vertical ? picker.bottom <= settings.top && dock.right <= main.left + 1
-            : picker.right <= settings.left && main.bottom <= dock.top + 1);
+            : rail.bottom <= dock.top + 1 && picker.right <= settings.left && main.bottom <= dock.top + 1);
       }, stacked));
     }
     await verifyCaptionSpace();
+    if (!legacyBaseline) await openHistory();
     await page.getByRole('button', { name: '测试美术项目', exact: true }).waitFor();
     if (!legacyBaseline) {
       await verifyFooter(true);
       assert.equal(await chooser.innerText(), 'Codex');
       assert.equal(await footer.locator('.vc-sidebar-settings [data-icon=settings] svg').count(), 1);
       assert.equal(await page.locator('.vc-header :is(.vc-tool-trigger, .vc-header-settings), .vc-account-entry').count(), 0);
-      const newChat = sidebar.getByRole('button', { name: '新建对话', exact: true });
+      const newChat = page.getByRole('button', { name: '新建对话', exact: true });
       await newChat.waitFor();
       assert.equal(await newChat.locator('[data-icon=new-chat] svg').count(), 1);
       assert.equal(await footer.getByRole('button', { name: '新建对话', exact: true }).count(), 0);
@@ -175,15 +180,16 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
     await hideSidebar.click();
     await sidebar.waitFor({ state: 'hidden' });
     if (!legacyBaseline) {
-      const rail = page.locator('#desktop-workbench-sidebar');
+      const rail = page.locator('#root > [data-vps-chat] > .vc-rail');
       await rail.waitFor({ state: 'hidden' });
       assert.equal(await rail.evaluate((element) => element.inert), true);
-      await verifyFooter(false);
+      await verifyFooter(true);
     }
     await showSidebar.click();
     await sidebar.waitFor();
     if (!legacyBaseline) await page.waitForFunction(() =>
       globalThis.fixtureRailFades >= 2 && getComputedStyle(document.querySelector('.vc-rail')).opacity === '1');
+    if (!legacyBaseline) await hideSidebar.click();
     await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(365, 640));
     await page.waitForFunction(() => innerWidth <= 620);
     await verifyCaptionSpace();
@@ -207,6 +213,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
     await hideSidebar.click();
     await sidebar.waitFor({ state: 'hidden' });
     await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1260, 850));
+    if (!legacyBaseline) await openHistory();
     await sidebar.waitFor();
     assert.equal(await desktop.evaluate(async ({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0];
@@ -655,7 +662,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
     assert.equal(await desktop.evaluate(() => globalThis.fixtureExport), 'completed');
     assert.match(await readFile(exportPath, 'utf8'), /独立海报画板/);
     if (!legacyBaseline) {
-      await sidebar.getByRole('button', { name: '设计工作台', exact: true }).click();
+      await page.getByRole('button', { name: '设计工作台', exact: true }).click();
       const playground = page.getByRole('region', { name: '设计工作台', exact: true });
       const scene = playground.getByRole('region', { name: '多画板画布', exact: true });
       const board1 = scene.getByRole('button', { name: '画板 1', exact: true });
@@ -1060,7 +1067,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await page.getByRole('button', { name: '返回设计对话', exact: true }).click();
       await page.locator('.vc-main-body > .vc-conversation textarea').waitFor();
       assert.equal(await editor.inputValue(), '切换画布时保留这段草稿。');
-      await sidebar.getByRole('button', { name: '设计工作台', exact: true }).click();
+      await page.getByRole('button', { name: '设计工作台', exact: true }).click();
       await playground.getByRole('button', { name: '单画板', exact: true }).click();
       await playground.getByRole('combobox', { name: '设计版本', exact: true }).selectOption('');
       await editor.fill('验收不含内容的候选稿');
@@ -1078,7 +1085,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await folder.waitFor({ state: 'hidden' });
       await folderTrigger.click();
       await folder.waitFor();
-      await sidebar.getByRole('button', { name: '项目资源库', exact: true }).click();
+      await page.getByRole('button', { name: '项目资源库', exact: true }).click();
       const library = page.getByRole('dialog', { name: '项目资源库', exact: true });
       await library.getByRole('button', { name: /^画板 2/ }).click();
       await library.frameLocator('iframe[title="画板 2"]').getByRole('heading', { name: '第二张海报画板', exact: true }).waitFor();
@@ -1087,7 +1094,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await page.frameLocator('iframe[title="设计原型预览"]')
         .getByRole('heading', { name: '第二张海报画板', exact: true }).waitFor();
 
-      await sidebar.getByRole('button', { name: '设计工作台', exact: true }).click();
+      await page.getByRole('button', { name: '设计工作台', exact: true }).click();
       await playground.getByRole('button', { name: '单画板', exact: true }).click();
       const designFrame = page.frameLocator('iframe[title="设计原型预览"]');
       async function sendLayerRevision(heading, prompt) {
@@ -1427,6 +1434,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
     const secondOrigin = new URL(page.url()).origin;
     assert.notEqual(firstOrigin, secondOrigin);
     assert.equal(await page.locator('#root').getAttribute('data-chrome-theme'), 'dark');
+    if (!legacyBaseline) await openHistory();
     await page.getByRole('button', { name: '测试美术项目', exact: true }).waitFor();
     if (!legacyBaseline) {
       // The streamed conversation was supplied by the test relay, so reseed its sidebar entry on restart.
@@ -1438,6 +1446,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
         await route.fulfill({ response, json: { ...result, preset: { ...result.preset, sessions: [{ id, title, mode: 'chat' }] } } });
       });
       await page.reload();
+      await openHistory();
       await page.getByRole('region', { name: '置顶会话', exact: true })
         .getByRole('button', { name: '右键重命名后的会话', exact: true }).waitFor();
       await page.getByRole('region', { name: '置顶项目', exact: true })
@@ -1485,8 +1494,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await dialog.waitFor({ state: 'hidden' });
       await page.getByRole('button', { name: '切换 VPS 执行端', exact: true }).click();
       await page.getByRole('option', { name: 'Antigravity', exact: true }).click();
-      await page.getByRole('complementary', { name: 'VPS 对话列表', exact: true })
-        .getByRole('button', { name: '新建对话', exact: true }).click();
+      await page.getByRole('button', { name: '新建对话', exact: true }).click();
       const editor = page.getByRole('textbox', { name: '消息', exact: true });
       await editor.fill('生成测试内容');
       await page.getByRole('button', { name: '发送', exact: true }).click();
