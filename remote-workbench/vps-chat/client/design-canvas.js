@@ -67,9 +67,15 @@ const canvasCss = `
   [data-vps-chat] .vc-design-materials > label {margin-block:8px}
   [data-vps-chat] .vc-design-brief {min-width:0; margin:12px 0; padding:8px 10px 10px; border:1px solid var(--vc-line); border-radius:8px}
   [data-vps-chat] .vc-design-brief-fields {display:grid; grid-template-columns:repeat(auto-fit,minmax(min(185px,100%),1fr)); gap:7px}
-  [data-vps-chat] .vc-design-materials .vc-design-auto-check {display:flex; align-items:center; gap:8px; padding-block:4px}
-  [data-vps-chat] .vc-design-brief .vc-design-auto-check {margin-block-start:7px}
-  [data-vps-chat] .vc-design-auto-check input {accent-color:var(--vc-accent)}
+  [data-vps-chat] .vc-design-materials .vc-design-switch-row {
+    display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:34px;
+    padding:4px 7px; border-radius:8px; cursor:pointer; transition:background-color var(--vc-control-duration) ease;
+  }
+  [data-vps-chat] .vc-design-switch-row > span {min-width:0; overflow-wrap:anywhere}
+  [data-vps-chat] .vc-design-switch-row:not(:has(input:disabled)):hover {background:var(--vc-hover)}
+  [data-vps-chat] .vc-design-switch-row:has(input:disabled) {color:var(--vc-muted); cursor:default}
+  [data-vps-chat] .vc-design-brief .vc-design-switch-row {margin-block-start:7px}
+  [data-vps-chat] .vc-design-share .vc-design-switch-row + .vc-design-switch-row {border-block-start:1px solid var(--vc-line)}
   [data-vps-chat] :is(.vc-design-style-trigger,.vc-design-review-trigger) {display:inline-flex; align-items:center; gap:6px}
   [data-vps-chat] .vc-design-style-popover {
     position:fixed; inset:auto; box-sizing:border-box; width:min(300px,calc(100vw - 16px)); margin:0; padding:12px;
@@ -122,7 +128,6 @@ const canvasCss = `
   [data-vps-chat] .vc-design-library {display:flex; gap:8px; align-items:end; margin-block:8px}
   [data-vps-chat] .vc-design-library label {flex:1}
   [data-vps-chat] .vc-design-library button {flex:none}
-  [data-vps-chat] .vc-design-materials .vc-design-share label {display:flex; align-items:center; gap:7px}
   [data-vps-chat] .vc-design-share {border:1px solid var(--vc-line); border-radius:8px; margin-block:12px}
   [data-vps-chat] .vc-design-image-list li {display:flex; gap:8px; align-items:center; padding:4px}
   [data-vps-chat] .vc-design-image-list img {object-fit:cover; border-radius:5px}

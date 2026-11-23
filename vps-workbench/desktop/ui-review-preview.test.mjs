@@ -1888,3 +1888,55 @@ test('workflow editor saves separate attachment and MCP tool grants for both loc
   assert.match(result.run.rows[0].reply, /Claude Agent SDK 完成阶段/u);
   assert.match(result.run.rows[1].reply, /Antigravity ACP 完成阶段/u);
 });
+
+test('design materials reuse the settings switches and keep persistent and per-message choices distinct', { timeout: 30_000 }, async (t) => {
+  const page = await openPreview(t);
+  await openDesign(page);
+  const trigger = page.getByRole('button', { name: '添加设计资料', exact: true });
+  const dialog = page.getByRole('dialog', { name: '设计资料', exact: true });
+  const next = dialog.getByRole('group', { name: '随下一条消息发送', exact: true });
+  const brief = dialog.getByRole('switch', { name: '后续设计轮次附带简报', exact: true });
+  const auto = dialog.getByRole('switch', { name: '后续设计轮次应用设计系统', exact: true });
+  const system = next.getByRole('switch', { name: '设计系统', exact: true });
+  const references = next.getByRole('switch', { name: '参考资料', exact: true });
+  await trigger.click();
+  await dialog.waitFor();
+  assert.equal(await dialog.getByRole('switch').count(), 5);
+  assert.equal(await dialog.getByRole('checkbox').count(), 0);
+  const styles = await brief.evaluate((input) => {
+    const style = getComputedStyle(input);
+    return [style.appearance, style.width, style.height, style.borderRadius];
+  });
+  assert.deepEqual(styles, ['none', '38px', '22px', '999px']);
+  await dialog.getByText('后续设计轮次附带简报', { exact: true }).click();
+  await auto.press('Space');
+  assert.equal(await brief.isChecked(), true);
+  assert.equal(await auto.isChecked(), true);
+  assert.equal(await system.isChecked(), true);
+  assert.equal(await system.isDisabled(), true);
+  await auto.press('Space');
+  assert.equal(await system.isDisabled(), false);
+  assert.equal(await system.isChecked(), false);
+
+  await page.setViewportSize({ width: 365, height: 480 });
+  await references.press('Space');
+  assert.equal(await references.isChecked(), true);
+  await references.scrollIntoViewIfNeeded();
+  await assertWithinViewport(references);
+  assert.ok(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth));
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'hidden' });
+  await trigger.evaluate((button) => {
+    if (document.activeElement !== button) throw new Error('设计资料关闭后焦点未返回入口');
+  });
+  await trigger.click();
+  assert.equal(await references.isChecked(), true);
+  assert.equal(await brief.isChecked(), true);
+  await dialog.getByRole('button', { name: '完成', exact: true }).click();
+
+  await page.reload();
+  await openDesign(page);
+  await trigger.click();
+  assert.equal(await brief.isChecked(), true);
+  assert.equal(await references.isChecked(), false);
+});

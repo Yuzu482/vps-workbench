@@ -169,6 +169,13 @@ export function createDesignControls(React) {
         h('span', { className: 'vc-menu-label' }, menuIcon(h, icon), label));
     }
 
+    function materialSwitch(label, checked, change, { key, disabled } = {}) {
+      return h('label', { key, className: 'vc-design-switch-row' },
+        h('span', null, label),
+        h('input', { type: 'checkbox', role: 'switch', className: 'vc-settings-switch', checked, disabled,
+          onChange: (event) => change(event.target.checked) }));
+    }
+
     function dismiss() {
       if (!busy) ref.current.close();
     }
@@ -188,12 +195,8 @@ export function createDesignControls(React) {
             const value = designText(event.target.value, limit);
             update((previous) => ({ ...previous, brief: { ...previous.brief, [key]: value } }));
           } })))),
-      h('label', { className: 'vc-design-auto-check' }, h('input', { type: 'checkbox', checked: project.brief.enabled,
-        onChange: (event) => {
-          const enabled = event.target.checked;
-          update((previous) => ({ ...previous, brief: { ...previous.brief, enabled } }));
-        },
-      }), '后续设计轮次附带简报')) : null,
+      materialSwitch('后续设计轮次附带简报', project.brief.enabled, (enabled) =>
+        update((previous) => ({ ...previous, brief: { ...previous.brief, enabled } })))) : null,
     h('div', { className: 'vc-design-imports', role: 'group', 'aria-label': '导入设计资料' },
       fileImport('添加参考图片', 'image', {
         multiple: true, accept: 'image/png,image/jpeg,image/webp',
@@ -211,14 +214,10 @@ export function createDesignControls(React) {
         placeholder: '填写颜色、排版、布局和组件约定，可直接使用 DESIGN.md 格式',
         onChange: (event) => editText('system', event.target.value, 10000),
       })),
-    workflow ? h('label', { className: 'vc-design-auto-check' }, h('input', {
-      type: 'checkbox', checked: project.autoSystem,
-      onChange: (event) => {
-        const autoSystem = event.target.checked;
-        update((previous) => ({ ...previous, autoSystem }));
-        setChoices({ ...choices, system: false });
-      },
-    }), '后续设计轮次应用设计系统') : null,
+    workflow ? materialSwitch('后续设计轮次应用设计系统', project.autoSystem, (autoSystem) => {
+      update((previous) => ({ ...previous, autoSystem }));
+      setChoices({ ...choices, system: false });
+    }) : null,
     library.length ? h('div', { className: 'vc-design-library' },
       h('label', null, '本机设计系统', h('select', {
         value: chosenSystem, disabled: busy, onChange: (event) => setChosenSystem(event.target.value),
@@ -256,11 +255,9 @@ export function createDesignControls(React) {
     h('fieldset', { className: 'vc-design-share' },
       h('legend', null, '随下一条消息发送'),
       [['system', '设计系统'], ['references', '参考资料'], ['revision', '当前版本的画布修改和批注']].map(([key, label]) =>
-        h('label', { key }, h('input', {
-          type: 'checkbox', checked: choices[key] || (key === 'system' && workflow && project.autoSystem),
-          disabled: key === 'system' && workflow && project.autoSystem,
-          onChange: (event) => setChoices({ ...choices, [key]: event.target.checked }),
-        }), label))),
+        materialSwitch(label, choices[key] || (key === 'system' && workflow && project.autoSystem),
+          (checked) => setChoices({ ...choices, [key]: checked }),
+          { key, disabled: key === 'system' && workflow && project.autoSystem }))),
     error ? h('p', { className: 'vc-feedback', role: 'alert' }, error) : null,
     h('div', { className: 'vc-dialog-actions' },
       h('button', { type: 'button', className: 'vc-button', onClick: dismiss, disabled: busy }, busy ? '正在读取' : '完成')));
