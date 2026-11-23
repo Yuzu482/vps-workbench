@@ -2,6 +2,8 @@
 
 Windows 独立应用。「VPS SSH」和「本机 SDK」共用对话、项目资源库、设计画布、工作流和设置。两种位置各自绑定配置、执行端和会话回执。
 
+[部署教程](docs/deployment.md) · [交给模型的安装提示词](docs/installation-prompt.md)
+
 ## 启动与导入
 
 打开发行目录中的 **VPS Workbench.exe**。整个发行目录可以复制到其他位置。运行需要 Windows x64。VPS SSH 使用 .NET 10 Runtime、Windows OpenSSH 和 Python 3.11。Python 默认检测当前用户的 Python 3.11 安装目录，也可通过 VPS_WORKBENCH_PYTHON 指定完整的 python.exe 路径。
