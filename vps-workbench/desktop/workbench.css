@@ -329,11 +329,12 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   background: var(--vc-canvas); border-top: 1px solid var(--vc-line);
 }
 #root .vc-sidebar-actions .vc-sidebar-new {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  flex: none; width: auto; min-inline-size: 108px; height: 46px; padding-inline: 12px;
-  border-radius: 10px;
+  display: grid; grid-template-columns: 16px auto 16px; place-content: center; align-items: center; column-gap: 6px;
+  flex: none; width: auto; min-inline-size: 108px; height: 40px; padding: 0 8px;
+  border-radius: 8px;
 }
-#root .vc-sidebar-new .vc-menu-icon { width: 18px; height: 18px; }
+#root .vc-sidebar-new .vc-menu-icon { width: 16px; height: 16px; }
+.vc-sidebar-new-label { text-align: center; line-height: 1.25; }
 #root .vc-sidebar-actions .vc-tool-picker { inline-size: 190px; min-inline-size: 0; flex: 0 1 auto; }
 #root .vc-sidebar-actions :is(.vc-tool-trigger, .vc-tool-summary) {
   grid-template-columns: 32px minmax(0, 1fr) 11px; align-items: center; justify-items: stretch; gap: 8px;
@@ -369,7 +370,7 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   #root > :is([data-vps-chat], [data-local-sdk]) > .vc-rail { grid-area: 1 / 1 / 2 / 2; }
   .vc-rail-content { inline-size: 215px; }
   #root:not([data-sidebar-collapsed="true"]) > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) {
-    --desktop-actions-height: 156px;
+    --desktop-actions-height: 150px;
   }
   #root:not([data-sidebar-collapsed="true"]) > :is([data-vps-chat], [data-local-sdk]):not([data-subscription-open="true"]) > .vc-main {
     grid-area: 1 / 2 / -1 / -1;

@@ -2540,7 +2540,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         h('button', {
           type: 'button', className: 'vc-button vc-new vc-sidebar-new vc-primary', onClick: onNewChat ?? startNewChat,
           disabled: !onNewChat && (!chatEnabled || Boolean(working)),
-        }, menuIcon(h, 'new-chat'), '新建对话'),
+        }, menuIcon(h, 'new-chat'), h('span', { className: 'vc-sidebar-new-label' }, '新建对话')),
         toolPicker,
         h('button', {
           type: 'button', className: 'vc-button vc-sidebar-settings', disabled: providerSwitchLocked,

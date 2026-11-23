@@ -1704,8 +1704,12 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     const newChat = footer.getByRole('button', { name: '新建对话', exact: true });
     await assertWithinViewport(newChat);
     const primary = await newChat.boundingBox();
-    assert.ok(primary.height > boxes[0].height && primary.width > boxes[0].width && primary.y > viewport.height - 160);
+    assert.equal(primary.height, 40);
+    assert.ok(primary.width > boxes[0].width && primary.y > viewport.height - 160);
     assert.equal(primary.x, boxes[0].x);
+    const label = await newChat.getByText('新建对话', { exact: true }).boundingBox();
+    assert.ok(Math.abs(label.x + label.width / 2 - (primary.x + primary.width / 2)) < 0.5);
+    assert.ok(Math.abs(label.y + label.height / 2 - (primary.y + primary.height / 2)) < 0.5);
     const provider = await footer.getByRole('button', { name: '切换 VPS 执行端', exact: true }).boundingBox();
     assert.ok(viewport.width > 620 ? primary.y + primary.height <= provider.y : primary.x + primary.width <= provider.x);
     assert.equal(await shortcuts.getByRole('tooltip').count(), 0);
