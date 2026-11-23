@@ -35,6 +35,20 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
   AgentPresetSettings, WorkflowPanel, useWorkflows = () => null, SetupGuide, setupConnectionKey,
   VpsConnectionChecks, useVpsConnectionChecks = () => null, localSdk = false }) {
   const h = React.createElement;
+
+  function SidebarShortcut({ label, detail, icon, className, running = false, ...button }) {
+    const descriptionId = React.useId();
+    const [dismissed, setDismissed] = React.useState(false);
+    return h('div', { className: 'vc-rail-shortcut', 'data-tooltip-dismissed': dismissed,
+      onPointerEnter: () => setDismissed(false), onFocus: () => setDismissed(false),
+      onKeyDown: (event) => { if (event.key === 'Escape') setDismissed(true); } },
+    h('button', { type: 'button', className: 'vc-button ' + className,
+      'aria-label': label, 'aria-describedby': descriptionId, ...button },
+    menuIcon(h, icon), running ? h('span', { className: 'vc-rail-shortcut-running', 'aria-hidden': true }) : null),
+    h('span', { id: descriptionId, className: 'vc-rail-shortcut-tip', role: 'tooltip' },
+      h('strong', { 'aria-hidden': true }, label), h('span', null, detail)));
+  }
+
   const MarkdownReply = createMarkdownReply(React, CodeBlock, parseStreamingMarkdown);
   const DesignCanvas = createDesignCanvas(React);
   const AccountDialog = createAccountDialog(React);
@@ -2291,8 +2305,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       h('button', {
         type: 'button', className: 'vc-button vc-new vc-primary', onClick: onNewChat ?? startNewChat,
         disabled: !onNewChat && (!chatEnabled || Boolean(working)),
-      }, sidebarActions ? h('span', { className: 'vc-menu-label' }, menuIcon(h, 'new-chat'), '新聊天') : '＋ 新对话'),
-      sidebarActions ? null : h('button', {
+      }, '＋ 新对话'),
+      h('button', {
         type: 'button', className: 'vc-button vc-new vc-new-design', onClick: () => newSession('design'),
         disabled: !designAvailable || Boolean(working),
       }, '新建设计'));
@@ -2472,20 +2486,21 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         style: showingSubscription ? { display: 'none' } : undefined,
         'aria-label': localSdk ? '本地对话历史' : 'VPS 对话列表', tabIndex: -1, 'data-vc-focus-area': 'history',
       },
-        sidebarActions ? h('div', { className: 'vc-rail-content' }, newActions,
-          ResourceLibrary ? h('button', { type: 'button', className: 'vc-button vc-resource-entry',
-            'aria-haspopup': 'dialog', onClick: () => setResourcesOpen(true),
-          }, menuIcon(h, 'library'), '项目资源库') : null,
-          workflows ? h('button', { type: 'button', className: 'vc-button vc-resource-entry',
-            'aria-label': '工作流', 'aria-haspopup': 'dialog', onClick: workflows.openPanel,
-            disabled: localSdk && providerId !== 'codex' && !workflows.panel.mixed,
-          }, menuIcon(h, 'fork'), '工作流', workflows.panel.running
-            ? h('span', { className: 'vc-project-count', role: 'status' }, '运行中') : null) : null,
-          h('button', { type: 'button', className: 'vc-button vc-resource-entry vc-playground-entry',
-            disabled: !designAvailable || Boolean(working), onClick: openPlayground,
-            'aria-current': floatingChat ? 'page' : undefined,
-            title: designAvailable ? '打开设计工作台' : '切换到 Codex 后可打开设计工作台',
-          }, menuIcon(h, 'canvas'), '设计工作台'),
+        sidebarActions ? h('div', { className: 'vc-rail-content' },
+          h('div', { className: 'vc-rail-shortcuts', role: 'group', 'aria-label': '工作台快捷入口' },
+            h(SidebarShortcut, { className: 'vc-new vc-primary', icon: 'new-chat', label: '新聊天',
+              detail: '创建一段新的对话。', onClick: onNewChat ?? startNewChat,
+              disabled: !onNewChat && (!chatEnabled || Boolean(working)) }),
+            ResourceLibrary ? h(SidebarShortcut, { className: 'vc-resource-entry', icon: 'library', label: '项目资源库',
+              detail: '浏览项目里的画板、图片和代码块。', 'aria-haspopup': 'dialog', onClick: () => setResourcesOpen(true) }) : null,
+            workflows ? h(SidebarShortcut, { className: 'vc-resource-entry', icon: 'fork', label: '工作流',
+              detail: workflows.panel.running ? '有工作流正在运行，打开可查看进度。' : '编辑阶段、运行工作流或查看回执。',
+              running: workflows.panel.running, 'aria-haspopup': 'dialog', onClick: workflows.openPanel,
+              disabled: localSdk && providerId !== 'codex' && !workflows.panel.mixed }) : null,
+            h(SidebarShortcut, { className: 'vc-resource-entry vc-playground-entry', icon: 'canvas', label: '设计工作台',
+              detail: designAvailable ? '在画布中编辑画板、查看版本。' : '切换到 Codex 后可打开设计工作台。',
+              disabled: !designAvailable || Boolean(working), onClick: openPlayground,
+              'aria-current': floatingChat ? 'page' : undefined })),
           h('nav', { className: 'vc-list', 'aria-label': '会话记录' },
             h('h2', { className: 'vc-rail-label vc-session-list-heading' }, '会话'),
             pinnedRows.length ? h('section', { className: 'vc-pinned-sessions', 'aria-label': '置顶会话' },
