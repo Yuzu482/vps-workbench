@@ -26,10 +26,10 @@ async function openCopiedLink(page, value) {
   return dialog;
 }
 
-async function openPreview(t, { viewport = { width: 1280, height: 720 }, seed, previewOptions } = {}) {
+async function openPreview(t, { viewport = { width: 1280, height: 720 }, seed, previewOptions, launchArgs = [] } = {}) {
   const preview = await startPreview({ ...previewOptions, port: 0, watch: false });
   t.after(() => preview.close());
-  const browser = await chromium.launch({ channel: 'msedge', args: ['--disable-background-networking', '--no-proxy-server'] });
+  const browser = await chromium.launch({ channel: 'msedge', args: ['--disable-background-networking', '--no-proxy-server', ...launchArgs] });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport, reducedMotion: 'reduce' });
   await context.route('**/*', (route) => {
@@ -2356,4 +2356,74 @@ test('VPS OAuth clipboard transfers only on request and the cursor has a fallbac
   await emitClipboard('fixture-secret');
   assert.deepEqual(await page.evaluate(() => window.accountLocalCopies), ['example-only-code']);
   assert.deepEqual(attempts, ['claude-login', 'claude-login', 'claude-api-key']);
+});
+
+test('the bundled noVNC client renders a visible fallback for a zero-size remote cursor', { timeout: 30_000 }, async (t) => {
+  const { build } = await import('esbuild');
+  const { fileURLToPath } = await import('node:url');
+  const player = await build({
+    entryPoints: [fileURLToPath(new URL('../node_modules/@novnc/novnc/core/rfb.js', import.meta.url))],
+    bundle: true, format: 'esm', target: 'es2023', write: false,
+  });
+  const page = await openPreview(t, { launchArgs: ['--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets'] });
+  const { WebSocketServer } = await import('ws');
+  const { once } = await import('node:events');
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await once(server, 'listening');
+  t.after(() => {
+    for (const socket of server.clients) socket.terminate();
+    return new Promise((resolve) => server.close(resolve));
+  });
+  const { port } = server.address();
+  await page.route(page.url(), async (route) => {
+    const response = await route.fetch();
+    const headers = response.headers();
+    headers['content-security-policy'] = headers['content-security-policy']
+      .replace("connect-src 'self'", "connect-src 'self' ws://127.0.0.1:" + port);
+    await route.fulfill({ response, headers });
+  });
+  await page.reload();
+  await page.route('**/dsh-vps-chat/api/rpc', (route) => route.request().postDataJSON()?.op === 'account-view'
+    ? route.fulfill({ json: { ok: true, protocol: 'dsh-account.' + 'a'.repeat(43), port } }) : route.fallback());
+  await page.route('**/dsh-vps-chat/api/account-player.mjs', (route) => route.fulfill({
+    contentType: 'text/javascript', body: player.outputFiles[0].text,
+  }));
+  server.on('connection', (socket) => {
+    let state = 0;
+    socket.send(Buffer.from('RFB 003.008\n'));
+    socket.on('message', () => {
+      state += 1;
+      if (state === 1) socket.send(Buffer.from([1, 1]));
+      if (state === 2) socket.send(Buffer.alloc(4));
+      if (state === 3) {
+        const init = Buffer.alloc(24);
+        init.writeUInt16BE(640, 0);
+        init.writeUInt16BE(480, 2);
+        init.set([32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0], 4);
+        socket.send(init);
+      }
+      if (state === 4) {
+        const cursor = Buffer.alloc(16);
+        cursor.writeUInt16BE(1, 2);
+        cursor.writeInt32BE(-239, 12);
+        socket.send(cursor);
+      }
+    });
+  });
+  await page.getByRole('group', { name: 'VPS 操作', exact: true })
+    .getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await openSettingsSection(settings, '账号');
+  await settings.getByRole('button', { name: 'VPS 登录 Claude', exact: true }).click();
+  const viewer = page.getByRole('dialog', { name: 'Claude Code 订阅登录' });
+  await viewer.getByText('已连接 VPS 账号操作窗口', { exact: true }).waitFor();
+  await viewer.locator('canvas').hover();
+  await page.waitForFunction(() => {
+    const canvas = document.querySelector('.vc-account-screen canvas');
+    if (canvas?.style.cursor.includes('data:image/png')) return true;
+    return [...document.querySelectorAll('body > canvas')].some((cursor) =>
+      cursor.width > 0 && cursor.height > 0 && cursor.style.visibility !== 'hidden' &&
+      cursor.getContext('2d').getImageData(0, 0, cursor.width, cursor.height).data.some((value, index) =>
+        index % 4 === 3 && value > 0));
+  });
 });

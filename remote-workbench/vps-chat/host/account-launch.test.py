@@ -79,7 +79,7 @@ class AccountLaunchTest(unittest.TestCase):
             browser = directory / "firefox"
             browser.write_text(
                 "#!/usr/bin/python3 -I\nimport json, os, sys\nfrom pathlib import Path\n"
-                f"Path({str(result)!r}).write_text(json.dumps([sys.argv[1:], os.environ.get('DISPLAY')]))\n",
+                f"Path({str(result)!r}).write_text(json.dumps([sys.argv[1:], os.environ.get('DISPLAY'), os.environ.get('DBUS_SESSION_BUS_ADDRESS'), os.environ.get('SSH_CONNECTION')]))\n",
                 encoding="utf-8",
             )
             browser.chmod(0o700)
@@ -89,10 +89,10 @@ class AccountLaunchTest(unittest.TestCase):
                 opener.write_text(make_opener("claude-login", directory, profile), encoding="utf-8")
             opener.chmod(0o700)
             allowed = "https://claude.com/cai/oauth/authorize?state=synthetic%26fixture"
-            process = subprocess.run([opener, allowed], env={"DISPLAY": ":907"}, capture_output=True)
+            process = subprocess.run([opener, allowed], env={"DISPLAY": ":907", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/fixture/bus", "SSH_CONNECTION": "ignored"}, capture_output=True)
             self.assertEqual(process.returncode, 0, process.stderr)
             self.assertEqual(json.loads(result.read_text(encoding="utf-8")),
-                             [["--profile", str(profile), "--new-tab", allowed], ":907"])
+                             [["--profile", str(profile), "--new-tab", allowed], ":907", "unix:path=/fixture/bus", None])
             result.unlink()
             for invalid in (
                 "http://claude.ai/oauth/authorize?state=synthetic",

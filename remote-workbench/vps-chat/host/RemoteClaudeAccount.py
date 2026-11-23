@@ -179,7 +179,7 @@ except ValueError:
     raise SystemExit("Unrecognized login link.") from None
 if target.scheme != "https" or (target.netloc.lower(), target.path) not in endpoints or not target.query:
     raise SystemExit("Open the login link directly in the VPS browser.")
-env = {{name: os.environ[name] for name in ("DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "LANG") if name in os.environ}}
+env = {{name: os.environ[name] for name in ("DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "LANG") if name in os.environ}}
 env.update(HOME={str(home)!r}, PATH="/usr/bin:/bin:/snap/bin")
 try:
     result = subprocess.run([{FIREFOX!r}, "--profile", {str(profile)!r}, "--new-tab", url], env=env,
@@ -435,6 +435,9 @@ def main():
     runtime = Path("/run/user") / str(os.getuid())
     if runtime.is_dir():
         env["XDG_RUNTIME_DIR"] = str(runtime)
+        bus = runtime / "bus"
+        if bus.is_socket() and bus.stat().st_uid == os.getuid():
+            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
     root = account_browser_root(home, runtime, action, env)
     try:
         check_egress(expected4, expected6, env)
