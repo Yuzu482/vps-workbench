@@ -1712,8 +1712,20 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     assert.ok(Math.abs(label.y + label.height / 2 - (primary.y + primary.height / 2)) < 0.5);
     const provider = await footer.getByRole('button', { name: '切换 VPS 执行端', exact: true }).boundingBox();
     assert.ok(viewport.width > 620 ? primary.y + primary.height <= provider.y : primary.x + primary.width <= provider.x);
+    const outline = (button) => button.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { color: style.borderTopColor, width: style.borderTopWidth };
+    });
+    for (const button of [...entries, newChat, footer.getByRole('button', { name: '设置', exact: true }),
+      footer.getByRole('button', { name: '切换 VPS 执行端', exact: true })]) {
+      const { color, width } = await outline(button);
+      assert.equal(width, '1px');
+      assert.doesNotMatch(color, /transparent|rgba\([^)]*, 0\)$/u);
+    }
+    const resting = await outline(first);
     assert.equal(await shortcuts.getByRole('tooltip').count(), 0);
     await first.hover();
+    assert.notEqual((await outline(first)).color, resting.color);
     await shortcuts.getByRole('tooltip').getByText('浏览项目里的画板、图片和代码块。', { exact: true }).waitFor();
     await page.mouse.move(viewport.width - 3, 8);
     await shortcuts.getByRole('tooltip').waitFor({ state: 'hidden' });
