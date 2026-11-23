@@ -511,6 +511,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const rpc = localSdk ? local.request : sshRpc;
     const viewId = React.useId();
     const historyPanelId = sidebarActions ? `desktop-history-${viewId}` : undefined;
+    const quotaPopoverId = `desktop-quota-${viewId}`;
     const workbench = React.useRef(null);
     const body = React.useRef(null);
     const editor = React.useRef(null);
@@ -2552,7 +2553,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       h('style', null, css),
       sidebarActions && !showingSubscription ? h('nav', { className: 'vc-compact-rail vc-rail-shortcuts', 'aria-label': '快捷侧栏' },
         h(SidebarShortcut, { className: 'vc-compact-history', icon: 'history', label: '会话与项目',
-          detail: '展开会话历史、项目和订阅额度。', 'aria-expanded': historyOpen, 'aria-controls': historyPanelId,
+          detail: '展开会话历史与项目。', 'aria-expanded': historyOpen, 'aria-controls': historyPanelId,
           onClick: (event) => { historyTrigger.current = event.currentTarget; setHistoryOpen((open) => !open); } }),
         h(SidebarShortcut, { className: 'vc-compact-new-chat', icon: 'new-chat', label: '新建对话',
           detail: '在所选位置开始对话。', onClick: onNewChat ?? startNewChat, disabled: newChatDisabled }),
@@ -2588,16 +2589,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
                 h('div', { className: 'vc-disclosure-clip' },
                   h('div', { className: 'vc-project-session-rows', role: 'group', 'aria-label': '已归档会话' },
                     archivedRows.map(renderSession))))) : null,
-            rows.length || projects.size ? null : h('p', null, '暂无会话')),
-          h('details', { className: 'vc-sidebar-quota', key: subscriptionScope, 'aria-label': '订阅额度' },
-            h('summary', { 'aria-label': `订阅额度 · ${tools.find(({ id }) => id === activeTool)?.label ?? providerName}` },
-              ...subscriptionRings(h, activeTool && subscriptionSamples[`${subscriptionScope}:${localSdk ? scope : activeTool}`])),
-            h('div', { className: 'vc-quota-subscriptions', 'aria-label': '已配置的订阅额度' },
-              subscriptionEntries.map(({ target, label, icon }) =>
-                h('section', { key: target, 'aria-label': label },
-                  h('h2', null, menuIcon(h, icon), label),
-                  ...subscriptionRings(h, subscriptionSamples[`${subscriptionScope}:${target}`], true))),
-              subscriptionEntries.length === 0 && h('p', null, '尚未配置订阅执行端。'))))
+            rows.length || projects.size ? null : h('p', null, '暂无会话')))
         : h(React.Fragment, null,
         h('div', { className: 'vc-rail-label' }, '会话'),
         newActions,
@@ -2618,6 +2610,16 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           onClick: () => openSettings('accounts'),
         }, '账号管理'))),
       sidebarActions ? h('div', { className: 'vc-sidebar-actions', role: 'group', 'aria-label': localSdk ? '本机操作' : 'VPS 操作' },
+        h('button', { type: 'button', className: 'vc-button vc-sidebar-quota', popoverTarget: quotaPopoverId,
+          'aria-label': `订阅额度 · ${tools.find(({ id }) => id === activeTool)?.label ?? providerName}` },
+          ...subscriptionRings(h, activeTool && subscriptionSamples[`${subscriptionScope}:${localSdk ? scope : activeTool}`])),
+        h('div', { id: quotaPopoverId, className: 'vc-quota-subscriptions', popover: 'auto', role: 'region',
+          'aria-label': '已配置的订阅额度', key: subscriptionScope },
+          subscriptionEntries.map(({ target, label, icon }) =>
+            h('section', { key: target, 'aria-label': label },
+              h('h2', null, menuIcon(h, icon), label),
+              ...subscriptionRings(h, subscriptionSamples[`${subscriptionScope}:${target}`], true))),
+          subscriptionEntries.length === 0 && h('p', null, '尚未配置订阅执行端。')),
         toolPicker,
         h('button', {
           type: 'button', className: 'vc-button vc-sidebar-settings', disabled: providerSwitchLocked,

@@ -126,7 +126,7 @@ test('subscription rings distinguish exhausted, unavailable and weekly-only obse
   });
   await (await sidebarButton(page, '纸间书店')).click();
   await (await sidebarButton(page, '纸间书店 · 周末发布清单')).click();
-  const summary = page.locator('.vc-sidebar-quota summary');
+  const summary = page.getByRole('button', { name: /^订阅额度/ });
   await summary.getByRole('img', { name: '5 小时额度，暂无数据', exact: true }).waitFor();
   await summary.getByRole('img', { name: '每周额度，剩余 0%', exact: true }).waitFor();
   await summary.press('Enter');
@@ -1790,25 +1790,30 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     const newChat = (wide ? shortcuts : rail).getByRole('button', { name: '新建对话', exact: true });
     for (const button of [newChat, footer.getByRole('button', { name: '设置', exact: true }),
       footer.getByRole('button', { name: '切换 VPS 执行端', exact: true })]) await assertWithinViewport(button);
-    assert.equal(await footer.getByRole('button').count(), 2);
+    assert.equal(await footer.getByRole('button').count(), 3);
     const providerButton = footer.getByRole('button', { name: '切换 VPS 执行端', exact: true });
     const settingsButton = footer.getByRole('button', { name: '设置', exact: true });
-    if (wide) await page.getByRole('button', { name: '展开会话侧栏', exact: true }).click();
-    const quota = rail.locator('.vc-sidebar-quota');
-    await assertWithinViewport(quota);
-    const quotaBounds = await quota.boundingBox();
+    const quotaToggle = footer.getByRole('button', { name: /^订阅额度/ });
+    await assertWithinViewport(quotaToggle);
+    const quotaBounds = await quotaToggle.boundingBox();
     const providerBounds = await providerButton.boundingBox();
-    assert.ok(wide ? quotaBounds.x >= providerBounds.x + providerBounds.width
-      : quotaBounds.y + quotaBounds.height <= providerBounds.y + 4);
-    const quotaToggle = quota.locator('summary');
-    assert.equal(await quotaToggle.getByRole('img').count(), 2);
+    assert.ok(wide ? quotaBounds.y + quotaBounds.height <= providerBounds.y
+      : quotaBounds.x + quotaBounds.width <= providerBounds.x);
+    const rings = quotaToggle.getByRole('img');
+    assert.equal(await rings.count(), 2);
+    const [fiveHour, weekly] = await Promise.all([rings.nth(0).boundingBox(), rings.nth(1).boundingBox()]);
+    assert.ok(wide ? fiveHour.x === weekly.x && weekly.y >= fiveHour.y + fiveHour.height
+      : fiveHour.y === weekly.y && weekly.x >= fiveHour.x + fiveHour.width);
     await quotaToggle.getByRole('img', { name: '5 小时额度，暂无数据', exact: true }).waitFor();
     await quotaToggle.getByRole('img', { name: '每周额度，暂无数据', exact: true }).waitFor();
     await quotaToggle.press('Enter');
+    const quota = footer.getByRole('region', { name: '已配置的订阅额度', exact: true });
+    await assertWithinViewport(quota);
     await quota.getByRole('region', { name: 'Codex', exact: true }).waitFor();
     assert.equal(await quota.getByRole('region', { name: 'Claude API', exact: true }).count(), 0);
-    await quotaToggle.press('Enter');
-    if (wide) await page.getByRole('button', { name: '收起会话侧栏', exact: true }).click();
+    await page.keyboard.press('Escape');
+    await quota.waitFor({ state: 'hidden' });
+    assert.equal(await quotaToggle.evaluate((button) => button === document.activeElement), true);
     const fills = (button) => button.evaluate((element) => {
       const style = getComputedStyle(element);
       return { border: style.borderTopColor, background: style.backgroundColor };
