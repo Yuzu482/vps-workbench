@@ -10,7 +10,7 @@ import { startWorkbenchServer } from './server.mjs';
 import { openAppData, memoryJournalKey } from './data.mjs';
 import { localMemoryJournalKey } from '../local-sdk/workbench.mjs';
 import { setupConnectionKey } from './setup-state.mjs';
-import { localWorkflowRunKey, mixedWorkflowRunKey, workflowRunKey } from '../workflow-engine/state.mjs';
+import { localWorkflowRunKey, mixedWorkflowHistoryKey, mixedWorkflowRunKey, workflowRunKey } from '../workflow-engine/state.mjs';
 import { openMixedWorkflow } from './mixed-workflow.mjs';
 
 async function until(lookup) {
@@ -213,7 +213,94 @@ test('a route lost after reservation rejects before dispatch and can resume the 
   const first = await until(() => { const status = runtime.status(); return !status.running && status.run?.phase === 'paused' && status.run; });
   assert.equal(first.rows[0].state, 'waiting');
   assert.equal(dispatched.length, 0);
+  assert.equal((await runtime.retry(first.id, 0)).code, 'mixed_busy');
   assert.equal(runtime.action('resume').ok, true);
   await until(() => runtime.status().run?.phase === 'complete');
   assert.deepEqual(dispatched.map(({ op, body }) => [op, body.turnId]), [['send', first.rows[0].turnId]]);
+});
+
+test('archives are atomic and historical retries require the exact failed receipt and original route', { timeout: 25_000 }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'workbench-run-history-'));
+  const data = await openAppData(root);
+  const workflowId = randomUUID();
+  const configId = randomUUID();
+  const targetId = '1'.repeat(64);
+  const stages = ['prepare', 'review', 'publish'].map((id) => ({ id, name: id, provider: 'codex', model: 'fixture',
+    instruction: '处理此阶段。', execution: { location: 'local-sdk', configId, context: 'independent' } }));
+  const edges = [{ from: 'prepare', to: 'review' }, { from: 'review', to: 'publish' }];
+  await data.changeWorkflows({ op: 'save', id: workflowId, revision: null, draft: { name: '归档路径', stages, edges } });
+  let rejectWrite = false;
+  let changeRoute = false;
+  let resultState = 'failed';
+  let firstFailure;
+  const sends = [];
+  const artifacts = [];
+  const receipts = new Map();
+  const start = (storage) => openMixedWorkflow({ data: { ...storage, async setPreferences(changes) {
+    if (rejectWrite) throw new Error('fixture write denied');
+    return storage.setPreferences(changes);
+  } }, canExecute: () => true, targets: () => [],
+  resolve: () => ({ targetId, routePin: (changeRoute ? 'b' : 'a').repeat(64), defaultModel: 'fixture', isCurrent: () => true,
+    settings: { location: 'local-sdk', provider: 'codex', profileId: configId } }),
+  catalog: () => [{ id: 'fixture' }],
+  dispatch(op, body, _route, options) {
+    assert.equal(options.isLive(), true);
+    const boundRun = options.workflowRun();
+    if (op === 'workflow-artifacts') {
+      artifacts.push({ runId: boundRun.id, turnId: body.turnId });
+      return { ok: true, files: [{ path: '结果.md', size: 6 }], truncated: false };
+    }
+    if (op === 'get') {
+      const payload = structuredClone(receipts.get(body.sessionId));
+      if (payload.session.turns[0].id === firstFailure) payload.session.turns[0].state = resultState;
+      return payload;
+    }
+    assert.equal(op, 'send');
+    sends.push(body.turnId);
+    const index = boundRun.rows.findIndex(({ turnId }) => turnId === body.turnId);
+    const fail = index === 1 && !firstFailure;
+    if (fail) firstFailure = body.turnId;
+    const result = { ok: true, targetId, session: { id: body.sessionId, turns: [{ id: body.turnId,
+      state: fail ? 'failed' : 'complete', reply: fail ? '阶段返回失败。' : '完成。', ...(fail && { code: 'fixture_failure' }) }] } };
+    receipts.set(body.sessionId, result);
+    return result;
+  } });
+  let runtime = start(data);
+  t.after(async () => { await runtime.dispose(); await rm(root, { recursive: true, force: true }); });
+  const phase = (name) => until(() => {
+    const status = runtime.status();
+    return !status.running && status.run?.phase === name && status.run;
+  });
+  assert.equal((await runtime.start({ workflowId, revision: 1, task: '运行原任务', criteria: '核对所有阶段',
+    constraints: '', evidence: [], transfers: [] })).ok, true);
+  const original = await phase('failed');
+  assert.deepEqual(original.rows.map(({ state }) => state), ['complete', 'failed', 'skipped']);
+  resultState = 'unknown';
+  assert.equal((await runtime.retry(original.id, 1)).code, 'mixed_retry_unconfirmed');
+  resultState = 'failed';
+  changeRoute = true;
+  assert.equal((await runtime.retry(original.id, 1)).code, 'mixed_route_changed');
+  changeRoute = false;
+  rejectWrite = true;
+  assert.equal((await runtime.retry(original.id, 1)).ok, true);
+  await until(() => !runtime.status().running && runtime.status().error);
+  assert.equal(runtime.status().run.id, original.id);
+  assert.equal(data.preference(mixedWorkflowHistoryKey), undefined);
+  assert.equal(sends.length, 2);
+  rejectWrite = false;
+  assert.equal((await runtime.retry(original.id, 1)).ok, true);
+  const retried = await phase('complete');
+  assert.notEqual(retried.id, original.id);
+  assert.deepEqual(retried.rows[0], original.rows[0]);
+  assert.notEqual(retried.rows[1].turnId, original.rows[1].turnId);
+  assert.notEqual(retried.rows[2].turnId, original.rows[2].turnId);
+  assert.equal(sends.length, 4);
+  await runtime.dispose();
+  runtime = start(await openAppData(root));
+  assert.equal(runtime.status().run.id, retried.id);
+  assert.deepEqual(runtime.history().entries.map(({ id }) => id), [original.id]);
+  assert.deepEqual(runtime.detail(original.id).run, original);
+  assert.equal((await runtime.artifacts({ runId: original.id, stageIndex: 0 })).ok, true);
+  assert.deepEqual(artifacts, [{ runId: original.id, turnId: original.rows[0].turnId }]);
+  assert.equal((await runtime.retry(original.id, 0)).code, 'mixed_retry_unconfirmed');
 });

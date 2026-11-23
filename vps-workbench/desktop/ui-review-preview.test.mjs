@@ -329,8 +329,9 @@ async function sidebarButton(page, name) {
   return button;
 }
 
-test('mixed workflow simulates scoped handoffs offline and shows original stage details and artifacts', { timeout: 40_000 }, async (t) => {
-  const page = await openPreview(t, { viewport: { width: 420, height: 640 }, previewOptions: { localAgents: true }, seed({ preferences }) {
+test('mixed workflow simulates offline, retries a confirmed stage and restores archived details', { timeout: 50_000 }, async (t) => {
+  const page = await openPreview(t, { viewport: { width: 420, height: 640 },
+    previewOptions: { localAgents: true, mixedFailureStage: 'summary' }, seed({ preferences }) {
     preferences['dsh-vps-chat:desktop-view-location:v1'] = 'ssh-vps';
   } });
   const record = await page.evaluate(async (key) => {
@@ -384,9 +385,18 @@ test('mixed workflow simulates scoped handoffs offline and shows original stage 
   await launch.scrollIntoViewIfNeeded();
   await assertWithinViewport(launch);
   await launch.press('Enter');
+  const retry = panel.getByRole('button', { name: '重试阶段…', exact: true });
+  await retry.waitFor();
+  const original = (await page.evaluate(() => window.vpsWorkbench.mixedWorkflow({ op: 'status' }))).run;
+  assert.equal(original.phase, 'failed');
+  await retry.click();
+  await panel.getByRole('group', { name: '确认重试阶段' }).getByRole('button', { name: '确认重试', exact: true }).click();
   await panel.getByText('工作流已完成。', { exact: true }).waitFor({ timeout: 15_000 });
   const status = await page.evaluate(() => window.vpsWorkbench.mixedWorkflow({ op: 'status' }));
   assert.equal(status.run.phase, 'complete');
+  assert.notEqual(status.run.id, original.id);
+  assert.deepEqual(status.run.rows.slice(0, 2), original.rows.slice(0, 2));
+  assert.notEqual(status.run.rows[2].turnId, original.rows[2].turnId);
   assert.deepEqual(status.run.mixed.transfers, [{ from: 'draft', to: 'summary', fields: ['conclusion'] }]);
   assert.match(status.run.rows[0].reply, /本机完成初稿/u);
   const summaryRow = panel.getByRole('list', { name: '运行阶段', exact: true }).locator(':scope > li')
@@ -400,6 +410,19 @@ test('mixed workflow simulates scoped handoffs offline and shows original stage 
   assert.equal(artifactList.ok, true, JSON.stringify(artifactList));
   await summaryRow.getByRole('button', { name: '查看产物', exact: true }).click();
   await summaryRow.getByRole('button', { name: artifactList.files[0].path, exact: true }).waitFor();
+  await page.reload();
+  if (await sidebar.isVisible()) await sidebar.click();
+  await page.getByRole('button', { name: '工作流', exact: true }).click();
+  await panel.getByRole('button', { name: '运行', exact: true }).click();
+  const history = panel.getByRole('region', { name: '混合运行历史', exact: true });
+  await history.getByRole('button', { name: '查看运行历史', exact: true }).click();
+  await history.getByRole('button', { name: '混合发布', exact: true }).click();
+  const oldSummary = history.getByRole('list', { name: '运行阶段', exact: true }).locator(':scope > li')
+    .filter({ hasText: '第 3 阶段 · 混合汇总' });
+  await oldSummary.getByText('查看阶段详情 · 混合汇总', { exact: true }).click();
+  await oldSummary.getByText(original.rows[2].turnId, { exact: true }).waitFor();
+  await oldSummary.getByRole('button', { name: '查看产物', exact: true }).click();
+  await oldSummary.getByRole('button', { name: artifactList.files[0].path, exact: true }).waitFor();
 });
 
 async function openDesign(page) {

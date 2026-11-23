@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { createWorkflowRunner, readWorkflowRun, validateMixedInput } from '../workflow-engine/runner.mjs';
-import { exactFields, mixedWorkflowRunKey, readWorkflows, validateWorkflowDraft, workflowKey, workflowText } from '../workflow-engine/state.mjs';
+import { confirmedFailedReceipt, createWorkflowRunner, readWorkflowRun, validateMixedInput } from '../workflow-engine/runner.mjs';
+import { exactFields, mixedWorkflowHistoryKey, mixedWorkflowRunKey, readWorkflows, validateWorkflowDraft, workflowKey, workflowText } from '../workflow-engine/state.mjs';
+import { archiveMixedRun, readMixedRunHistory } from './mixed-run-history.mjs';
 
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const problem = (code, message) => ({ ok: false, code, message });
@@ -17,10 +18,15 @@ export function openMixedWorkflow({ data, canExecute, targets, resolve, catalog,
   let launch;
   let failure = '';
   let unreadable = false;
+  let history = [];
+  let historyError = '';
   try {
     run = readWorkflowRun(data.preference(mixedWorkflowRunKey) ?? null);
     if (run && run.version !== 5) throw new Error('invalid_mixed_receipt');
   } catch { run = null; unreadable = true; failure = '无法读取混合工作流回执。'; }
+  try { history = readMixedRunHistory(data.preference(mixedWorkflowHistoryKey)); }
+  catch (error) { historyError = error.message; }
+  const findRun = (id) => run?.id === id ? run : history.find((entry) => entry.run.id === id)?.run;
   const saved = (id) => readWorkflows(data.preference(workflowKey) ?? null).find((record) => record.id === id);
   const approved = () => launch ?? (run && { id: run.workflowId, definitionPin: run.mixed.definitionPin });
   function isLive(route, operation) {
@@ -41,7 +47,14 @@ export function openMixedWorkflow({ data, canExecute, targets, resolve, catalog,
   }
   const runner = createWorkflowRunner({ initialRun: run, resolveRoute, readModels: (route) => catalog(route), pollInterval,
     canDispatch: (route) => isLive(route, 'send'),
-    async persist(snapshot) { await data.setPreference(mixedWorkflowRunKey, JSON.stringify(snapshot)); },
+    async persist(snapshot) {
+      if (run && run.id !== snapshot.id) {
+        if (historyError) throw new Error(historyError);
+        const next = archiveMixedRun(history, run);
+        await data.setPreferences({ [mixedWorkflowRunKey]: JSON.stringify(snapshot), [mixedWorkflowHistoryKey]: JSON.stringify(next) });
+        history = next;
+      } else await data.setPreference(mixedWorkflowRunKey, JSON.stringify(snapshot));
+    },
     onChange(snapshot, active) { run = snapshot; running = active; },
     async rpc(op, body, signal) {
       const index = run.rows.findIndex((row) => row.targetId === body.targetId && row.sessionId === body.sessionId &&
@@ -74,6 +87,16 @@ export function openMixedWorkflow({ data, canExecute, targets, resolve, catalog,
   }
   return {
     status() { return { ok: true, run, running: running || preparing, error: failure }; },
+    history() {
+      if (historyError) return problem('mixed_history_unavailable', historyError);
+      return { ok: true, entries: history.filter((entry) => entry.run.id !== run?.id).map(({ archivedAt, run: savedRun }) => ({
+        id: savedRun.id, name: savedRun.workflow.name, revision: savedRun.mixed.revision, phase: savedRun.phase, archivedAt,
+      })) };
+    },
+    detail(id) {
+      const snapshot = findRun(id);
+      return snapshot ? { ok: true, run: snapshot } : changed;
+    },
     targets,
     async catalog(stage) {
       if (!canExecute()) return forbidden;
@@ -84,20 +107,24 @@ export function openMixedWorkflow({ data, canExecute, targets, resolve, catalog,
     },
     async artifacts(query) {
       const fields = ['runId', 'stageIndex', ...['path', 'after', 'offset'].filter((field) => Object.hasOwn(query ?? {}, field))];
-      if (!exactFields(query, ...fields) || query.runId !== run?.id || !Number.isInteger(query.stageIndex)) return changed;
+      if (!exactFields(query, ...fields) || !Number.isInteger(query.stageIndex)) return changed;
       const { stageIndex, runId, ...pagination } = query;
-      const stage = run.workflow.stages[stageIndex];
-      const row = run.rows[stageIndex];
+      const snapshot = findRun(runId);
+      const stage = snapshot?.workflow.stages[stageIndex];
+      const row = snapshot?.rows[stageIndex];
       if (!stage || !row || !canExecute()) return forbidden;
       const route = await resolve(stage);
-      const isAllowed = () => run?.id === runId && canExecute() && route?.routePin === run.mixed.routePins[stageIndex] &&
+      const isAllowed = () => findRun(runId)?.rows[stageIndex]?.turnId === row.turnId &&
+        canExecute() && route?.routePin === snapshot.mixed.routePins[stageIndex] &&
         route.targetId === row.targetId && route.isCurrent();
       if (!isAllowed()) return changed;
       return dispatch('workflow-artifacts', { ...pagination, settings: route.settings, targetId: row.targetId,
-        sessionId: row.sessionId, turnId: row.turnId, workflowRunId: runId }, route, { isLive: isAllowed, workflowRun: () => run });
+        sessionId: row.sessionId, turnId: row.turnId, workflowRunId: runId }, route,
+      { isLive: isAllowed, workflowRun: () => findRun(runId) });
     },
     async start(input) {
       if (!canExecute()) return forbidden;
+      if (historyError) return problem('mixed_history_unavailable', historyError);
       if (unreadable || running || preparing || pending(run)) return problem('mixed_busy', '请先处理原混合工作流。');
       if (!exactFields(input, 'workflowId', 'revision', 'task', 'criteria', 'constraints', 'evidence', 'transfers'))
         return problem('mixed_preflight', '请确认任务简报和交接范围。');
@@ -134,6 +161,37 @@ export function openMixedWorkflow({ data, canExecute, targets, resolve, catalog,
         return problem('mixed_preflight', error.message || '请检查混合工作流的配置。');
       } finally { preparing = false; }
     },
+    async retry(runId, index) {
+      if (!canExecute()) return forbidden;
+      if (historyError) return problem('mixed_history_unavailable', historyError);
+      if (unreadable || running || preparing || pending(run)) return problem('mixed_busy', '请先处理当前混合工作流。');
+      const source = findRun(runId);
+      const row = source?.rows[index];
+      if (source?.phase !== 'failed' || source.stopRequested || row?.state !== 'failed') {
+        return problem('mixed_retry_unconfirmed', '只有原回执已确认失败的阶段可以重试。');
+      }
+      const stage = source.workflow.stages[index];
+      preparing = true;
+      failure = '';
+      try {
+        const definitionCurrent = () => hash(saved(source.workflowId) ?? null) === source.mixed.definitionPin;
+        if (!definitionCurrent()) return changed;
+        const route = await resolve(stage);
+        const isAllowed = () => canExecute() && findRun(runId) === source && definitionCurrent() &&
+          route?.targetId === row.targetId && route.routePin === source.mixed.routePins[index] && route.isCurrent();
+        if (!isAllowed()) return changed;
+        const receipt = await dispatch('get', { settings: route.settings, targetId: row.targetId, sessionId: row.sessionId },
+          route, { isLive: isAllowed, workflowRun: () => source });
+        if (!isAllowed()) return changed;
+        if (!confirmedFailedReceipt(receipt, row, stage.execution.location === 'ssh-vps')) {
+          return problem('mixed_retry_unconfirmed', '无法核实此阶段的失败回执。原记录已保留。');
+        }
+        launch = { id: source.workflowId, definitionPin: source.mixed.definitionPin };
+        return observe(runner.retryFailed(source, index).finally(() => { launch = null; }));
+      } catch {
+        return problem('mixed_retry_unconfirmed', '无法核实此阶段的失败回执。请检查原配置。');
+      } finally { preparing = false; }
+    },
     action(action) {
       if (unreadable || !pending(run) || preparing) return changed;
       if (action !== 'pause' && !canExecute()) return forbidden;
@@ -152,6 +210,11 @@ export async function requestMixedWorkflow(mixed, body) {
   if (mixed) {
     try {
       if (body?.op === 'status' && exactFields(body, 'op')) return mixed.status();
+      if (body?.op === 'history' && exactFields(body, 'op')) return mixed.history();
+      if (body?.op === 'detail' && exactFields(body, 'op', 'runId') && typeof body.runId === 'string') return mixed.detail(body.runId);
+      if (body?.op === 'retry' && exactFields(body, 'op', 'runId', 'stageIndex') &&
+          typeof body.runId === 'string' && Number.isInteger(body.stageIndex) && body.stageIndex >= 0)
+        return await mixed.retry(body.runId, body.stageIndex);
       if (body?.op === 'targets' && exactFields(body, 'op')) return await mixed.targets();
       if (body?.op === 'catalog' && exactFields(body, 'op', 'stage')) return await mixed.catalog(body.stage);
       if (body?.op === 'artifacts' && exactFields(body, 'op', 'query')) return await mixed.artifacts(body.query);

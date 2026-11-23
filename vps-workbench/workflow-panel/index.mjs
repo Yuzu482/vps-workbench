@@ -254,14 +254,15 @@ export function createWorkflowPanel(React, { icon } = {}) {
   }
 
   function RunSummary({ run, projects, running, launchAction, controlAction, performLaunch, performControl,
-    onResume, onPause, onStop, readArtifacts, targets, canExecute = true }) {
+    onResume, onPause, onStop, onRetry, readArtifacts, targets, archived = false, canExecute = true }) {
+    const [confirmRetry, setConfirmRetry] = React.useState(null);
     if (!run) return null;
     const resumable = run.phase === 'paused' || run.phase === 'running';
     const checkingStop = run.stopRequested;
     const retryStop = checkingStop && run.rows.some(({ state }) => state === 'canceling');
     return h(React.Fragment, null,
       h('div', { className: 'vc-workflow-title-row' },
-        h('h3', null, run.mixed ? '最近的混合运行' : '最近运行'),
+        h('h3', null, archived ? '历史运行详情' : run.mixed ? '最近的混合运行' : '最近运行'),
         h('span', { role: 'status' }, resumable && checkingStop ? '等待确认停止' : phases[run.phase] ?? run.phase)),
       h('strong', null, run.workflow.name),
       !run.mixed && usesSharedMemory(run.workflow) && Object.hasOwn(run, 'projectId') &&
@@ -287,6 +288,8 @@ export function createWorkflowPanel(React, { icon } = {}) {
           const row = run.rows[index];
           const name = stage.name || `第 ${index + 1} 阶段`;
           const target = targetForStage(stage, targets);
+          const retry = run.mixed && run.phase === 'failed' && row?.state === 'failed';
+          const confirming = confirmRetry === row?.turnId;
           return h('li', { key: stage.id, className: 'vc-workflow-card' },
             h('div', { className: 'vc-workflow-title-row' },
               h('strong', null, `第 ${index + 1} 阶段 · ${name}`),
@@ -295,6 +298,13 @@ export function createWorkflowPanel(React, { icon } = {}) {
             stage.execution && note(`${executionLocations[stage.execution.location]} · ${target?.label ?? '原配置'} · ${executionContexts[stage.execution.context]}`),
             stage.agent && note(agentSummary(run.mixed ? { ...stage.agent, memory: 'isolated' } : stage.agent)),
             run.mixed && h(MixedStageDetails, { run, index }),
+            retry && (confirming ? h('div', { className: 'vc-workflow-card', role: 'group', 'aria-label': '确认重试阶段' },
+              note('工作台会核对原失败回执。重试将创建新运行，复用已完成阶段，并可能消耗模型额度。'),
+              actions(button('取消', () => setConfirmRetry(null)),
+                button('确认重试', async () => {
+                  if (await onRetry?.(run.id, index)) setConfirmRetry(null);
+                }, { primary: true, disabled: !onRetry })))
+              : actions(button('重试阶段…', () => setConfirmRetry(row.turnId), { disabled: !onRetry }))),
             run.version === 4 && row?.turnId && h('div', { className: 'vc-workflow-output-path', role: 'group',
               'aria-label': `第 ${index + 1} 阶段输出目录`, tabIndex: 0 },
               h('span', { className: 'vc-workflow-note' }, '输出目录'),
@@ -304,6 +314,45 @@ export function createWorkflowPanel(React, { icon } = {}) {
             row?.reply && h('pre', { className: 'vc-workflow-text', tabIndex: 0,
               'aria-label': `第 ${index + 1} 阶段输出` }, row.reply));
         })));
+  }
+
+  function MixedRunHistory({ request, currentId, summaryProps }) {
+    const [expanded, setExpanded] = React.useState(false);
+    const [entries, setEntries] = React.useState(null);
+    const [selectedId, setSelectedId] = React.useState(null);
+    const [detail, setDetail] = React.useState(null);
+    const [historyError, setHistoryError] = React.useState('');
+    React.useEffect(() => {
+      if (!expanded) return undefined;
+      let live = true;
+      setHistoryError('');
+      void request({ op: 'history' }).then(({ entries: records }) => {
+        if (live) setEntries(records);
+      }).catch((error) => { if (live) setHistoryError(messageOf(error, '无法读取混合工作流历史。')); });
+      return () => { live = false; };
+    }, [expanded, request, currentId]);
+    React.useEffect(() => {
+      if (!expanded || !selectedId) return undefined;
+      let live = true;
+      void request({ op: 'detail', runId: selectedId }).then(({ run }) => {
+        if (live) setDetail({ id: selectedId, run });
+      }).catch((error) => { if (live) setDetail({ id: selectedId, error: messageOf(error, '无法读取运行详情。') }); });
+      return () => { live = false; };
+    }, [expanded, request, selectedId, currentId]);
+    const selected = detail?.id === selectedId ? detail : null;
+    return h('section', { className: 'vc-workflow-card', 'aria-label': '混合运行历史' },
+      actions(button(expanded ? '收起运行历史' : '查看运行历史', () => setExpanded(!expanded), { 'aria-expanded': expanded })),
+      expanded && h(React.Fragment, null,
+        !entries && !historyError && note('正在读取运行历史…', 'status'),
+        alert(historyError),
+        entries?.length === 0 && note('开始下一次运行后，已结束的原记录会出现在这里。'),
+        entries?.length > 0 && h('ul', { className: 'vc-workflow-list', 'aria-label': '历史运行列表' }, entries.map((entry) =>
+          h('li', { key: entry.id },
+            button(entry.name, () => setSelectedId(entry.id), { 'aria-pressed': selectedId === entry.id }),
+            note(`版本 ${entry.revision} · ${phases[entry.phase]} · 归档于 ${new Date(entry.archivedAt).toLocaleString()}`)))),
+        selectedId && !selected && note('正在读取运行详情…', 'status'),
+        alert(selected?.error),
+        selected?.run && h(RunSummary, { key: selected.run.id, ...summaryProps, run: selected.run, archived: true })));
   }
 
   return function WorkflowPanel({ open, preferRunPane, onClose, workflows, availableProviders, catalogScope, readModels, onChange, onEditInChat,
@@ -769,10 +818,15 @@ export function createWorkflowPanel(React, { icon } = {}) {
           alert(exampleError),
           (explicitExecution || mixedRun) && alert(mixed?.error),
           alert(runError),
-          h(RunSummary, { run: mixedRun, projects, running: mixed?.running, launchAction, controlAction,
+          h(RunSummary, { key: mixedRun?.id, run: mixedRun, projects, running: mixed?.running, launchAction, controlAction,
             performLaunch: launch, performControl: control, targets: mixed?.targets, canExecute: mixed?.canExecute,
+            onRetry: mixed?.canExecute && !operationsBusy && !currentRun ? (id, index) => launch('retry', () => mixed.retry(id, index)) : undefined,
             readArtifacts: open && !closing && mixed?.canExecute ? mixed.readArtifacts : undefined,
             onResume: () => mixed.action('resume'), onPause: () => mixed.action('pause'), onStop: () => mixed.action('stop') }),
+          open && !closing && mixed?.historyRequest && h(MixedRunHistory, { request: mixed.historyRequest, currentId: mixedRun?.id,
+            summaryProps: { projects, targets: mixed.targets,
+              onRetry: mixed.canExecute && !operationsBusy && !currentRun ? (id, index) => launch('retry', () => mixed.retry(id, index)) : undefined,
+              readArtifacts: mixed.canExecute ? mixed.readArtifacts : undefined } }),
           h(RunSummary, { run, projects, running, launchAction, controlAction, performLaunch: launch, performControl: control,
             onResume, onPause, onStop, readArtifacts: open && !closing ? readArtifacts : undefined })))));
   };

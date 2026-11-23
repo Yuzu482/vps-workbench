@@ -96,7 +96,7 @@ async function buildPreview(instance) {
 }
 
 export async function startPreview({ localAgents = false, localComponents = false, componentFailure = null, componentDelay = 550,
-  personalSubscription = false,
+  personalSubscription = false, mixedFailureStage,
   backendPlatform, backendFailure,
   port = localComponents ? localComponentsPort : localAgents ? localAgentsPort : previewPort, watch = true, log = () => {} } = {}) {
   const instance = randomBytes(8).toString('hex');
@@ -118,6 +118,7 @@ export async function startPreview({ localAgents = false, localComponents = fals
   const data = {
     preference: (key) => fixtures.preferences[key],
     setPreference: async (key, value) => { fixtures.preferences[key] = value; },
+    setPreferences: async (changes) => { Object.assign(fixtures.preferences, changes); },
     projects: () => projects,
     readWorkflowAttachments: async (refs) => refs.map(({ digest, name, size }) => {
       const content = attachments.get(digest);
@@ -147,7 +148,18 @@ export async function startPreview({ localAgents = false, localComponents = fals
   const previewPreset = () => ({ ...fixtures.chat({ op: 'preset' }).preset, providers: Object.keys(workflowProviders) });
   const localPacket = (body, options) => localSdk().then((sdk) => sdk.request({ op: 'workbench', location: 'local-sdk',
     backend: 'codex', payload: body }, options));
+  let failedStage;
   function dispatchMixed(body, options) {
+    if (mixedFailureStage && body.op === 'send' && !failedStage) {
+      const run = options.workflowRun();
+      const index = run.rows.findIndex(({ sessionId }) => sessionId === body.sessionId);
+      if (run.workflow.stages[index]?.id === mixedFailureStage) {
+        failedStage = { ok: true, targetId: body.targetId, session: { id: body.sessionId,
+          turns: [{ id: body.turnId, state: 'failed', errorCode: 'fixture_failure', reply: '模拟阶段失败。' }] } };
+        return failedStage;
+      }
+    }
+    if (body.op === 'get' && failedStage?.session.id === body.sessionId && failedStage.targetId === body.targetId) return failedStage;
     if (body.op === 'workflow-artifacts' && body.settings.location !== 'local-sdk') return readWorkflowArtifacts(body,
       { readRun: options.workflowRun, backend: { request: previewArtifacts }, isAllowed: options.isLive });
     return body.settings.location === 'local-sdk' ? localPacket(body, options) : chat.request(body, options);

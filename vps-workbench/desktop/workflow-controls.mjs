@@ -49,11 +49,11 @@ export function useWorkflowControls({ store, rpc, readList, connection, remoteEn
     return () => { live = false; clearTimeout(timer); };
   }, [open, mixedRequest]);
 
-  async function callMixed(packet) {
+  const callMixed = React.useCallback(async (packet) => {
     const result = await mixedRequest(packet);
     if (!result?.ok) throw new Error(result?.message || '混合工作流暂不可用。');
     return result;
-  }
+  }, [mixedRequest]);
   const runner = React.useRef(null);
   const availableProviders = toolIds.filter((id) => Object.hasOwn(workflowProviders, id));
   const context = React.useRef(null);
@@ -196,6 +196,12 @@ export function useWorkflowControls({ store, rpc, readList, connection, remoteEn
       availableProviders, catalogScope: scope, readModels: readPanelModels, onChange: store.change, onEditInChat: startChatEdit,
       proposal, onDismissProposal: () => setProposal(null), run, running,
       mixed: mixedRequest ? { ...mixedStatus, targets: mixedTargets, canExecute: remoteEnabled,
+        historyRequest: callMixed,
+        async retry(runId, stageIndex) {
+          const result = await callMixed({ op: 'retry', runId, stageIndex });
+          void callMixed({ op: 'status' }).then(setMixedStatus).catch(() => {});
+          return result;
+        },
         catalog: async (stage) => (await callMixed({ op: 'catalog', stage })).models,
         readArtifacts: (run, stageIndex, path, _signal, { after, offset } = {}) => callMixed({ op: 'artifacts', query: {
           runId: run.id, stageIndex, ...(path !== undefined && { path }), ...(after !== undefined && { after }),

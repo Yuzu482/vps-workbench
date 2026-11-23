@@ -136,6 +136,21 @@ export async function openAppData(root, { onBackupFailure = () => {} } = {}) {
     pendingBackups.set(file, bytes);
     await finishBackup(file);
   }
+  function setPreferences(changes) {
+    const entries = Object.entries(changes);
+    if (!entries.every(([key, value]) => validPreference(key, value === null ? '' : value))) {
+      throw new Error('invalid_preference');
+    }
+    return update(async () => {
+      if (entries.every(([key, value]) => (preferences[key] ?? null) === value)) return finishBackup(preferencesFile);
+      const next = { ...preferences };
+      for (const [key, value] of entries) {
+        if (value === null) delete next[key];
+        else next[key] = value;
+      }
+      await commitState(preferencesFile, next, maxPreferences, () => { preferences = next; });
+    });
+  }
   return {
     notices: () => [...notices],
     preferences: () => ({ ...preferences }),
@@ -143,15 +158,10 @@ export async function openAppData(root, { onBackupFailure = () => {} } = {}) {
     projects: () => projects.map(({ workspaceId, title }) => ({ workspaceId, title })),
     saveWorkflowAttachments: (files) => update(() => attachments.save(files)),
     readWorkflowAttachments: (refs) => attachments.materialize(refs),
+    setPreferences,
     setPreference(key, value) {
       if (!validPreference(key, value === null ? '' : value)) throw new Error('invalid_preference');
-      return update(async () => {
-        if ((preferences[key] ?? null) === value) return finishBackup(preferencesFile);
-        const next = { ...preferences };
-        if (value === null) delete next[key];
-        else next[key] = value;
-        await commitState(preferencesFile, next, maxPreferences, () => { preferences = next; });
-      });
+      return setPreferences({ [key]: value });
     },
     changeExtensions(change, { canCommit = () => true } = {}) {
       return update(async () => {

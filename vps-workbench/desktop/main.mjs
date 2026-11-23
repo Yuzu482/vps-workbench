@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { memoryJournalKey, openAppData } from './data.mjs';
 import { extensionPreferenceKey } from '../extensions/state.mjs';
-import { localWorkflowRunKey, mixedWorkflowRunKey, workflowKey, workflowRunKey } from '../workflow-engine/state.mjs';
+import { localWorkflowRunKey, mixedWorkflowHistoryKey, mixedWorkflowRunKey, workflowKey, workflowRunKey } from '../workflow-engine/state.mjs';
 import { agentPresetKey, legacyAgentPresetKey } from '../agent-presets/state.mjs';
 import { accessPreference, readAccess, validAccess } from './access.mjs';
 import { importWorkbenchSnapshot } from './migrate.mjs';
@@ -184,7 +184,9 @@ async function start() {
   });
   ipcMain.handle('workbench:bootstrap', (event) => {
     trustedRenderer(event);
-    return { preferences: data.preferences(), projects: data.projects(), access: readAccess(data.preference(accessPreference)),
+    const preferences = data.preferences();
+    delete preferences[mixedWorkflowHistoryKey];
+    return { preferences, projects: data.projects(), access: readAccess(data.preference(accessPreference)),
       dataNotices: data.notices(), localComponents: runtime.localComponentsStatus() };
   });
   ipcMain.handle('workbench:take-chat-link', (event) => {
@@ -200,7 +202,7 @@ async function start() {
   ipcMain.handle('workbench:set-preference', (event, key, value) => {
     trustedRenderer(event);
     if ([accessPreference, extensionPreferenceKey, memoryJournalKey, localMemoryJournalKey, workflowKey, agentPresetKey,
-      legacyAgentPresetKey, mixedWorkflowRunKey].includes(key)) {
+      legacyAgentPresetKey, mixedWorkflowRunKey, mixedWorkflowHistoryKey].includes(key)) {
       throw new Error('use_dedicated_settings');
     }
     if ([localWorkflowRunKey, workflowRunKey].includes(key)) readLegacyWorkflowRun(value);

@@ -207,6 +207,13 @@ function matchingTurn(data, row) {
   return turns[0];
 }
 
+export function confirmedFailedReceipt(data, row, requireCode) {
+  const turn = matchingTurn(data, row);
+  if (turn?.state !== 'failed') return false;
+  const code = turn.errorCode ?? turn.error?.code ?? turn.code;
+  return (!requireCode || typeof code === 'string' && Boolean(code)) && !mixedReceiptBlocked.has(code);
+}
+
 function rejectionMessage(error) {
   try { return workflowText(error.message, 500, '发送反馈'); } catch { return '步骤发送请求已被拒绝。'; }
 }
@@ -573,6 +580,28 @@ export function createWorkflowRunner({ initialRun = null, resolveRoute, readMode
         const rows = routes.map(({ targetId }) => ({ targetId, sessionId: crypto.randomUUID(), turnId: crypto.randomUUID(),
           state: 'waiting', reply: '' }));
         await save(() => ({ ...metadata, id: crypto.randomUUID(), workflow, task, phase: 'running', rows, stopRequested: false, message: runningMessage }));
+        await advance(signal);
+      });
+    },
+
+    async retryFailed(source, index) {
+      if (run && !terminalStates.has(run.phase)) throw new Error('请先处理尚未结束的工作流运行。');
+      if (source.version !== 5 || source.phase !== 'failed' || source.stopRequested || source.rows[index]?.state !== 'failed') {
+        throw new Error('只有已确认失败的混合阶段可以重试。');
+      }
+      return begin(async (signal) => {
+        const fresh = source.rows.map((row, position) => position === index || row.state === 'skipped'
+          ? { ...row, sessionId: crypto.randomUUID(), turnId: crypto.randomUUID(), state: 'waiting', reply: '' } : row);
+        const next = settle({ ...source, id: crypto.randomUUID(), phase: 'running', message: runningMessage, rows: fresh });
+        for (const [position, row] of next.rows.entries()) {
+          if (row.state !== 'waiting') continue;
+          const stage = next.workflow.stages[position];
+          const route = await routeFor(stage, signal, true, row.targetId, next.mixed.routePins[position]);
+          await checkModel(stage, route, signal);
+          if (!dispatchAllowed(route)) throw routeUnavailable(stage);
+        }
+        signal.throwIfAborted();
+        await save(() => next);
         await advance(signal);
       });
     },
