@@ -20,7 +20,8 @@ internal sealed record ApprovalNote(Guid Id, string Title, string Detail, string
 
 internal sealed record TurnOutput(string State, string Reply, Activity[] Activity,
     bool SteerReady = false, SteerObservation[]? Steering = null,
-    string? Model = null, string? Effort = null, ContextUsage? ContextUsage = null, ApprovalNote[]? Approvals = null)
+    string? Model = null, string? Effort = null, ContextUsage? ContextUsage = null, ApprovalNote[]? Approvals = null,
+    SubscriptionLimits? SubscriptionLimits = null)
 {
     internal static readonly TurnOutput Unobserved = new("unknown", "", []);
 }
@@ -273,10 +274,10 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
             turn == last && steering.Length < BridgeProtocol.MaxSteers;
         return design is null
             ? new { id = turn.TaskId, prompt = turn.Prompt, output.Reply, state, output.Activity,
-                streaming, canStop, canSteer, steering, output.Model, output.Effort, output.ContextUsage,
+                streaming, canStop, canSteer, steering, output.Model, output.Effort, output.ContextUsage, output.SubscriptionLimits,
                 approvals = settings.Provider == "antigravity" && turn == last ? output.Approvals ?? [] : [] }
             : new { id = turn.TaskId, prompt = turn.Prompt, output.Reply, state, output.Activity,
-                streaming, canStop, canSteer, steering, output.Model, output.Effort, output.ContextUsage,
+                streaming, canStop, canSteer, steering, output.Model, output.Effort, output.ContextUsage, output.SubscriptionLimits,
                 design.ParentTurnId, fork = design.ExplicitBase?.Fork == true, design.Ordinal };
     }
 
@@ -334,7 +335,8 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
                 (output.Approvals is null || CodexStream.ValidApprovals(output.Approvals)) &&
                 (output.Model is null || BridgeProtocol.IsModelId(output.Model)) &&
                 (output.Effort is null || BridgeProtocol.IsEffort(output.Effort)) &&
-                (output.ContextUsage is null || output.ContextUsage.Valid)
+                (output.ContextUsage is null || output.ContextUsage.Valid) &&
+                (output.SubscriptionLimits is null || output.SubscriptionLimits.Valid)
                 ? output : TurnOutput.Unobserved;
         }
         catch (Exception ex) when (ex is IOException or JsonException or BridgeError)
@@ -590,6 +592,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
                 !update.Output.Activity.SequenceEqual(prior.Activity) || update.Output.SteerReady != prior.SteerReady ||
                 !SameSteering(update.Output.Steering, prior.Steering) || update.Output.Model != prior.Model ||
                  update.Output.Effort != prior.Effort || update.Output.ContextUsage != prior.ContextUsage ||
+                 update.Output.SubscriptionLimits != prior.SubscriptionLimits ||
                  !(update.Output.Approvals ?? []).SequenceEqual(prior.Approvals ?? []))
                 SaveOutput(last.TaskId, update.Output);
             return View(record, lineage);

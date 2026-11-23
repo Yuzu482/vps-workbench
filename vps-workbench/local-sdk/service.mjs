@@ -1,3 +1,4 @@
+import { readSubscriptionLimits } from '../../remote-workbench/vps-chat/client/subscription-limits.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { parameterLevels } from '../../remote-workbench/vps-chat/client/model-parameters.js';
 import { lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
@@ -208,6 +209,10 @@ function validateStore(store, backend) {
         const meta = turn.execution;
         const fields = ['fingerprint', 'model', 'effort', 'workspace'];
         if (Object.hasOwn(meta, 'usedTokens')) fields.push('usedTokens');
+        if (Object.hasOwn(meta, 'subscriptionLimits')) {
+          if (backend !== 'claude-sdk' || !Object.keys(readSubscriptionLimits(meta.subscriptionLimits)).length) return false;
+          fields.push('subscriptionLimits');
+        }
         if (Object.hasOwn(meta, 'verbosity')) fields.push('verbosity');
         if (session.mode === 'design') fields.push('branch');
         if (!exact(meta, fields) || !digest.test(meta.fingerprint) || !validText(meta.model) || !validText(meta.effort) ||
@@ -357,6 +362,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
   function view(profile, session) {
     const turns = session.turns.map(({ execution, ...turn }, index) => {
       const metadata = execution && { model: execution.model, effort: execution.effort,
+        ...(execution.subscriptionLimits && { subscriptionLimits: readSubscriptionLimits(execution.subscriptionLimits) }),
         ...(execution.usedTokens !== undefined && { contextUsage: { usedTokens: execution.usedTokens, contextWindow: null } }),
         ...(execution.branch && { parentTurnId: execution.branch.parentTurnId, fork: execution.branch.fork, ordinal: index + 1 }) };
       const control = active.get(turn.id);
@@ -578,6 +584,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       if (options?.permittedResources && !options.permittedResources()) return await finish(stateResult('failed', 'resources_changed'));
       dispatched = true;
       const { events } = await thread.runStreamed(input ?? start.prompt, { signal });
+      const subscriptionLimits = {};
       for await (const event of events) {
         if (terminal) continue;
         if (event.type === 'thread.started') await bindNative(sessionId, turnId, event.thread_id);
@@ -586,6 +593,9 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
           if (item?.type === 'agent_message' && typeof item.id === 'string' && typeof item.text === 'string') {
             control.text.set(item.id, item.text.slice(0, maxReplyLength + 1));
           }
+        }
+        if (event.type === 'subscription.limits' && backend === 'claude-sdk' && profile.authMode === 'subscription') {
+          Object.assign(subscriptionLimits, readSubscriptionLimits(event.limits));
         }
         if (event.type === 'turn.completed') {
           control.steer = null;
@@ -596,8 +606,11 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
           if (!observed) throw new Error('missing native thread');
           const execution = session.turns.find(({ id }) => id === turnId)?.execution;
           const usedTokens = event.usage?.input_tokens;
-          await finish({ ...stateResult('completed'), ...(execution && Number.isSafeInteger(usedTokens) && usedTokens >= 0 &&
-            { execution: { ...execution, usedTokens } }) });
+          const metadata = {
+            ...(Number.isSafeInteger(usedTokens) && usedTokens >= 0 && { usedTokens }),
+            ...(Object.keys(subscriptionLimits).length && { subscriptionLimits }),
+          };
+          await finish({ ...stateResult('completed'), ...(execution && { execution: { ...execution, ...metadata } }) });
         }
         if (event.type === 'turn.stopped' && signal.aborted) await finish(stateResult('stopped'));
         if (event.type === 'turn.failed') await finish(stateResult('failed', sdkFailure(event.error?.message) ?? 'turn_failed'));

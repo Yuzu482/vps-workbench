@@ -23,6 +23,28 @@ def load(name, path):
 
 
 @unittest.skipUnless(sys.platform == "linux", "VPS launcher imports Linux file controls")
+class SubscriptionLimitTests(unittest.TestCase):
+    def test_weekly_only_and_sparse_limits(self):
+        base = Path(__file__).resolve().parents[1]
+        stream = load("chat_stream_limits", base / "DshChatBridge/RemoteDshCodexStream.py")
+        reply = object.__new__(stream.Reply)
+        reply.subscription_limits = {}
+        reply.observe_codex_limits({"primary": {
+            "windowDurationMins": 10080, "usedPercent": 100, "resetsAt": 2000000000,
+        }})
+        reply.observe_codex_limits({"limitId": "other", "primary": {
+            "windowDurationMins": 300, "usedPercent": 20, "resetsAt": 2000000000,
+        }})
+        self.assertEqual(reply.subscription_limits, {"weekly": {"usedPercent": 100, "resetsAt": 2000000000}})
+        reply.observe_codex_limits({"primary": {
+            "windowDurationMins": 300, "usedPercent": 15, "resetsAt": 2000000000,
+        }})
+        reply.observe_subscription_limit("weekly", float("nan"), 2000000000)
+        self.assertEqual(reply.subscription_limits["fiveHour"]["usedPercent"], 15)
+        self.assertEqual(reply.subscription_limits["weekly"]["usedPercent"], 100)
+
+
+@unittest.skipUnless(sys.platform == "linux", "VPS launcher imports Linux file controls")
 class AdvancedOptionTests(unittest.TestCase):
     def test_remote_options_are_typed_and_provider_specific(self):
         stream = load("chat_stream", Path(__file__).resolve().parents[1] / "DshChatBridge/RemoteDshCodexStream.py")

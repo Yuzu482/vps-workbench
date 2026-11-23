@@ -1,3 +1,4 @@
+import { readSubscriptionLimits, subscriptionRings } from './subscription-limits.js';
 import { createMarkdownReply } from './markdown.js';
 import { createDesignCanvas } from './design-canvas.js';
 import { readVersionHistory, validDesignTurn } from './design-version-state.js';
@@ -641,6 +642,41 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const outgoingText = quotedPrompt(prompt, draftQuote);
     const attempt = attempts[selected];
     const turns = snapshot?.session.turns ?? emptyList;
+    const [subscriptionSamples, setSubscriptionSamples] = React.useState({});
+    const [subscriptionClock, setSubscriptionClock] = React.useState(Date.now);
+    const subscriptionScope = localSdk ? 'local' : toolPreferences.key;
+    const subscriptionKey = `${subscriptionScope}:${localSdk ? scope : providerId}`;
+    const subscriptionEntries = localSdk
+      ? (local.profiles ?? []).flatMap((profile) => {
+        const backend = profile.backend ?? 'codex';
+        if (backend === 'claude-sdk' && profile.authMode !== 'subscription') return [];
+        const tool = tools.find(({ id }) => id === backend);
+        return tool ? [{ target: profile.targetId, label: `${tool.label} · ${profile.name}`, icon: tool.icon }] : [];
+      })
+      : configuredTools.filter(({ id }) => id !== 'claude').map(({ id, label, icon }) => ({ target: id, label, icon }));
+    React.useEffect(() => {
+      if (!scope || !subscriptionScope || !turns.some((turn) => turn.subscriptionLimits)) return;
+      const observed = Object.assign({}, ...turns.map((turn) => readSubscriptionLimits(turn.subscriptionLimits)));
+      if (!Object.keys(observed).length) return;
+      setSubscriptionSamples((previous) => {
+        const merged = { ...previous[subscriptionKey] };
+        for (const [key, sample] of Object.entries(observed)) {
+          const before = merged[key];
+          if (!before || sample.resetsAt > before.resetsAt ||
+              (sample.resetsAt === before.resetsAt && sample.usedPercent >= before.usedPercent)) merged[key] = sample;
+        }
+        return { ...previous, [subscriptionKey]: merged };
+      });
+    }, [scope, subscriptionScope, subscriptionKey, turns]);
+    React.useEffect(() => {
+      const now = Date.now();
+      const reset = Math.min(...Object.values(subscriptionSamples).flatMap((limits) =>
+        Object.values(limits).map(({ resetsAt }) => resetsAt * 1000)).filter((deadline) => deadline > now));
+      if (!Number.isFinite(reset)) return undefined;
+      const timer = setTimeout(() => setSubscriptionClock(Date.now()), Math.min(reset - now, 2 ** 31 - 1));
+      return () => clearTimeout(timer);
+    }, [subscriptionSamples, subscriptionClock]);
+
     const lastTurn = turns.at(-1);
     const lastState = lastTurn?.state;
     const canBranchDesign = sidebarActions && design && designAvailable && remoteEnabled &&
@@ -2521,14 +2557,15 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
                   h('div', { className: 'vc-project-session-rows', role: 'group', 'aria-label': '已归档会话' },
                     archivedRows.map(renderSession))))) : null,
             rows.length || projects.size ? null : h('p', null, '暂无会话')),
-          h('section', { className: 'vc-sidebar-quota', 'aria-label': '用量与限额' },
-            h('h2', null, '用量与限额'),
-            h('dl', null,
-              h('dt', null, '账户剩余额度'), h('dd', null, '暂无数据'),
-              h('dt', null, '单轮输出上限'),
-              h('dd', null, modelParameters?.maxOutputTokens
-                ? parametersBlocked ? '待校验' : `${modelParameters.maxOutputTokens.toLocaleString('zh-CN')} Token`
-                : '执行端默认'))))
+          h('details', { className: 'vc-sidebar-quota', key: subscriptionScope, 'aria-label': '订阅额度' },
+            h('summary', { 'aria-label': `订阅额度 · ${tools.find(({ id }) => id === activeTool)?.label ?? providerName}` },
+              ...subscriptionRings(h, activeTool && subscriptionSamples[`${subscriptionScope}:${localSdk ? scope : activeTool}`])),
+            h('div', { className: 'vc-quota-subscriptions', 'aria-label': '已配置的订阅额度' },
+              subscriptionEntries.map(({ target, label, icon }) =>
+                h('section', { key: target, 'aria-label': label },
+                  h('h2', null, menuIcon(h, icon), label),
+                  ...subscriptionRings(h, subscriptionSamples[`${subscriptionScope}:${target}`], true))),
+              subscriptionEntries.length === 0 && h('p', null, '尚未配置订阅执行端。'))))
         : h(React.Fragment, null,
         h('div', { className: 'vc-rail-label' }, '会话'),
         newActions,

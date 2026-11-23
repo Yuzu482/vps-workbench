@@ -487,6 +487,7 @@ class Reply:
         self.model = None
         self.effort = None
         self.context_usage = None
+        self.subscription_limits = {}
         self.last_write = 0.0
         self.dirty = False
 
@@ -536,6 +537,21 @@ class Reply:
             self.context_usage = {"usedTokens": used, "contextWindow": limit}
             self.dirty = True
 
+    def observe_subscription_limit(self, name, used, resets):
+        if (name in ("fiveHour", "weekly") and type(used) in (float, int) and 0 <= used <= 100
+                and type(resets) is int and 0 < resets <= 253402300799):
+            self.subscription_limits[name] = {"usedPercent": used, "resetsAt": resets}
+            self.dirty = True
+
+    def observe_codex_limits(self, value):
+        if not isinstance(value, dict) or value.get("limitId") not in (None, "codex"):
+            return
+        for field in ("primary", "secondary"):
+            window = value.get(field)
+            if isinstance(window, dict):
+                name = {300: "fiveHour", 10080: "weekly"}.get(window.get("windowDurationMins")) if type(window.get("windowDurationMins")) is int else None
+                self.observe_subscription_limit(name, window.get("usedPercent"), window.get("resetsAt"))
+
     def publish(self, state, thread=None, reason=None):
         parts = []
         for item, value in self.items.items():
@@ -547,6 +563,8 @@ class Reply:
         data = {"task_id": self.identifier, "state": state, "thread_id": thread, "reply": text,
                 "checks": self.checks, "reason": reason, "model": self.model,
                 "effort": self.effort, "context_usage": self.context_usage}
+        if self.subscription_limits:
+            data["subscription_limits"] = self.subscription_limits
         if self.steer_ready is not None:
             data["steer_ready"] = self.steer_ready
         write_private_json(self.directory / SNAPSHOT, data, durable=state in ("complete", "stopped", "failed", "unknown"))
@@ -793,6 +811,10 @@ class Conversation:
         }, identifier)
 
     def notification(self, method, params):
+        if method == "account/rateLimits/updated":
+            if not self.extraction and "sdk" not in self.config:
+                self.reply.observe_codex_limits(params.get("rateLimits"))
+            return None
         if params.get("threadId") != self.thread:
             return None
         if method == "turn/started":
@@ -811,6 +833,8 @@ class Conversation:
             return None
         if method == "thread/tokenUsage/updated":
             self.reply.observe_usage(params.get("tokenUsage"))
+        elif method == "dsh/subscriptionLimit" and "sdk" in self.config:
+            self.reply.observe_subscription_limit(params.get("window"), params.get("usedPercent"), params.get("resetsAt"))
         elif method == "model/rerouted":
             self.reply.observe_options(params.get("toModel"))
         elif method == "item/agentMessage/delta" and not self.extraction:

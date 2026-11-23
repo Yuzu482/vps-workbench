@@ -52,6 +52,28 @@ async function openPreview(t, { viewport = { width: 1280, height: 720 }, seed, p
   return page;
 }
 
+test('subscription rings distinguish exhausted, unavailable and weekly-only observations', { timeout: 30_000 }, async (t) => {
+  const page = await openPreview(t);
+  await page.route('**/dsh-vps-chat/api/rpc', async (route) => {
+    if (route.request().postDataJSON().op !== 'get') return route.continue();
+    const response = await route.fetch();
+    const json = await response.json();
+    const turn = json.session?.turns.at(-1);
+    if (turn) turn.subscriptionLimits = {
+      fiveHour: { usedPercent: 92, resetsAt: 1 },
+      weekly: { usedPercent: 100, resetsAt: Math.floor(Date.now() / 1000) + 3600 },
+    };
+    return route.fulfill({ response, json });
+  });
+  await (await sidebarButton(page, '纸间书店')).click();
+  await (await sidebarButton(page, '纸间书店 · 周末发布清单')).click();
+  const summary = page.locator('.vc-sidebar-quota summary');
+  await summary.getByRole('img', { name: '5 小时额度，暂无数据', exact: true }).waitFor();
+  await summary.getByRole('img', { name: '每周额度，剩余 0%', exact: true }).waitFor();
+  await summary.press('Enter');
+  await page.getByRole('region', { name: 'Codex', exact: true }).getByText('每周 · 剩余 0%', { exact: true }).waitFor();
+});
+
 test('a selected excerpt attaches to one draft and copied VPS links open the existing conversation or turn', { timeout: 40_000 }, async (t) => {
   const page = await openPreview(t);
   await page.evaluate(() => {
@@ -1712,12 +1734,18 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
     const settingsButton = footer.getByRole('button', { name: '设置', exact: true });
     const provider = await providerButton.boundingBox();
     const settings = await settingsButton.boundingBox();
-    const quota = rail.getByRole('region', { name: '用量与限额', exact: true });
+    const quota = rail.locator('.vc-sidebar-quota');
     await assertWithinViewport(quota);
     const quotaBounds = await quota.boundingBox();
     assert.ok(quotaBounds.y + quotaBounds.height <= provider.y);
-    await quota.getByText('暂无数据', { exact: true }).waitFor();
-    await quota.getByText('执行端默认', { exact: true }).waitFor();
+    const quotaToggle = quota.locator('summary');
+    assert.equal(await quotaToggle.getByRole('img').count(), 2);
+    await quotaToggle.getByRole('img', { name: '5 小时额度，暂无数据', exact: true }).waitFor();
+    await quotaToggle.getByRole('img', { name: '每周额度，暂无数据', exact: true }).waitFor();
+    await quotaToggle.press('Enter');
+    await quota.getByRole('region', { name: 'Codex', exact: true }).waitFor();
+    assert.equal(await quota.getByRole('region', { name: 'Claude API', exact: true }).count(), 0);
+    await quotaToggle.press('Enter');
     assert.ok(viewport.width > 620 ? provider.y + provider.height <= settings.y : provider.x + provider.width <= settings.x);
     const iconCenters = [];
     for (const button of [newChat, providerButton, settingsButton]) {

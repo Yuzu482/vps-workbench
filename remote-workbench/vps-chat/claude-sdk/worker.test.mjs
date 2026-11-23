@@ -145,6 +145,10 @@ test('an opted-in turn uses one official-style input, projects main-session text
       assert.equal(user.session_id, options.sessionId);
       assert.equal(user.parent_tool_use_id, null);
       yield init(options.sessionId);
+      yield { type: 'rate_limit_event', session_id: 'other-session', rate_limit_info:
+        { rateLimitType: 'five_hour', utilization: 0.9, resetsAt: 2000000000 } };
+      yield { type: 'rate_limit_event', session_id: options.sessionId, rate_limit_info:
+        { rateLimitType: 'seven_day', utilization: 0.25, resetsAt: 2000000000 } };
       yield delta(options.sessionId, '第一段\u0000');
       yield delta(options.sessionId, 'subagent text', 'tool-fixture');
       yield delta(options.sessionId, '第二段');
@@ -171,6 +175,9 @@ test('an opted-in turn uses one official-style input, projects main-session text
   assert.deepEqual(observed.settingSources, []);
   assert.equal((await observed.canUseTool()).behavior, 'deny');
   assert.equal(worker.packets.find((p) => p.method === 'turn/started').params.turn.id, turnId);
+  assert.deepEqual(worker.packets.filter((p) => p.method === 'dsh/subscriptionLimit').map((p) => p.params), [
+    { threadId, turnId, window: 'weekly', usedPercent: 25, resetsAt: 2000000000 },
+  ]);
   const chunks = worker.packets.filter((p) => p.method === 'item/agentMessage/delta').map((p) => p.params);
   assert.deepEqual(chunks, [
     { threadId, turnId, itemId: turnId, delta: '第一段' },

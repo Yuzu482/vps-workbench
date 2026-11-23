@@ -326,16 +326,34 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
   display: flex; align-items: center; gap: 6px; min-width: 0; padding: 8px 12px 9px;
   background: var(--vc-canvas); border-top: 1px solid var(--vc-line);
 }
-.vc-sidebar-quota {
-  flex: none; padding: 7px 9px; border-radius: 8px; background: var(--vc-surface);
-  font-size: 12px; line-height: 1.35;
+.vc-sidebar-quota { flex: none; font-size: 12px; }
+.vc-sidebar-quota summary {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  min-height: 40px; padding: 3px 8px; border-radius: 8px; list-style: none; cursor: pointer;
 }
-.vc-sidebar-quota h2 { margin: 0 0 4px; color: var(--vc-ink); font: inherit; font-weight: 650; }
-.vc-sidebar-quota dl {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px;
-  margin: 0; color: var(--vc-muted);
+.vc-sidebar-quota summary::-webkit-details-marker { display: none; }
+.vc-sidebar-quota summary:is(:hover, :focus-visible) { background: var(--vc-hover); }
+.vc-sidebar-quota[open] summary { background: var(--vc-tint); }
+.vc-quota-window { display: inline-flex; align-items: center; gap: 7px; }
+.vc-quota-ring {
+  display: grid; place-items: center; flex: none; inline-size: 30px; block-size: 30px;
+  padding: 2px; border-radius: 50%; box-sizing: border-box;
+  background: conic-gradient(var(--vc-accent) var(--vc-quota-fill), var(--vc-line-strong) 0);
+  color: var(--vc-ink); font-size: 10px; font-variant-numeric: tabular-nums;
 }
-.vc-sidebar-quota dd { margin: 0; text-align: end; font-variant-numeric: tabular-nums; }
+.vc-quota-ring > span {
+  display: grid; place-items: center; inline-size: 100%; block-size: 100%;
+  border-radius: inherit; background: var(--vc-rail);
+}
+.vc-quota-subscriptions {
+  display: grid; gap: 6px; max-block-size: 26vh; overflow: auto;
+  padding: 6px 0 0; color: var(--vc-muted);
+}
+.vc-quota-subscriptions section {
+  display: grid; gap: 4px; padding: 7px 9px; border-radius: 8px; background: var(--vc-surface);
+}
+.vc-quota-subscriptions h2 { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--vc-ink); font: inherit; font-weight: 650; }
+.vc-quota-subscriptions p { margin: 6px; }
 #root .vc-rail-content .vc-sidebar-new {
   display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px;
   align-items: center; justify-items: center; flex: none;

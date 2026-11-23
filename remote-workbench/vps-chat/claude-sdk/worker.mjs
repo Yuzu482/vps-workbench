@@ -219,7 +219,8 @@ export async function serve({ input, output, query, cwd = process.cwd(), workflo
         if (outcome) continue;
         const type = message?.type;
         const init = type === 'system' && message.subtype === 'init';
-        if (!init && !['stream_event', 'assistant', 'result'].includes(type)) continue;
+        if (!init && !['stream_event', 'assistant', 'result', 'rate_limit_event'].includes(type)) continue;
+        if (type === 'rate_limit_event' && (!verified || message.session_id !== thread.id)) continue;
         if (message.session_id !== thread.id || (init && verified)) break;
         if (init) {
           verified = true;
@@ -246,6 +247,15 @@ export async function serve({ input, output, query, cwd = process.cwd(), workflo
           finishTimer = setTimeout(finish, 2000);
         } else if (!verified) {
           break;
+        } else if (type === 'rate_limit_event') {
+          const info = message.rate_limit_info;
+          for (const [bucket, window] of [['five_hour', 'fiveHour'], ['seven_day', 'weekly']]) {
+            const sample = info?.unifiedWindows?.[bucket] ?? (info?.rateLimitType === bucket ? info : null);
+            if (typeof sample?.utilization === 'number' && sample.utilization >= 0 && sample.utilization <= 1 &&
+                Number.isSafeInteger(sample.resetsAt) && sample.resetsAt > 0) {
+              notify('dsh/subscriptionLimit', { window, usedPercent: sample.utilization * 100, resetsAt: sample.resetsAt });
+            }
+          }
         } else if (message.parent_tool_use_id === null) {
           if (type === 'assistant') {
             if (Object.hasOwn(message, 'user_message_uuid') && message.user_message_uuid !== turnId) break;

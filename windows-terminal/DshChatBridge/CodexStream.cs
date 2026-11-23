@@ -12,6 +12,15 @@ internal sealed record ContextUsage(long UsedTokens, long? ContextWindow)
     internal bool Valid => UsedTokens is >= 0 and <= MaxSafeInteger &&
         (ContextWindow is null or (> 0 and <= MaxSafeInteger));
 }
+internal sealed record SubscriptionWindow(double UsedPercent, long ResetsAt)
+{
+    internal bool Valid => UsedPercent is >= 0 and <= 100 && ResetsAt is > 0 and <= 253402300799;
+}
+internal sealed record SubscriptionLimits(SubscriptionWindow? FiveHour, SubscriptionWindow? Weekly)
+{
+    internal bool Valid => (FiveHour is not null || Weekly is not null) &&
+        (FiveHour?.Valid ?? true) && (Weekly?.Valid ?? true);
+}
 internal sealed record CatalogModel(string Id, string DisplayName, bool IsDefault, string[] Efforts, string? DefaultEffort);
 
 internal static class CodexStream
@@ -201,6 +210,25 @@ internal static class CodexStream
         return models.ToArray();
     }
 
+    private static SubscriptionLimits? ReadSubscriptionLimits(JsonElement stream)
+    {
+        if (!stream.TryGetProperty("subscription_limits", out var limits) || limits.ValueKind != JsonValueKind.Object)
+            return null;
+        SubscriptionWindow? Read(string key)
+        {
+            if (!limits.TryGetProperty(key, out var window) || !BridgeProtocol.HasFields(window, "usedPercent", "resetsAt") ||
+                window.GetProperty("usedPercent").ValueKind != JsonValueKind.Number ||
+                !window.GetProperty("usedPercent").TryGetDouble(out double used) ||
+                window.GetProperty("resetsAt").ValueKind != JsonValueKind.Number ||
+                !window.GetProperty("resetsAt").TryGetInt64(out long resets))
+                return null;
+            var result = new SubscriptionWindow(used, resets);
+            return result.Valid ? result : null;
+        }
+        var result = new SubscriptionLimits(Read("fiveHour"), Read("weekly"));
+        return result.Valid ? result : null;
+    }
+
     private static ContextUsage? ReadContextUsage(JsonElement stream)
     {
         if (!stream.TryGetProperty("context_usage", out var context) ||
@@ -281,7 +309,8 @@ internal static class CodexStream
             steerReady, steering ?? prior.Steering,
             BridgeProtocol.IsModelId(reportedModel) ? reportedModel : prior.Model,
             BridgeProtocol.IsEffort(reportedEffort) ? reportedEffort : prior.Effort,
-            ReadContextUsage(stream) ?? prior.ContextUsage, approvals ?? prior.Approvals);
+            ReadContextUsage(stream) ?? prior.ContextUsage, approvals ?? prior.Approvals,
+            ReadSubscriptionLimits(stream) ?? prior.SubscriptionLimits);
         if (remoteState != "finished") return new(current, null);
 
         if (!root.TryGetProperty("exit_code", out var code) || code.ValueKind != JsonValueKind.Number || !code.TryGetInt32(out int exit))

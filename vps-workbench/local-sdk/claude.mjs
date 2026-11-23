@@ -1,3 +1,4 @@
+import { readClaudeLimits } from '../../remote-workbench/vps-chat/client/subscription-limits.js';
 import { randomUUID } from 'node:crypto';
 import { workspaceFile } from './workspace-file.mjs';
 
@@ -130,7 +131,9 @@ export function claudeThread({ query, directory, nativeId, turnId, context, prov
               continue;
             }
             if (message.session_id !== session) throw new Error('Claude session mismatch');
-            if (message.type === 'stream_event') {
+            if (message.type === 'rate_limit_event') {
+              yield { type: 'subscription.limits', limits: readClaudeLimits(message.rate_limit_info) };
+            } else if (message.type === 'stream_event') {
               const event = message.event;
               if (event?.type === 'message_start' && typeof event.message?.id === 'string') {
                 messageId = event.message.id;
