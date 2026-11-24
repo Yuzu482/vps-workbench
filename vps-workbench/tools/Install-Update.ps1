@@ -3,16 +3,27 @@ param([string]$BaseDirectory)
 
 $ErrorActionPreference = 'Stop'
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'update.json') -Raw | ConvertFrom-Json
+$targetPackage = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'package.json') -Raw | ConvertFrom-Json
 if ($manifest.version -notmatch '^\d+\.\d+\.\d+-dev\.\d+$' -or $manifest.webRevision -cnotmatch '^[0-9a-f]{64}$' -or
-    !$manifest.files.Count -or !$manifest.bases.Count) { throw 'Invalid update manifest.' }
+    !$manifest.files.Count -or !$manifest.bases.Count -or $targetPackage.name -ne 'vps-workbench' -or
+    $targetPackage.version -ne $manifest.version) { throw 'Invalid update manifest.' }
 $releases = Join-Path $env:LOCALAPPDATA 'VPS Workbench/Releases'
+$installedPackage = Join-Path $releases "VPS-Workbench-$($manifest.version)-win-x64/resources/app/package.json"
+if (Test-Path -LiteralPath $installedPackage -PathType Leaf) {
+    $installed = Get-Content -LiteralPath $installedPackage -Raw | ConvertFrom-Json
+    if ([bool]$installed.personalClaudeSubscription -ne [bool]$targetPackage.personalClaudeSubscription) {
+        throw 'The installed edition differs from this update. Use an update for the installed edition.'
+    }
+}
 
 function Test-UpdateBase([string]$Directory) {
     try {
         $app = Join-Path $Directory 'resources/app'
         $package = Get-Content -LiteralPath (Join-Path $app 'package.json') -Raw | ConvertFrom-Json
         $web = Get-Content -LiteralPath (Join-Path $app 'desktop/web/revision.json') -Raw | ConvertFrom-Json
-        if ($package.name -ne 'vps-workbench' -or !(Test-Path -LiteralPath (Join-Path $Directory 'VPS Workbench.exe') -PathType Leaf)) {
+        if ($package.name -ne 'vps-workbench' -or
+            [bool]$package.personalClaudeSubscription -ne [bool]$targetPackage.personalClaudeSubscription -or
+            !(Test-Path -LiteralPath (Join-Path $Directory 'VPS Workbench.exe') -PathType Leaf)) {
             return $false
         }
         return [bool]($manifest.bases | Where-Object { $_.version -eq $package.version -and $_.revision -ceq $web.revision })
