@@ -250,8 +250,66 @@ test('context tooltip shows the selected model limit before sending and separate
   await ring.hover();
   await tooltip.getByText('128,000 tokens', { exact: true }).waitFor();
   await tooltip.getByText('32,000 tokens', { exact: true }).waitFor();
-  assert.equal(await ring.locator('.vc-context-meter').evaluate((el) => el.style.getPropertyValue('--vc-used')), '0%');
+  await tooltip.getByText('1,840 / 32,000 tokens', { exact: true }).waitFor();
+  assert.equal(await ring.locator('.vc-context-meter').evaluate((el) => el.style.getPropertyValue('--vc-used')), '5.75%');
   assert.equal(calls.filter((op) => op === 'send').length, 0);
+});
+
+test('context samples stay on the current design branch', { timeout: 20_000 }, async (t) => {
+  const page = await openPreview(t);
+  await page.route('**/dsh-vps-chat/api/rpc', async (route) => {
+    if (route.request().postDataJSON().op !== 'get') return route.continue();
+    const response = await route.fetch();
+    const json = await response.json();
+    const turn = json.session?.turns.at(-1);
+    if (turn?.fork) delete turn.contextUsage;
+    return route.fulfill({ response, json });
+  });
+  await (await sidebarButton(page, '纸间书店')).click();
+  await (await sidebarButton(page, '纸间书店 · 网站设计，设计会话')).click();
+  await page.getByRole('img', { name: '上下文用量', exact: true }).hover();
+  const tooltip = page.getByRole('tooltip', { name: '上下文用量', exact: true });
+  await tooltip.getByText('尚无 VPS 上下文用量报告。', { exact: true }).waitFor();
+  assert.equal(await tooltip.getByRole('progressbar').count(), 0);
+});
+
+test('context ring updates during streaming, decreases when compacted and resets in a new chat', { timeout: 30_000 }, async (t) => {
+  const page = await openPreview(t);
+  let usedTokens = 1000;
+  let completed = false;
+  await page.route('**/dsh-vps-chat/api/rpc', async (route) => {
+    const { op } = route.request().postDataJSON();
+    if (!['send', 'refresh'].includes(op)) return route.continue();
+    const response = await route.fetch();
+    const json = await response.json();
+    const turn = json.session?.turns.at(-1);
+    if (turn?.prompt === '上下文流式回归') {
+      turn.contextUsage = { usedTokens, contextWindow: 20000 };
+      turn.state = completed ? 'complete' : 'running';
+      turn.streaming = !completed;
+    }
+    return route.fulfill({ response, json });
+  });
+  const ring = page.getByRole('img', { name: '上下文用量', exact: true });
+  const tooltip = page.getByRole('tooltip', { name: '上下文用量', exact: true });
+  assert.equal(await ring.getAttribute('data-context-state'), 'unavailable');
+  await page.getByRole('textbox', { name: '消息', exact: true }).fill('上下文流式回归');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await ring.hover();
+  await tooltip.getByText('1,000 / 20,000 tokens', { exact: true }).waitFor();
+  assert.equal(await ring.locator('.vc-context-meter').evaluate((el) => el.style.getPropertyValue('--vc-used')), '5%');
+  usedTokens = 10000;
+  await tooltip.getByText('10,000 / 20,000 tokens', { exact: true }).waitFor();
+  assert.equal(await ring.locator('.vc-context-meter').evaluate((el) => el.style.getPropertyValue('--vc-used')), '50%');
+  usedTokens = 2000;
+  completed = true;
+  await tooltip.getByText('2,000 / 20,000 tokens', { exact: true }).waitFor();
+  assert.equal(await ring.locator('.vc-context-meter').evaluate((el) => el.style.getPropertyValue('--vc-used')), '10%');
+  await page.getByRole('button', { name: '新建对话', exact: true }).click();
+  await ring.hover();
+  await tooltip.getByText('尚无 VPS 上下文用量报告。', { exact: true }).waitFor();
+  assert.equal(await ring.getAttribute('data-context-state'), 'unavailable');
+  assert.equal(await tooltip.getByRole('progressbar').count(), 0);
 });
 
 test('context tooltip distinguishes request occupancy from a turn token total', { timeout: 25_000 }, async (t) => {

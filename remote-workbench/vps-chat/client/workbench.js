@@ -756,7 +756,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       connectionDiagnostics?.clear();
       setAccountOpen({ actionId: requestedAccount.actionId, settings: configuration.settings });
     }, [requestedAccount]);
-    const report = reportedTurnSettings(turns, Boolean(attempt && lastTurn?.id !== attempt.id));
+    const report = reportedTurnSettings(turns, Boolean(attempt && lastTurn?.id !== attempt.id), design);
     const modelKey = `${scope}:${selected}`;
     const catalog = modelCatalogs[scope];
     const savedModel = modelAllowed && toolProfiles[connection.provider]?.model;

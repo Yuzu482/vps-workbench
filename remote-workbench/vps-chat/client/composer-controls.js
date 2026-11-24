@@ -15,14 +15,18 @@ const workspaceChoices = [
   ['read-only', '强制只读', '以只读方式挂载原项目，仍可运行只读命令'],
   ['isolated', '隔离项目文件', '用空的只读目录替代原项目'],
 ];
-export function reportedTurnSettings(turns, submitting) {
+export function reportedTurnSettings(turns, submitting, design = false) {
   const result = { usage: null, usageModel: null, earlierUsage: false, model: null, effort: null };
+  let usageParent;
   for (let index = turns.length - 1; index >= 0; index--) {
     const turn = turns[index];
-    if (!result.usage && turn.contextUsage) {
-      result.usage = turn.contextUsage;
-      result.usageModel = turn.model;
-      result.earlierUsage = submitting || index !== turns.length - 1;
+    if (!result.usage && (usageParent === undefined || usageParent === turn.id)) {
+      if (turn.contextUsage) {
+        result.usage = turn.contextUsage;
+        result.usageModel = turn.model;
+        result.earlierUsage = submitting || index !== turns.length - 1;
+      }
+      if (design) usageParent = turn.fork ? null : turn.parentTurnId;
     }
     if (!result.model && turn.model) {
       result.model = turn.model;
@@ -114,6 +118,7 @@ export const composerControlsCss = `
     padding:14px; border-radius:14px; box-shadow:var(--vc-shadow); overscroll-behavior:contain;
   }
   [data-vps-chat] .vc-composer-panel.vc-context-tooltip {width:306px; padding:11px 12px}
+  [data-vps-chat] .vc-context-reading {display:block; margin:0 0 7px; font-variant-numeric:tabular-nums}
   [data-vps-chat] .vc-settings.vc-composer-panel[data-kind=model] {width:300px; padding:10px 12px}
   [data-vps-chat] .vc-composer-panel-heading {display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:9px}
   [data-vps-chat] .vc-composer-panel::backdrop {background:transparent; pointer-events:none}
@@ -327,10 +332,9 @@ export function createComposerControls(React) {
     const { usage } = report;
     const current = currentModelContext({ provider, selection, catalog, report });
     const limitLabel = current.source === 'published' ? '上下文窗口上限（公开规格）' : '上下文窗口上限';
-    const contextTitle = current.limit ? `${limitLabel} ${numbers.format(current.limit)} tokens` : undefined;
-    const sameModel = !current.id || report.usageModel === current.id;
-    const used = sameModel && usage?.contextWindow && (!current.limit || current.limit === usage.contextWindow)
-      ? Math.min(100, usage.usedTokens * 100 / usage.contextWindow) : 0;
+    const reading = usage?.contextWindow ? `${numbers.format(usage.usedTokens)} / ${numbers.format(usage.contextWindow)} tokens` : null;
+    const contextTitle = reading ? `${reading} · ${occupancy(usage)}` : undefined;
+    const used = usage?.contextWindow ? Math.min(100, usage.usedTokens * 100 / usage.contextWindow) : 0;
     const chosen = catalog?.models?.find((entry) => entry.id === selection?.id);
     const reported = catalog?.models?.find((entry) => entry.id === report.model);
     const modeName = mode === 'design' ? t('设计') : t('对话');
@@ -362,6 +366,7 @@ export function createComposerControls(React) {
       h('div', { className: 'vc-composer-end' },
         h('span', {
           className: 'vc-context-indicator', role: 'img', 'data-control': 'context', 'aria-label': t('上下文用量'),
+          'data-context-state': reading ? (report.earlierUsage ? 'last' : 'reported') : 'unavailable',
           'aria-description': contextTitle, 'aria-describedby': showTooltip ? tooltipId : undefined,
           onPointerEnter: (event) => { if (event.pointerType !== 'touch') showContext(event.currentTarget); },
           onPointerLeave: dismissTooltipSoon,
@@ -372,26 +377,20 @@ export function createComposerControls(React) {
         children),
       showTooltip ? h(Panel, {
         kind: 'context', tooltip: true, id: tooltipId, anchor: contextAnchor, close: clearTooltip, report, attached, mode, localSdk,
-        surfaceRef: tooltipRef, current, catalog, limitLabel,
+        surfaceRef: tooltipRef, current, catalog, limitLabel, reading,
         onPointerEnter: keepTooltip, onPointerLeave: dismissTooltipSoon,
       }) : null);
   }
 
-  function ContextDetails({ report, attached, design, localSdk, current, catalog, limitLabel }) {
+  function ContextDetails({ report, attached, design, localSdk, current, catalog, limitLabel, reading }) {
     const { usage, usageModel, earlierUsage } = report;
     const percent = occupancy(usage);
     const source = localSdk ? t('本机执行端') : 'VPS';
     const limitSource = { runtime: '执行端报告', catalog: '执行端目录', published: '厂商公开规格', 'codex-default': 'Codex 公开默认值' }[current.source];
     const separateWindow = usage?.contextWindow !== current.limit || report.usageModel !== current.id;
     return h(React.Fragment, null,
-      h('dl', null,
-        h('dt', null, '当前模型'), h('dd', null, current.id ?? (current.limit ? '执行端当前模型' : '执行端默认')),
-        h('dt', null, limitLabel), h('dd', null, current.limit ? `${numbers.format(current.limit)} tokens`
-          : catalog?.loading ? '正在读取模型目录…' : '执行端尚未确认'),
-        limitSource ? h(React.Fragment, null, h('dt', null, '上限来源'), h('dd', null, limitSource)) : null,
-        current.published && current.published !== current.limit ? h(React.Fragment, null,
-          h('dt', null, '厂商公开规格'), h('dd', null, `${numbers.format(current.published)} tokens`)) : null),
       usage ? h(React.Fragment, null,
+        reading ? h('strong', { className: 'vc-context-reading' }, reading) : null,
         h('dl', null,
           h('dt', null, '数据来源'), h('dd', null, (earlierUsage ? '较早轮次的 ' : '当前轮次的 ') + source + ' 报告'),
           h('dt', null, contextMetric(usage)), h('dd', null, `${numbers.format(usage.usedTokens)} tokens`),
@@ -401,9 +400,16 @@ export function createComposerControls(React) {
           !usage.kind && usageModel && usageModel !== current.id ? h(React.Fragment, null, h('dt', null, '报告模型'), h('dd', null, usageModel)) : null),
         percent ? h('progress', {
           'aria-label': usage.kind === 'request_input' ? '输入占窗口比例' : '上下文占用', max: usage.contextWindow, value: Math.min(usage.usedTokens, usage.contextWindow),
-          'aria-valuetext': `${numbers.format(usage.usedTokens)} / ${numbers.format(usage.contextWindow)} tokens`,
+          'aria-valuetext': reading,
         }) : null,
         earlierUsage ? h('p', null, '当前轮次尚未报告用量。') : null) : h('p', null, '尚无 ' + source + ' 上下文用量报告。'),
+      h('dl', null,
+        h('dt', null, '当前模型'), h('dd', null, current.id ?? (current.limit ? '执行端当前模型' : '执行端默认')),
+        h('dt', null, limitLabel), h('dd', null, current.limit ? `${numbers.format(current.limit)} tokens`
+          : catalog?.loading ? '正在读取模型目录…' : '执行端尚未确认'),
+        limitSource ? h(React.Fragment, null, h('dt', null, '上限来源'), h('dd', null, limitSource)) : null,
+        current.published && current.published !== current.limit ? h(React.Fragment, null,
+          h('dt', null, '厂商公开规格'), h('dd', null, `${numbers.format(current.published)} tokens`)) : null),
       design ? h('dl', null, h('dt', null, '待发送设计资料'),
         h('dd', null, attached?.error || (attached?.labels?.length ? attached.labels.join('、') : '未选中'))) : null);
   }
@@ -562,7 +568,7 @@ export function createComposerControls(React) {
     modelAllowed, catalog, selection, toolDefault, followsTool, chooseModel, retryModels, advanced,
     access, accessProvider, accessBusy, changeAccess, pluginPrompts, insertPluginPrompt, templateLabel,
     memoryIsolated, automaticMemory, projectMemorySuppressed, memoryBusy, memoryStartsNew, changeMemoryMode, openMemorySettings,
-    tooltip = false, id, surfaceRef, onPointerEnter, onPointerLeave, localSdk, current, limitLabel }) {
+    tooltip = false, id, surfaceRef, onPointerEnter, onPointerLeave, localSdk, current, limitLabel, reading }) {
     const localRef = React.useRef(null);
     const ref = surfaceRef ?? localRef;
     React.useLayoutEffect(() => {
@@ -637,7 +643,7 @@ export function createComposerControls(React) {
     }) : h(React.Fragment, null,
       h('div', { className: 'vc-composer-panel-heading' },
         h('h2', { className: 'vc-menu-label' }, menuIcon(h, kind === 'mode' ? 'effort' : ['plugins', 'memory'].includes(kind) ? 'library' : kind), name), closeButton),
-      tooltip ? h(ContextDetails, { report, attached, design: mode === 'design', localSdk, current, catalog, limitLabel })
+      tooltip ? h(ContextDetails, { report, attached, design: mode === 'design', localSdk, current, catalog, limitLabel, reading })
         : kind === 'access' ? h(AccessChoices, { access, provider: accessProvider, busy: accessBusy, change: changeAccess, localSdk })
           : kind === 'memory' ? h(MemoryChoices, { isolated: memoryIsolated, automatic: automaticMemory,
             projectMemorySuppressed, busy: memoryBusy,
