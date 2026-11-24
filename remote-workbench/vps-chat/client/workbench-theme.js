@@ -356,6 +356,9 @@ export function workbenchCss(separatorWidth) {
     [data-vps-chat] .vc-steer-state {font-size:12px; color:var(--vc-muted)}
     [data-vps-chat] .vc-steering li:is([data-state=unknown],[data-state=rejected]) .vc-steer-state {color:var(--vc-warn)}
     [data-vps-chat] .vc-approvals {display:grid; gap:8px; list-style:none; margin:0; padding:0; min-width:0}
+    [data-vps-chat] .vc-canvas-conversation .vc-compose-wrap > .vc-approvals {
+      max-height:24dvh; overflow:auto; margin-block-end:8px; pointer-events:auto;
+    }
     [data-vps-chat] .vc-approvals li {display:grid; gap:7px; padding:9px 11px; border:1px solid var(--vc-line);
       border-radius:8px; background:var(--vc-surface); min-width:0; overflow-wrap:anywhere}
     [data-vps-chat] .vc-approval-heading {display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; font-size:13px}

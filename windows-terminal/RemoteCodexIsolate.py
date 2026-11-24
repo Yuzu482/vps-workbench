@@ -204,8 +204,8 @@ if provider=='claude':
  else:
   env['ANTHROPIC_API_KEY']=pathlib.Path('/run/anthropic-key').read_text(encoding='utf-8').strip()
  if payload.get('claudeStdin') is True:
-  input_data=sys.stdin.buffer.read(65537)
-  if not input_data or len(input_data)>65536:
+  input_data=sys.stdin.buffer.read(262145)
+  if not input_data or len(input_data)>262144:
    sys.exit(2)
  else:
   content=[{'type':'text','text':payload['prompt']}]
@@ -517,27 +517,7 @@ def dsh_api_storage_ready(home, auth_override=None):
         return False
 
 
-def api_chat_input():
-    raw = sys.stdin.buffer.read(65537)
-    if len(raw) > 65536:
-        raise ValueError("invalid Claude API input")
-    packet = json.loads(raw)
-    if not isinstance(packet, dict) or set(packet) != {"prompt", "memory"}:
-        raise ValueError("invalid Claude API input")
-    content = []
-    for field, limit in (("prompt", 8192), ("memory", 24832)):
-        text = packet[field]
-        if not isinstance(text, str) or not text.strip() or len(text) > limit or "\0" in text:
-            raise ValueError("invalid Claude API input")
-        content.append({"type": "text", "text": text})
-    frame = json.dumps({"type": "user", "message": {"role": "user", "content": content}}, ensure_ascii=False)
-    data = (frame + "\n").encode("utf-8")
-    if len(data) > 65536:
-        raise ValueError("invalid Claude API frame")
-    return data
-
-
-def run(program, command, workspace, environment, _connector=None, _auth_path=None, _argv_override=None):
+def run(program, command, workspace, environment, _connector=None, _auth_path=None, _argv_override=None, read_chat_input=None):
     """Start once; any setup failure returns nonzero and never falls back."""
     provider = os.path.basename(command[0]) if command else ""
     if provider not in ("codex", "claude") or command[1:2] != (["exec"] if provider == "codex" else ["-p"]):
@@ -551,10 +531,11 @@ def run(program, command, workspace, environment, _connector=None, _auth_path=No
                 return 2
             command = command[:2] + command[3:]
         stream_input = None
-        if command[2:3] == ["--dsh-api-chat-stdin"]:
-            if not encrypted_credentials:
+        design = command[2:3] == ["--dsh-api-design-stdin"]
+        if design or command[2:3] == ["--dsh-api-chat-stdin"]:
+            if not encrypted_credentials or read_chat_input is None:
                 raise ValueError("Claude API input requires encrypted credentials")
-            stream_input = api_chat_input()
+            stream_input = read_chat_input(design)
             command = command[:2] + command[3:]
         for path in ("/usr/bin/bwrap", "/usr/bin/python3"):
             if not os.path.isfile(path) or not os.access(path, os.X_OK):
@@ -605,7 +586,9 @@ def run(program, command, workspace, environment, _connector=None, _auth_path=No
                 allowed = ALLOWED_HOSTS if provider == "codex" else CLAUDE_SUBSCRIPTION_HOSTS if subscription else CLAUDE_HOSTS
                 gate = Gateway(os.path.join(directory, "proxy.sock"), _connector or global_connection, allowed)
                 with gate:
-                    start = sandbox_command(executable, work, auth, directory, argv, chat_home, uploads, provider, prompt, images, str(native_home) if native_home else None, subscription, shared_config, overlays, claude_stdin=stream_input is not None)
+                    if design:
+                        work, uploads = tempfile.mkdtemp(dir=directory), None
+                    start = sandbox_command(executable, work, auth, directory, argv, chat_home, uploads, provider, prompt, images, str(native_home) if native_home else None, subscription, shared_config, overlays, claude_stdin=stream_input is not None, read_only_workspace=design)
                     safe_env = {"PATH": "/usr/bin:/usr/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/nonexistent"}
                     lease = (account_lock or lock).fileno() if guard_root is not None else None
                     if lease is not None:

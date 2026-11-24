@@ -900,6 +900,42 @@ class StreamControlTests(unittest.TestCase):
         self.assertEqual(antigravity.consume_acp(process, support, reply, None, self.identifier, "first", None,
                                                  interactive=True), ("stopped", self.thread, None))
 
+    def test_design_claude_workspaces_are_empty_read_only_and_do_not_mount_attachments(self):
+        base = Path(__file__).resolve().parents[1]
+        isolation = load("design_isolation", base / "RemoteCodexIsolate.py")
+        sdk = load("design_sdk", base / "DshChatBridge/RemoteDshClaudeSdk.py")
+        project = self.directory / "project"
+        project.mkdir()
+        (project / "private.txt").touch()
+        frames = []
+
+        def mount(executable, work, auth, gate, argv, *args, **kwargs):
+            self.assertTrue(kwargs["read_only_workspace"])
+            self.assertNotEqual(Path(work), project)
+            self.assertEqual(list(Path(work).iterdir()), [])
+            self.assertIsNone(kwargs.get("uploads") if "uploads" in kwargs else args[1])
+            frames.append(Path(work))
+            return ["--"]
+
+        with patch.object(isolation, "sandbox_command", side_effect=mount):
+            sdk.sdk_command(vars(isolation), {"isolated_workspace_path": lambda path: "/workspaces/" + "c" * 64},
+                            "/fixture/claude", str(project), self.directory, self.directory, str(self.directory),
+                            "/fixture/node", "/fixture/sdk", design=True)
+            args = ["claude", "-p", "--dsh-encrypted-credentials", "--dsh-api-design-stdin",
+                    "--chat-session", self.thread, "--tools", "", "--session-id", self.thread]
+            reader = Mock(return_value=b"fixture\n")
+            with patch.object(isolation, "dsh_api_storage_ready", return_value=True), \
+                 patch.object(isolation, "validate_paths", return_value=("/fixture/claude", str(project), "/fixture/key")), \
+                 patch.object(isolation, "chat_paths", return_value=(self.directory, str(self.directory), None)), \
+                 patch.object(isolation, "Gateway", return_value=contextlib.nullcontext()), \
+                 patch.object(isolation.os.path, "isfile", return_value=True), \
+                 patch.object(isolation.os, "access", return_value=True), \
+                 patch.object(isolation.subprocess, "run", return_value=SimpleNamespace(returncode=0)):
+                self.assertEqual(isolation.run("/fixture/claude", args, str(project), {"HOME": str(self.directory)},
+                                               read_chat_input=reader), 0)
+            reader.assert_called_once_with(True)
+        self.assertEqual(len(frames), 2)
+
     def test_claude_api_effort_and_settings_survive_runner_argument_wrapping(self):
         base = Path(__file__).resolve().parents[1]
         isolation = load("chat_isolation", base / "RemoteCodexIsolate.py")

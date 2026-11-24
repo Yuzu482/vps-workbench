@@ -162,6 +162,8 @@ test('subscription terminal keeps the sidebar and can return through history wit
   await history.waitFor();
   const [panel, surface] = await Promise.all([history.boundingBox(), terminal.boundingBox()]);
   assert.ok(panel.x + panel.width <= surface.x);
+  const design = compact.getByRole('button', { name: '设计工作台', exact: true });
+  assert.equal(await design.isDisabled(), true);
   await fixture.start();
   await dockToggle.click();
   await history.waitFor({ state: 'hidden' });
@@ -184,6 +186,9 @@ test('subscription terminal keeps the sidebar and can return through history wit
   await fixture.choose('Codex');
   await terminal.waitFor({ state: 'hidden' });
   await page.getByText(/先留五分钟签到/u).first().waitFor();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await design.waitFor();
+  assert.equal(await design.isEnabled(), true);
 });
 
 test('subscription terminal burst benchmark measures the tail and confirms the receipt', { timeout: 45_000 }, async (t) => {

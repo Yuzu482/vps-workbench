@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as wait } from 'node:timers/promises';
 import { startWorkbenchServer } from '../desktop/server.mjs';
+import { readVersionHistory } from '../../remote-workbench/vps-chat/client/design-version-state.js';
 import { claudeThread } from './claude.mjs';
 import { antigravityThread } from './antigravity.mjs';
 import { providerDefaultModels } from './providers.mjs';
@@ -20,7 +21,7 @@ async function eventually(check) {
   throw new Error('fixture never reached the expected state');
 }
 
-async function fixture(t, makeThread) {
+async function fixture(t, makeThread, personalClaudeSubscription = false) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'workbench-agents-test-')));
   const directory = join(root, 'project');
   await mkdir(directory);
@@ -30,7 +31,7 @@ async function fixture(t, makeThread) {
   let mode = 'execute';
   const opts = {
     webRoot: root, workbenchRoot: join(root, 'ssh'), terminalRoot: root, runtimeRoot: root,
-    localStateRoot: join(root, 'local'), access: () => ({ mode, workspace: 'default' }),
+    localStateRoot: join(root, 'local'), access: () => ({ mode, workspace: 'default' }), personalClaudeSubscription,
     makeBridge: () => ({ request(request) { ssh.push(request); } }),
     makeLocalRuntime: async () => ({ runtimeAvailable: false, credentialConfigured: () => false }),
     makeLocalAgentRuntime: async ({ backend, stateRoot }) => ({ runtimeAvailable: true, credentialConfigured: () => true,
@@ -50,6 +51,8 @@ async function fixture(t, makeThread) {
     payload: { op, settings: settings(backend), targetId: profiles[backend].targetId, ...details } });
   return {
     profiles, callbacks, request, ssh, settings,
+    registerSubscription: () => host.registerLocalProfile({ backend: 'claude-sdk', directory,
+      name: 'local subscription', model: 'default', effort: 'default', authMode: 'subscription' }),
     async restart() { await host.close(); host = await startWorkbenchServer(opts); },
     browse() { mode = 'browse'; host.accessChanged(); },
     turn(backend, prompt, sessionId = randomUUID()) {
@@ -165,11 +168,31 @@ test('Claude SDK uses correlated input and permission receipts and resumes only 
   assert.deepEqual(f.ssh, []);
 });
 
+// Both native protocol fixtures check the user input they actually received.
+function designAnswer(text, image) {
+  assert.match(text, /14,000 字符/u);
+  assert.match(text, /闭合的 html 代码围栏/u);
+  const name = text.match(/当前任务\n([^\n]+)/u)[1];
+  if (name === '初稿') {
+    assert.match(text, /文字参考甲/u);
+    assert.equal(image, 'iVBORw0KGgo=');
+  } else if (name === '评审' || name === '从初稿分支') {
+    assert.match(text, /<title>初稿<\/title>/u);
+    assert.doesNotMatch(text, /文字评审乙/u);
+    if (name === '评审') return '文字评审乙';
+  } else if (name === '按评审修改') {
+    assert.match(text, /所选版本的回复（引用资料）\n文字评审乙/u);
+    assert.match(text, /<title>初稿<\/title>/u);
+  } else throw new Error('unexpected design task');
+  return '\x60\x60\x60html\n<html><head><title>' + name + '</title></head><body>画板</body></html>\n\x60\x60\x60';
+}
+
 const acpFixture = String.raw`
 import assert from 'node:assert/strict';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+const designAnswer = ${designAnswer.toString()};
 const input = createInterface({ input: process.stdin });
 const supportsImages = process.argv[1] === 'test-images';
 const supportsMcp = process.argv[1] === 'test-mcp';
@@ -195,6 +218,14 @@ for await (const line of input) {
   } else if (method === 'session/prompt') {
     assert.equal(params.sessionId, session);
     const text = params.prompt[0].text;
+    if (text.startsWith('以设计资料中明确')) {
+      assert.equal(isLoaded, false);
+      const image = params.prompt.find((part) => part.type === 'image');
+      if (image) assert.equal(image.mimeType, 'image/png');
+      chunk(designAnswer(text, image?.data));
+      reply(id, { stopReason: 'end_turn' });
+      continue;
+    }
     if (text === 'MCP fixture') {
       first = id;
       for (const name of ['allowed', 'blocked']) write({ method: 'session/request_permission', id: name,
@@ -311,6 +342,91 @@ test('Antigravity ACP drives a real local stdio fixture with bound steering, den
     steerId: randomUUID(), prompt: '无执行授权' })).code, 'workbench_browse_only');
   await eventually(async () => (await stop.read())?.state === 'stopped');
   assert.deepEqual(f.ssh, []);
+});
+
+function designClaude({ prompt, options }) {
+  const events = (async function* () {
+    assert.ok(options.sessionId);
+    assert.equal(options.resume, undefined);
+    assert.deepEqual(options.tools, ['Read']);
+    assert.deepEqual(options.allowedTools, []);
+    const { value } = await prompt.next();
+    const content = value.message.content;
+    const text = typeof content === 'string' ? content : content[0].text;
+    const image = Array.isArray(content) ? content.find((part) => part.type === 'image') : undefined;
+    if (image) assert.equal(image.source.media_type, 'image/png');
+    yield { type: 'system', subtype: 'init', session_id: options.sessionId };
+    yield { type: 'result', subtype: 'success', session_id: options.sessionId,
+      user_message_uuid: value.uuid, result: designAnswer(text, image?.source.data) };
+  })();
+  events.close = () => { void prompt.return(); };
+  return events;
+}
+
+test('local design branches bind native inputs, profiles and receipts across restarts', { timeout: 30000 }, async (t) => {
+  for (const [backend, subscription] of [['claude-sdk', false], ['claude-sdk', true], ['antigravity', false]]) {
+    await t.test(backend + (subscription ? ' subscription' : ''), async (t) => {
+      let acpImages = true;
+      const f = await fixture(t, (agent, profile, nativeId, { interaction, turnId, bindSession }) => {
+        assert.ok(interaction);
+        assert.equal(agent, backend);
+        assert.equal(profile.authMode === 'subscription', subscription);
+        assert.equal(nativeId, null);
+        const options = { directory: profile.directory, nativeId, context: interaction, turnId, bindSession };
+        if (agent === 'claude-sdk') return claudeThread({ ...options, query: designClaude });
+        return antigravityThread({ ...options, launch: () => spawn(process.execPath,
+          ['--input-type=module', '-e', acpFixture, ...(acpImages ? ['test-images'] : [])],
+          { cwd: profile.directory, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }) });
+      }, true);
+      const otherClaude = (await f.registerSubscription()).profile;
+      const profile = subscription ? otherClaude : f.profiles[backend];
+      const settings = { ...f.settings(backend), profileId: profile.id };
+      const sessionId = randomUUID();
+      const request = (op, fields = {}) => f.request(backend, op, { settings, targetId: profile.targetId, sessionId, ...fields });
+      const send = async (prompt, fields = {}) => {
+        const turnId = randomUUID();
+        const packet = { turnId, prompt, mode: 'design', ...fields };
+        assert.equal((await request('send', packet)).ok, true);
+        const turn = await eventually(async () => {
+          const current = (await request('refresh', { turnId })).session?.turns.find(({ id }) => id === turnId);
+          return current && !['pending', 'running'].includes(current.state) && current;
+        });
+        return { packet, turn };
+      };
+      const designContext = { text: '文字参考甲', images: [{ name: '样图.png', dataUrl: 'data:image/png;base64,iVBORw0KGgo=' }] };
+      const first = await send('初稿', { designContext });
+      assert.match(first.turn.reply, /<title>初稿<\/title>/u);
+      const review = await send('评审');
+      assert.equal(review.turn.reply, '文字评审乙');
+      const edit = await send('按评审修改', { designContext: {
+        text: '以下是版本 1 已应用并校验的画板。\n<!doctype html><html><title>初稿</title></html>', images: [],
+      } });
+      assert.match(edit.turn.reply, /<title>按评审修改<\/title>/u);
+      await f.restart();
+      const fork = await send('从初稿分支', { designBase: { parentTurnId: first.turn.id, fork: true } });
+      assert.match(fork.turn.reply, /<title>从初稿分支<\/title>/u);
+      const rows = readVersionHistory(await request('design-history'));
+      assert.deepEqual(rows.map(({ parentTurnId, fork, hasBoards }) => [parentTurnId, fork, hasBoards]),
+        [[null, false, true], [first.turn.id, false, false], [review.turn.id, false, true], [first.turn.id, true, true]]);
+      assert.equal((await request('design-history', { turnId: edit.turn.id })).turn.reply, edit.turn.reply);
+      assert.equal((await request('send', first.packet)).duplicate, true);
+      assert.equal((await request('send', { ...first.packet, designContext: { text: '变更参考', images: [] } })).code, 'turn_conflict');
+      assert.equal(f.callbacks.length, 4);
+      const foreign = subscription ? f.profiles['claude-sdk'] : otherClaude;
+      assert.equal((await f.request('claude-sdk', 'design-history', { sessionId, targetId: foreign.targetId,
+        settings: { ...f.settings('claude-sdk'), profileId: foreign.id } })).code, 'session_not_found');
+      if (backend === 'antigravity') {
+        acpImages = false;
+        const rejected = await send('初稿', { designContext });
+        assert.equal(rejected.turn.code, 'image_input_unavailable');
+        assert.equal(rejected.turn.reply, '');
+      }
+      f.browse();
+      assert.equal((await request('design-history')).ok, true);
+      assert.equal((await request('send', { ...first.packet, turnId: randomUUID() })).code, 'workbench_browse_only');
+      assert.deepEqual(f.ssh, []);
+    });
+  }
 });
 
 test('non-interactive ACP attachment input requires an advertised image capability', { timeout: 10000 }, async (t) => {

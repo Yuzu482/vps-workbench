@@ -147,6 +147,28 @@ def preflight(expected4, expected6, environment, provider="codex", *, service_ho
     return ok4 and routes[4] == "found" and ok6
 
 
+def api_chat_input(design):
+    field, limit = ("design", 52000) if design else ("memory", 24832)
+    maximum = 262144 if design else 65536
+    raw = sys.stdin.buffer.read(maximum + 1)
+    if len(raw) > maximum:
+        raise ValueError("invalid Claude API input")
+    packet = json.loads(raw)
+    if not isinstance(packet, dict) or set(packet) != {"prompt", field}:
+        raise ValueError("invalid Claude API input")
+    content = []
+    for key, bound in (("prompt", 8192), (field, limit)):
+        text = packet[key]
+        if not isinstance(text, str) or not text.strip() or len(text) > bound or "\0" in text:
+            raise ValueError("invalid Claude API input")
+        content.append({"type": "text", "text": text})
+    frame = json.dumps({"type": "user", "message": {"role": "user", "content": content}}, ensure_ascii=False)
+    data = (frame + "\n").encode("utf-8")
+    if len(data) > maximum:
+        raise ValueError("invalid Claude API frame")
+    return data
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Remote Codex egress privacy check")
     parser.add_argument("--expected-ipv4", required=True)
@@ -219,6 +241,9 @@ def main(argv=None):
                 workflow = {"__name__": "remote_workflow_files"}
                 exec(compile(module, "<remote-workflow-files>", "exec"), workflow)
                 return workflow["run_api"](scope, program, command, args.isolation_workspace, environment, args.workflow_task)
+            if command[:3] == ["claude", "-p", "--dsh-encrypted-credentials"] and command[3:4] in (
+                    ["--dsh-api-chat-stdin"], ["--dsh-api-design-stdin"]):
+                return scope["run"](program, command, args.isolation_workspace, environment, read_chat_input=api_chat_input)
             return scope["run"](program, command, args.isolation_workspace, environment)
         except (KeyError, ValueError, UnicodeError, OSError, zlib.error, SyntaxError):
             print("隔离环境无法建立；未启动模型程序。", file=sys.stderr)

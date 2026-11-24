@@ -21,6 +21,18 @@ V6 = ipaddress.ip_address("2001:db8::4")
 
 
 class PrivacyTests(unittest.TestCase):
+    def test_design_frame_accepts_bounded_unicode_context_and_ordinary_input_keeps_its_limit(self):
+        prompt, frozen = "brief", "参" * 24000
+        for design, field in ((True, "design"), (False, "memory")):
+            data = json.dumps({"prompt": prompt, field: frozen}, ensure_ascii=False).encode()
+            with patch.object(privacy.sys, "stdin", io.TextIOWrapper(io.BytesIO(data))):
+                if design:
+                    frame = json.loads(privacy.api_chat_input(True))
+                    self.assertEqual([item["text"] for item in frame["message"]["content"]], [prompt, frozen])
+                else:
+                    with self.assertRaises(ValueError):
+                        privacy.api_chat_input(False)
+
     def test_removes_case_insensitive_ssh_names_only(self):
         self.assertEqual(privacy.clean_environment({"SSH_CONNECTION": "secret", "ssh_client": "secret2", "PATH": "ok"}), {"PATH": "ok"})
 

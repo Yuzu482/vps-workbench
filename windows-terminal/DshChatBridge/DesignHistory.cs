@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using RemoteSsh;
 
 namespace DshVpsChat;
@@ -39,6 +41,17 @@ internal sealed partial class ChatBridge
 
     private string DesignLineagePath(Guid id) => Path.Combine(directory, $"design-lineage-{id:D}");
 
+    private Guid DesignSessionKey(Guid root)
+    {
+        // RFC 4122 name-based UUID, scoped to this execution target and this branch.
+        byte[] scope = new Guid("7a91532d-1d91-4876-b449-c92174b91811").ToByteArray(bigEndian: true);
+        byte[] name = Encoding.UTF8.GetBytes($"{request.TargetId}/{request.SessionId:D}/{root:D}");
+        byte[] digest = SHA1.HashData([.. scope, .. name]);
+        digest[6] = (byte)((digest[6] & 0x0f) | 0x50);
+        digest[8] = (byte)((digest[8] & 0x3f) | 0x80);
+        return new Guid(digest.AsSpan(0, 16), bigEndian: true);
+    }
+
     private DesignLineage ReadDesignLineage(ChatConversationRecord record)
     {
         var lineage = new DesignLineage();
@@ -55,6 +68,8 @@ internal sealed partial class ChatBridge
 
             previous = new DesignTurn(turn, parent?.Record.TaskId, basis,
                 basis?.Fork == true || parent is null ? turn.TaskId : parent.Root, ordinal);
+            if (settings.Provider is ("claude" or "antigravity") && turn.ThreadId is Guid thread && thread != DesignSessionKey(previous.Root))
+                throw new BridgeError("storage_unavailable", "设计分支记录与远端会话不匹配。");
             lineage.Add(previous);
         }
         return lineage;

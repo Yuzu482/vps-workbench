@@ -51,11 +51,12 @@ function harness(query, workflowFiles = false) {
   }
   const byId = (id) => waitFor((packet) => packet.id === id);
   const byMethod = (method) => waitFor((packet) => packet.method === method);
-  async function startThread(id) {
+  async function startThread(id, developerInstructions) {
     send('initialize', { clientInfo: { name: 'unit fixture' } }, 1);
     assert.deepEqual((await byId(1)).result, {});
     send('initialized', {});
-    const options = workflowFiles ? { ...threadParams, sandbox: 'workspace-write' } : threadParams;
+    const options = { ...threadParams, ...(workflowFiles && { sandbox: 'workspace-write' }),
+      ...(developerInstructions && { developerInstructions }) };
     send(id ? 'thread/resume' : 'thread/start', id ? { ...options, threadId: id, excludeTurns: true } : options, 2);
     return (await byId(2)).result.thread.id;
   }
@@ -76,6 +77,28 @@ const assistant = (session_id, text, options = {}) => ({
 });
 const result = (session_id, user_message_uuid, text) => ({
   type: 'result', subtype: 'success', is_error: false, session_id, user_message_uuid, result: text,
+});
+
+test('design forwards the frozen context, keeps tools disabled and delivers the entire closed HTML fence', async () => {
+  const brief = 'Return complete HTML artboards in closed fences';
+  const reference = 'DSH Design context selected by the user:\n' + '参'.repeat(24000);
+  const html = '\x60\x60\x60html\n<html><title>fixture</title>' + '文'.repeat(14000) + '</html>\n\x60\x60\x60';
+  const worker = harness(({ prompt, options }) => (async function* () {
+    const { value: user } = await prompt[Symbol.asyncIterator]().next();
+    assert.equal(options.systemPrompt, brief);
+    assert.equal(options.resume, savedId);
+    assert.deepEqual(options.tools, []);
+    assert.deepEqual(user.message.content.map(block => block.text), ['change color', 'project reference', reference]);
+    yield init(savedId);
+    yield result(savedId, user.uuid, html);
+  })());
+  const thread = await worker.startThread(savedId, brief);
+  const params = inputText(thread, 'change color');
+  params.input.push(...['project reference', reference].map(text => ({ type: 'text', text, text_elements: [] })));
+  worker.send('turn/start', params, 3);
+  assert.ok((await worker.byId(3)).result);
+  assert.equal(await worker.exited, 0);
+  assert.equal((await worker.byMethod('item/completed')).params.item.text, html);
 });
 
 test('scoped workflow reads of hidden and nonexistent paths get the same missing destination', async () => {

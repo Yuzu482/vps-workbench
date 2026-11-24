@@ -46,7 +46,8 @@ def sdk_runtime(home):
     return node, directory
 
 
-def sdk_command(isolation, native, executable, work, home, profile, gate_dir, node, package, memory_isolation=False, mounts=None):
+def sdk_command(isolation, native, executable, work, home, profile, gate_dir, node, package, memory_isolation=False, mounts=None,
+                design=False):
     prefix, separator, _ = isolation["RUNNER"].partition("input_data=None\n")
     if not separator:
         raise ValueError("incompatible sandbox runner")
@@ -75,10 +76,11 @@ finally:
 sys.exit(result.returncode if result.returncode>=0 else 128-result.returncode)
 '''
     workspace = "/workspace" if mounts else native["isolated_workspace_path"](work)
+    source = tempfile.mkdtemp(dir=gate_dir) if design else mounts[0] if mounts else work
     command = isolation["sandbox_command"](
-        executable, mounts[0] if mounts else work, None, gate_dir, [], chat_home=None if mounts else str(profile), provider="claude",
+        executable, source, None, gate_dir, [], chat_home=None if mounts else str(profile), provider="claude",
         native_home=None if mounts else str(home), subscription=not mounts, workspace_target=workspace, runner_script=runner,
-        uploads=mounts[1] if mounts else None, read_only_workspace=bool(mounts))
+        uploads=mounts[1] if mounts else None, read_only_workspace=design or bool(mounts))
     split = command.index("--")
     command[split:split] = ["--dir", SDK_MOUNT, "--ro-bind", str(package), SDK_MOUNT, "--ro-bind", str(node), NODE_MOUNT]
     if mounts:
@@ -140,7 +142,7 @@ def run(privacy, isolation, config, reply, support, workflow=None):
             allowed = isolation["CLAUDE_SUBSCRIPTION_HOSTS"]
             with isolation["Gateway"](os.path.join(gate, "proxy.sock"), isolation["global_connection"], allowed):
                 command = sdk_command(isolation, native, executable, work, home, profile, gate, node, package,
-                                      memory_isolation=config.get("memoryIsolation") is True, mounts=mounts)
+                                      memory_isolation=config.get("memoryIsolation") is True, mounts=mounts, design=config["design"])
                 command[1:1] = ["--sync-fd", str(lease.fileno())]
                 if stopped(reply.directory):
                     return "stopped", None, None

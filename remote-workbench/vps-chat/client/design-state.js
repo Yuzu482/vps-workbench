@@ -317,7 +317,7 @@ function designDelivery(version, target, baselineBoards, scopedRevision) {
   return ['首稿', '按用户流程返回 1 至 6 个完整画板，覆盖简报要求的页面和状态。'];
 }
 
-export function buildDesignContext(project, version, boards, selected, target, { workflow = false } = {}) {
+export function buildDesignContext(project, version, boards, selected, target, { workflow = false, imageReferences = true } = {}) {
   const portions = [];
   const labels = [];
   let images = [];
@@ -361,7 +361,7 @@ export function buildDesignContext(project, version, boards, selected, target, {
     labels.push('设计系统');
   }
   if (selected.references) {
-    images = project.images;
+    if (imageReferences) images = project.images;
     if (project.references.trim()) portions.push(`文字参考\n${project.references}`);
     if (project.references.trim() || images.length) labels.push('参考资料');
   }

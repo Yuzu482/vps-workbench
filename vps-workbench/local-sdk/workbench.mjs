@@ -68,7 +68,7 @@ function validRequest(body, backend) {
       (body.projectMemory.projectId === null || (typeof body.projectMemory.projectId === 'string' &&
         body.projectMemory.projectId.trim() && body.projectMemory.projectId.length <= 256 &&
         !/[\u0000-\u001f\u007f-\u009f]/u.test(body.projectMemory.projectId))))) &&
-    (body.workflowStage === undefined || (exactFields(body.workflowStage, 'runId') && workflowUuid(body.workflowStage.runId)));
+    (body.workflowStage === undefined || (body.mode === undefined && exactFields(body.workflowStage, 'runId') && workflowUuid(body.workflowStage.runId)));
 }
 
 function raster(data, format) {
@@ -255,14 +255,23 @@ export function createLocalWorkbench({ service, runtimeAvailable, access, data, 
         JSON.stringify(readTools()) === JSON.stringify(mcpServers);
       const input = files.length ? [{ type: 'text', text: prompt +
         '\n\n以下附件是用户为此阶段选择的引用资料。列出无法读取的文件。用回复交付阶段结果。' }, ...inlineAttachments(files)] : prompt;
-      const designInput = (reply) => {
+      const designInput = (lineage) => {
         const context = body.designContext?.text ?? '';
         const includesBaseline = /(?:^|\n)(?:画板交付 · (?:限定图层修订|单画板迭代|双方案变体)|从设计版本 \d+ 开始新分支。|以下是版本 \d+ 已应用并校验的画板。)/u.test(context);
-        const boards = includesBaseline ? [] : extractHtmlFences(reply);
-        const prior = boards.length ? '\n\n原版本画板（引用资料）\n' +
-          boards.map((html) => '\x60\x60\x60html\n' + html + '\n\x60\x60\x60').join('\n').slice(0, 24000).toWellFormed() : '';
-        const text = designInstructions + '\n\n当前任务\n' + prompt + (body.designContext?.text
-          ? '\n\n设计资料\n' + body.designContext.text : '') + prior;
+        const latest = lineage[0] ?? '';
+        const latestBoards = extractHtmlFences(latest);
+        // A canvas can supply approved HTML even when the most recent turn is a text review.
+        let prior = latest && !latestBoards.length ? '\n\n所选版本的回复（引用资料）\n' + latest.slice(0, 4000) : '';
+        if (!includesBaseline) {
+          let boards = latestBoards;
+          for (let index = 1; !boards.length && index < lineage.length; index++) {
+            boards = extractHtmlFences(lineage[index]);
+          }
+          if (boards.length) prior += '\n\n原版本画板（引用资料）\n' +
+            boards.map((html) => '\x60\x60\x60html\n' + html + '\n\x60\x60\x60').join('\n');
+        }
+        prior = prior.slice(0, 24000).toWellFormed();
+        const text = designInstructions + '\n\n当前任务\n' + prompt + (context ? '\n\n设计资料\n' + context : '') + prior;
         return images.length ? [{ type: 'text', text }, ...images.flatMap(({ name, image }) =>
           [{ type: 'text', text: '参考图 ' + name }, image])] : text;
       };

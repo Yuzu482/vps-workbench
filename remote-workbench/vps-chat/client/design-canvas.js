@@ -247,7 +247,7 @@ export function createDesignCanvas(React) {
   const DesignVersionGraph = createDesignVersionGraph(React);
 
   return function DesignCanvas({ id, turns, generating, loading, targetId, sessionId, onContext, onCycleFocus,
-    submitted, waitingForReceipt, request, materialsOpen, setMaterialsOpen, playgroundEnabled, playgroundOpen,
+    submitted, waitingForReceipt, request, materialsOpen, setMaterialsOpen, imageReferences = true, playgroundEnabled, playgroundOpen,
     setPlaygroundOpen, canGenerate, canBranch, readDesignRevision, onPrompt, conversation, openCanvasMenu, openExportMenu, copyBoardHtml,
     scopedLayerRevisions, savePreference }) {
     const floatingConversation = Boolean(conversation);
@@ -356,7 +356,7 @@ export function createDesignCanvas(React) {
       const target = attachApproved ? { ...branch, approvedBoards: sourceBoards.flatMap((preview, offset) => preview.html
         ? [{ ...preview, versionId: sourceVersion.id, version: sourceVersion.number, index: offset + 1,
           board: boardEdits(sourceVersion, project.versions, offset + 1) }] : []) } : branch;
-      const result = buildDesignContext(project, sourceVersion, sourceBoards, choices, target, { workflow: playgroundEnabled });
+      const result = buildDesignContext(project, sourceVersion, sourceBoards, choices, target, { workflow: playgroundEnabled, imageReferences });
       if (playgroundTarget?.continueLabel) result.labels.push(playgroundTarget.continueLabel);
       if (base && !branch) result.error = '这版画板暂不可用，请重新选择版本。';
       if (playgroundTarget?.layer && !targetBoard?.layers.some(({ id }) => id === playgroundTarget.layer)) {
@@ -370,7 +370,7 @@ export function createDesignCanvas(React) {
         links: effectiveLinks.filter(({ from }) => from.startsWith(`${sourceVersion.id}:`)),
       } : undefined;
       return { ...result, base, revision };
-    }, [project, active, boards, choices, targetBoard, playgroundTarget, playgroundBoards, versions, nativeVersions, playgroundEnabled, effectiveLinks]);
+    }, [project, active, boards, choices, targetBoard, playgroundTarget, playgroundBoards, versions, nativeVersions, playgroundEnabled, imageReferences, effectiveLinks]);
     const nodes = React.useMemo(() => [
       ...designVersionNodes(versionHistory, turns, nativeVersions),
       ...localVersions.map(({ id, parentId, number }) => ({ id, parentId, number, title: '带入的画板',
@@ -1197,7 +1197,7 @@ export function createDesignCanvas(React) {
           removeComment: (offset) => changeBoard({ ...board, comments: board.comments.filter((_, index) => index !== offset) }),
         }) : null));
     return h(React.Fragment, null, canvas, materialsOpen
-      ? h(MaterialsDialog, { project, update: updateProject, choices, setChoices, workflow: playgroundEnabled,
+      ? h(MaterialsDialog, { project, update: updateProject, choices, setChoices, workflow: playgroundEnabled, imageReferences,
         close: () => setMaterialsOpen(false) }) : null,
     comparison ? h(DesignComparison, { ...comparison, carry: carryComparisonBoards, close: () => setComparison(null) }) : null,
     linkSource && playgroundBoards.has(linkSource) ? h(ConnectorDialog, {

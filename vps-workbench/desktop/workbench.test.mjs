@@ -590,7 +590,16 @@ test('standalone listener requires its local session and the workbench RPC token
     assert.deepEqual(calls.at(-1), { ...fork, workspaceAccess: 'isolated' });
     assert.equal((await send(authorized, { ...fork, designContext: undefined })).status, 400);
     assert.equal((await send(authorized, { ...fork, mode: undefined })).status, 400);
-    assert.equal((await send(authorized, { ...fork, settings: claude.settings })).status, 400);
+    for (const provider of ['claude', 'claude-sdk', 'antigravity']) {
+      const alternative = { ...fork, settings: { ...settings, provider } };
+      assert.equal((await send(authorized, alternative)).status, 200);
+      assert.deepEqual(calls.at(-1), { ...alternative, ...(provider === 'antigravity' && { workspaceAccess: 'isolated' }) });
+      const callCount = calls.length;
+      const image = { name: 'reference.png', dataUrl: 'data:image/png;base64,iVBORw0KGgo=' };
+      assert.equal((await send(authorized, { ...alternative,
+        designContext: { text: '源画板', images: [image] } })).status, 400);
+      assert.equal(calls.length, callCount);
+    }
     assert.equal((await send(authorized, { ...claude, extensions })).status, 400);
     assert.equal((await send(authorized, claude)).status, 200);
     assert.deepEqual(calls.at(-1), claude);

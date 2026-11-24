@@ -2043,6 +2043,93 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 365, height: 480 
   });
 }
 
+test('VPS Claude SDK, Claude API and Antigravity open the design workbench and render on their own routes', { timeout: 125_000 }, async (t) => {
+  const page = await openPreview(t);
+  const sends = [];
+  await page.route('**/dsh-vps-chat/api/rpc', (route) => {
+    const packet = route.request().postDataJSON();
+    if (packet.op === 'send') sends.push(packet);
+    return route.continue();
+  });
+  const picker = page.getByRole('button', { name: '切换 VPS 执行端', exact: true });
+  for (const [provider, label] of [['claude-sdk', 'Claude（订阅 SDK）'], ['claude', 'Claude API'], ['antigravity', 'Antigravity']]) {
+    await picker.click();
+    await page.getByRole('option', { name: label, exact: true }).click();
+    await page.waitForFunction((id) => document.querySelector('.vc-tool-trigger')?.dataset.provider === id, provider);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: '设计工作台', exact: true }).click();
+    const scene = page.getByRole('region', { name: '多画板画布', exact: true });
+    await scene.waitFor();
+    await page.getByRole('button', { name: '添加设计资料', exact: true }).click();
+    const materials = page.getByRole('dialog', { name: '设计资料', exact: true });
+    assert.equal(await materials.locator('input[type=file][accept^="image/"]').isDisabled(), true);
+    await materials.getByRole('textbox', { name: '文字参考', exact: true }).fill('保留活动报名按钮');
+    await materials.getByRole('switch', { name: '参考资料', exact: true }).check();
+    await materials.getByRole('button', { name: '完成', exact: true }).click();
+    await materials.waitFor({ state: 'hidden' });
+    await page.getByRole('textbox', { name: '消息', exact: true }).fill(label + ' 生成活动画板' +
+      (provider === 'antigravity' ? '，触发夹具审批' : ''));
+    await page.getByRole('button', { name: '发送', exact: true }).click();
+    if (provider === 'antigravity') {
+      const approval = page.getByRole('group', { name: '画布对话', exact: true }).getByRole('list', { name: '工具授权', exact: true });
+      await approval.getByRole('button', { name: '允许一次', exact: true }).click({ timeout: 15_000 });
+    }
+    const board = scene.getByRole('button', { name: '纸间书店 · 首页', exact: true });
+    try { await board.waitFor({ timeout: 25_000 }); }
+    catch (error) {
+      t.diagnostic(JSON.stringify({ provider, sent: sends.map(({ settings, mode }) => [settings.provider, mode]),
+        canvas: (await scene.innerText()).slice(0, 350), feedback: await page.getByRole('status').allTextContents() }));
+      throw error;
+    }
+  }
+  assert.deepEqual(sends.map(({ settings, mode, designContext }) => [settings.provider, mode,
+    designContext.images.length, designContext.text.includes('保留活动报名按钮')]), [
+    ['claude-sdk', 'design', 0, true], ['claude', 'design', 0, true], ['antigravity', 'design', 0, true],
+  ]);
+  assert.equal(new Set(sends.map(({ targetId }) => targetId)).size, 3);
+});
+
+test('local Claude and Antigravity use their own profiles for design turns without SSH', { timeout: 60_000 }, async (t) => {
+  const page = await openPreview(t, { previewOptions: { localAgents: true } });
+  const sends = [];
+  const ssh = [];
+  await page.route('**/dsh-vps-chat/api/**', (route) => { ssh.push(route.request().url()); return route.abort(); });
+  await page.route('**/__preview/local-sdk', (route) => {
+    if (route.request().method() === 'POST') {
+      const packet = route.request().postDataJSON();
+      if (packet.payload?.op === 'send') sends.push(packet);
+    }
+    return route.continue();
+  });
+  const picker = page.getByRole('button', { name: '切换本机执行端', exact: true });
+  for (const [backend, label] of [['claude-sdk', 'Claude Agent SDK'], ['antigravity', 'Antigravity ACP']]) {
+    await picker.click();
+    const option = page.getByRole('option', { name: label, exact: true });
+    if (await option.getAttribute('aria-selected') !== 'true') await option.click();
+    await page.keyboard.press('Escape');
+    await page.waitForFunction((id) => document.querySelector('.vc-tool-trigger')?.dataset.provider === id, backend);
+    await page.getByRole('button', { name: '设计工作台', exact: true }).click();
+    const scene = page.getByRole('region', { name: '多画板画布', exact: true });
+    await scene.waitFor();
+    const draft = page.getByRole('textbox', { name: '本地对话草稿', exact: true });
+    await draft.fill(label + ' 生成概览和详情画板，触发夹具审批');
+    await page.getByRole('button', { name: '发送', exact: true }).click();
+    const supplement = page.getByRole('button', { name: '发送补充', exact: true });
+    await supplement.waitFor();
+    await draft.fill('保留标题');
+    await supplement.click();
+    const approval = page.getByRole('group', { name: '画布对话', exact: true }).getByRole('list', { name: '工具授权', exact: true });
+    await approval.getByRole('button', { name: '允许一次', exact: true }).click();
+    await scene.getByRole('button', { name: /概览/u }).first().waitFor();
+    await scene.getByRole('button', { name: /详情/u }).first().waitFor();
+  }
+  assert.deepEqual(sends.map(({ backend, location, payload }) => [backend, location, payload.mode]), [
+    ['claude-sdk', 'local-sdk', 'design'], ['antigravity', 'local-sdk', 'design'],
+  ]);
+  assert.notEqual(sends[0].payload.targetId, sends[1].payload.targetId);
+  assert.deepEqual(ssh, []);
+});
+
 test('design comparison aligns parent and child, shares zoom, and durably carries selected boards', { timeout: 45_000 }, async (t) => {
   const page = await openPreview(t);
   const requests = [];

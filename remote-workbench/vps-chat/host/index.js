@@ -130,7 +130,7 @@ export function validWorkflowArtifactQuery(value) {
       value.offset >= 0 && value.offset < maxWorkflowArtifactBytes));
 }
 
-function validRequest(value, { allowExtensions, allowProjectMemory, allowModelParameters, allowDesignBranches, allowWorkflowStage,
+function validRequest(value, { allowExtensions, allowProjectMemory, allowModelParameters, allowDesignBranches, allowDesignProviders, allowWorkflowStage,
   allowSetupCheck, allowWorkflowArtifacts, allowBackendSetup }) {
   if (typeof value?.op !== 'string' || !Object.hasOwn(operations, value.op)) return false;
   if (value.op === 'account-view') {
@@ -219,7 +219,9 @@ function validRequest(value, { allowExtensions, allowProjectMemory, allowModelPa
     if (!hasExactFields(settings, [...settingsFields, 'provider']) ||
         !['codex', 'claude', 'claude-sdk', 'antigravity'].includes(settings.provider)) return false;
   } else if (!hasExactFields(settings, settingsFields)) return false;
-  if ((design || history || hasEffort) && settings.provider !== 'codex') return false;
+  if (hasEffort && settings.provider !== 'codex') return false;
+  if ((design || history) && settings.provider !== 'codex' &&
+      (!allowDesignProviders || !settings.provider || value.designContext?.images.length)) return false;
   if (value.op === 'steer' && !['codex', 'antigravity'].includes(settings.provider)) return false;
   if (value.op === 'approval' && (settings.provider !== 'antigravity' ||
       typeof value.approvalId !== 'string' || !guid.test(value.approvalId) ||
@@ -299,8 +301,14 @@ export function createBridge({
       const python = resolvePython?.() || pythonPath;
       if (!resolvePython && body.op !== 'configuration' && (!isAbsolute(python) || !existsSync(python))) return notReady;
       const provider = body.settings?.provider;
+      // A reopened branch must use the same projection and thread selection as its first send.
+      // The existing marker is durable across restarts and scoped to the evaluated target.
+      const designSession = provider && provider !== 'codex' &&
+        /^[0-9a-f]{64}$/.test(body.targetId) && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(body.sessionId) &&
+        existsSync(join(root, body.targetId, 'design-' + body.sessionId.toLowerCase()));
       if (['configuration', 'setup-check', 'setup-backend', 'workflow-artifacts', 'approval'].includes(body.op) ||
-          (provider === 'antigravity' && useCurrentAntigravity)) current = true;
+          (provider === 'antigravity' && useCurrentAntigravity) ||
+          designSession || (body.mode === 'design' && provider && provider !== 'codex')) current = true;
       const advanced = body.op === 'send' && Object.hasOwn(body, 'advanced');
       const inspectingOptions = body.op === 'model-options';
       const scopedCodex = body.op === 'send' && provider === 'codex' &&
@@ -397,7 +405,7 @@ export function createBridge({
 }
 
 export function createHost({ port, root, bridge, accountEnabled = false, allowExtensions = false, allowProjectMemory = false,
-  allowModelParameters = false, allowDesignBranches = false, allowWorkflowStage = false, allowSetupCheck = false,
+  allowModelParameters = false, allowDesignBranches = false, allowDesignProviders = false, allowWorkflowStage = false, allowSetupCheck = false,
   allowWorkflowArtifacts = false, allowBackendSetup = false,
   readRoute = () => readAccountRoute(root),
   launchAccountBrowser, player = accountPlayer, authorize = () => null }) {
@@ -442,7 +450,7 @@ export function createHost({ port, root, bridge, accountEnabled = false, allowEx
       let request;
       try { request = await readRequest(req); } catch { return respond(res, 400, invalidRequest); }
       const { body, size } = request;
-      if (!validRequest(body, { allowExtensions, allowProjectMemory, allowModelParameters, allowDesignBranches, allowWorkflowStage,
+      if (!validRequest(body, { allowExtensions, allowProjectMemory, allowModelParameters, allowDesignBranches, allowDesignProviders, allowWorkflowStage,
         allowSetupCheck, allowWorkflowArtifacts, allowBackendSetup }) ||
           (size > maxRequestBytes && !body.designContext))
         return respond(res, 400, invalidRequest);
@@ -453,7 +461,7 @@ export function createHost({ port, root, bridge, accountEnabled = false, allowEx
           ? (account ? await account.prepare(body.targetId, body.action) : notReady)
           : await bridge.request(body, body.workflowStage || ['workflow-artifacts', 'setup-trial', 'setup-backend'].includes(body.op) ? {
             isLive: () => !disposed && !req.aborted && !res.destroyed,
-          } : undefined);
+          } : allowDesignProviders && ['preset', 'list'].includes(body.op) ? { current: true } : undefined);
         return respond(res, 200, packet);
       } catch {
         return respond(res, 503, uncertain);

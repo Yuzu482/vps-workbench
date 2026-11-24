@@ -252,9 +252,10 @@ def ordinary_workspace_read(tool, workspace_binding):
 
 
 class AcpTurn:
-    def __init__(self, process, support, reply, workbench_session, *, read_only_workspace=None):
+    def __init__(self, process, support, reply, workbench_session, *, read_only_workspace=None, design=False):
         self.process, self.support, self.reply = process, support, reply
         self.workbench_session = workbench_session
+        self.design = design
         self.frames = support["read_frames"](process)
         self.session = None
         self.identifier = 0
@@ -546,7 +547,7 @@ class AcpTurn:
             content = update.get("content")
             if isinstance(content, dict) and content.get("type") == "text" and isinstance(content.get("text"), str):
                 text = content["text"]
-                if self.supplement_sent:
+                if self.supplement_sent and not self.design:
                     # Keep the newest output visible even when the first part filled the local reply limit.
                     limit = self.reply.maximum
                     prefix = "…\n\n"
@@ -607,9 +608,9 @@ class AcpTurn:
 
 
 def consume_acp(process, support, reply, previous, workbench_session, prompt, effort, model=None, workflow=False,
-                mcp_servers=(), interactive=False, *, read_only_workspace=None):
+                mcp_servers=(), interactive=False, *, read_only_workspace=None, design=False):
     turn = AcpTurn(process, support, reply, workbench_session,
-                   read_only_workspace=read_only_workspace if interactive and not workflow else None)
+                   read_only_workspace=read_only_workspace if interactive and not workflow else None, design=design)
     try:
         if interactive and not workflow:
             turn.enable_controls()
@@ -628,6 +629,8 @@ def consume_acp(process, support, reply, previous, workbench_session, prompt, ef
         if reason == "cancelled":
             return "stopped", turn.session, None
         if reason == "end_turn" and reply.items.get("antigravity"):
+            if design and reply.clipped_items:
+                return "failed", None, "agy_limit"
             return "complete", turn.session, None
         if reason == "end_turn" and turn.approvals is not None and any(
                 row["state"] == "submitted" and row["decision"] == "deny" for row in turn.approvals.read() or []):
@@ -745,6 +748,8 @@ def run(privacy, isolation, support, config, reply, workflow=None, extensions=No
             saved = support["read_private_json"](binding, 4096)
             previous = previous_conversation(saved, expected, session, work)
             acp = saved is None or saved.get("protocol") == "acp"
+            if config.get("design") and not acp:
+                return "failed", None, "agy_acp"
             effort = config.get("advanced", {}).get("reasoningEffort")
             model = config.get("model")
             with tempfile.TemporaryDirectory(prefix="antigravity-gate-") as gate, contextlib.ExitStack() as lifetime:
@@ -799,7 +804,7 @@ def run(privacy, isolation, support, config, reply, workflow=None, extensions=No
                             state, native, reason = consume_acp(
                                 process, support, reply, previous, session, prompt, effort, model,
                                 workflow=bool(workflow), mcp_servers=mcp_servers, interactive=not workflow,
-                                read_only_workspace=read_binding)
+                                read_only_workspace=read_binding, design=config.get("design") is True)
                         else:
                             state, native, text = consume(process, support, reply, previous)
                             reason = "agy_rejected" if state == "failed" else None
@@ -844,7 +849,7 @@ def main():
     options = {"extensions", "extensionsHelper", "memoryIsolation", "advanced", "model", "workspaceAccess", "workflowFiles",
                "workflowHelper", "privacyHelper"}
     if (not isinstance(config, dict) or not required <= config.keys() or config.keys() - required - options or
-            config["design"] is not False or config["designContext"] is not None):
+            type(config["design"]) is not bool or ("workflowFiles" in config and config["design"])):
         raise ValueError("invalid Antigravity request")
     code = config.pop("support")
     if not isinstance(code, str) or not 0 < len(code) <= 20 * 1024:
@@ -866,8 +871,14 @@ def main():
     prompt = config["prompt"]
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 8192 or "\0" in prompt:
         raise ValueError("invalid Antigravity message")
+    parts = support["design_inputs"](config)
+    if config["design"]:
+        if any(part["type"] != "text" for part in parts):
+            raise ValueError("Antigravity design supports text references only")
+        config["prompt"] = "\n\n".join([support["DESIGN_INSTRUCTIONS"], *(part["text"] for part in parts)])
+        config.pop("memoryText", None)  # Already included by design_inputs.
     directory = Path.home() / ".local/state/remote-ssh/tasks" / task
-    reply = support["Reply"](directory, task, support["MAX_REPLY"])
+    reply = support["Reply"](directory, task, support["MAX_DESIGN_REPLY" if config["design"] else "MAX_REPLY"])
     state, thread, reason = run(privacy, isolation, support, config, reply, workflow, extensions)
     reply.publish(state, thread, reason)
     return 0 if state in ("complete", "stopped") else 2

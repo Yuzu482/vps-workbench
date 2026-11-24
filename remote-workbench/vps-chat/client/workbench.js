@@ -35,7 +35,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
   editText, saveConversationPreference, saveSetupConnection, saveModelParameters,
   ExtensionSettings, extensionsForTurn, automaticMemoryPolicy, conversationIsolated, projectMemoryNotes,
   AgentPresetSettings, WorkflowPanel, useWorkflows = () => null, SetupGuide, setupConnectionKey,
-  VpsConnectionChecks, useVpsConnectionChecks = () => null, localSdk = false }) {
+  VpsConnectionChecks, useVpsConnectionChecks = () => null, localSdk = false, allowDesignProviders = false }) {
   const h = React.createElement;
 
   function SidebarShortcut({ label, detail, icon, className, running = false, ...button }) {
@@ -613,7 +613,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const snapshot = view?.session.id === selected ? view : null;
     const mode = snapshot?.session.mode ?? selectedRow?.mode ?? 'chat';
     const design = mode === 'design';
-    const interactiveChat = !design && (connection?.provider === 'antigravity' || localSdk && connection?.provider === 'claude-sdk');
+    const interactiveChat = connection?.provider === 'antigravity' || localSdk && connection?.provider === 'claude-sdk';
     const memoryAvailable = Boolean(extensions && conversationIsolated && selected && chatEnabled && (!localSdk || providerId === 'codex'));
     const memoryIsolated = memoryAvailable && (snapshot?.session.memoryIsolation === true ||
       conversationIsolated(extensions.state, { targetId: scope, sessionId: selected }));
@@ -683,7 +683,9 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const threadWidthLimit = Math.max(minimumThreadWidth, layout.bodyWidth - minimumCanvasWidth - separatorWidth);
     const clampThreadWidth = (width) => Math.max(minimumThreadWidth, Math.min(threadWidthLimit, Math.round(width)));
     const threadWidth = clampThreadWidth(requestedThreadWidth ?? layout.bodyWidth * 0.4);
-    const designAvailable = chatEnabled && providers[connection.provider]?.design === true;
+    const designAvailable = chatEnabled && !showingSubscription &&
+      (allowDesignProviders || providers[connection.provider]?.design === true);
+    const designImageReferences = localSdk || connection?.provider === 'codex';
     const attached = design && designSubmission?.targetId === scope && designSubmission?.sessionId === selected
       ? designSubmission : null;
     const designStorageKey = design ? `dsh-vps-design:v1:${scope}:${selected}` : '';
@@ -2473,6 +2475,9 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           needsCheck ? h('button', {
             type: 'button', className: 'vc-button', onClick: recheck, disabled: Boolean(working),
           }, working === 'recheck' ? '正在查询' : '查询原任务') : null) : null,
+        floatingChat && !canvasHistoryOpen && approvalOffered && (waitingForApproval || approvalUnconfirmed)
+          ? h(ToolApprovals, { requests: lastTurn.approvals, attempts: currentApprovalAttempts,
+            decide: decideApproval, disabled: approvalDisabled }) : null,
         h('form', { className: 'vc-composer', onSubmit: (event) => { event.preventDefault(); submitComposer(); } },
           draftQuote ? h('div', { className: 'vc-quote-preview', 'aria-label': '已添加引用', title: draftQuote },
             menuIcon(h, 'quote'), h('span', null, draftQuote),
@@ -2590,7 +2595,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         running: workflows.panel.running, 'aria-haspopup': 'dialog', onClick: workflows.openPanel,
         disabled: localSdk && providerId !== 'codex' && !workflows.panel.mixed }) : null,
       h(SidebarShortcut, { className: 'vc-resource-entry vc-playground-entry', icon: 'canvas', label: t('设计工作台'),
-        detail: designAvailable ? t('在画布中编辑画板、查看版本。') : t('切换到 Codex 后可打开设计工作台。'),
+        detail: designAvailable ? t('在画布中编辑画板、查看版本。') : allowDesignProviders
+          ? t('选择支持设计的执行端后可打开设计工作台。') : t('切换到 Codex 后可打开设计工作台。'),
         disabled: !designAvailable || Boolean(working), onClick: openPlayground,
         'aria-current': floatingChat ? 'page' : undefined })
     ];
@@ -2741,7 +2747,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           design ? h(DesignCanvas, {
             key: `${scope}:${selected}`, id: canvasPaneId, turns, targetId: scope, sessionId: selected,
             request: canvasRequest,
-            materialsOpen, setMaterialsOpen,
+            materialsOpen, setMaterialsOpen, imageReferences: designImageReferences,
             playgroundEnabled: sidebarActions, playgroundOpen, setPlaygroundOpen: showPlaygroundBoards, onPrompt: focusPlaygroundPrompt,
             conversation: floatingChat ? conversation : null,
             openCanvasMenu: floatingChat ? openCanvasMenu : undefined, openExportMenu: openCanvasMenu, copyBoardHtml,

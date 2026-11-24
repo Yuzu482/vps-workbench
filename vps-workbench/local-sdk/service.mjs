@@ -562,7 +562,9 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
         if (session.turns.some((turn) => turn.state === 'unknown')) return stateResult('failed', 'unknown_outcome');
         if (block) return stateResult('failed', block);
         await updateTurn(sessionId, turnId, stateResult('running'));
-        return { prompt: turn.prompt, execution: turn.execution, nativeThreadId: session.nativeThreadId };
+        // Each design turn receives its selected base in the prompt and owns a fresh native thread.
+        return { prompt: turn.prompt, execution: turn.execution,
+          nativeThreadId: session.mode === 'design' ? null : session.nativeThreadId };
       });
       if (!start) return;
       if (start.state) return await finish(start);
@@ -672,7 +674,12 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
       const base = options.base ? earlier.find(({ id }) => id === options.base.parentTurnId) : previous;
       if (options.base && (base?.state !== 'completed' || (!options.base.fork && base !== previous))) return failure('design_branch_unavailable');
       branch = { parentTurnId: base?.id ?? null, fork: options.base?.fork ?? false, nativeThreadId: null };
-      input = options.designInput(base?.reply ?? '');
+      const parents = new Map(earlier.map((turn) => [turn.id, turn]));
+      const lineage = [];
+      for (let turn = base; turn; turn = parents.get(turn.execution.branch.parentTurnId)) {
+        lineage.push(turn.reply);
+      }
+      input = options.designInput(lineage);
     }
     const execution = options && { fingerprint: options.fingerprint, model, effort, workspace,
       ...(branch && { branch }), ...(options.verbosity && { verbosity: options.verbosity }) };

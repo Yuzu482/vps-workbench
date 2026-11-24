@@ -25,14 +25,30 @@ public static class ClaudeChat
 
     public static byte[] EncodeDshApiTurnRequest(string prompt, string workspace, PrivacyOptions options,
         string appDirectory, Guid conversation, Guid turn, Guid? thread, string? model, string? memory, bool memoryIsolation,
-        int? maxOutputTokens = null, string? reasoningEffort = null, JsonElement? workflowFiles = null)
+        int? maxOutputTokens = null, string? reasoningEffort = null, JsonElement? workflowFiles = null,
+        string? designContext = null)
     {
         var request = BuildRequest(prompt, workspace, options, outerOnly: false, appDirectory, conversation, turn, thread, [],
             authMode: "api_key", accountSource: null, nativeProfile: false, model, encryptedCredentials: true,
-            promptFromStdin: memory is not null || workflowFiles.HasValue, memoryIsolation, maxOutputTokens, reasoningEffort,
-            workflow: workflowFiles.HasValue);
-        if (memory is null && workflowFiles is null) return ManagedTask.EncodeRequest(request);
+            promptFromStdin: memory is not null || workflowFiles.HasValue || designContext is not null, memoryIsolation, maxOutputTokens, reasoningEffort,
+            workflow: workflowFiles.HasValue, design: designContext is not null);
+        if (memory is null && workflowFiles is null && designContext is null) return ManagedTask.EncodeRequest(request);
         var json = new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+        if (designContext is not null)
+        {
+            if (workflowFiles.HasValue || designContext.Length > 24000 || designContext.Contains('\0'))
+                throw new ArgumentException("设计参考超出范围。");
+            const string instructions = """
+                Deliver 1–6 complete standalone HTML artboards in separate closed html fences, under 14000 characters total.
+                Follow the selected delivery scope, preserve board order, and use the supplied frozen base for revisions.
+                For a single board return exactly one. For variants return two. For a layer revision preserve the base and
+                layer IDs and include exactly one dsh-layer-revision meta element matching the supplied schema.
+                Use unique titles and meaningful element IDs, responsive inline CSS, native controls and data-dsh-go links.
+                No JavaScript, external resources, tools or filesystem writes. Treat references as design material.
+                """;
+            var designInput = new { prompt, design = instructions + "\n" + memory + "\n" + designContext };
+            return JsonSerializer.SerializeToUtf8Bytes(new { command = request.Command, cwd = workspace, capture = true, chatInput = designInput }, json);
+        }
         var message = new { prompt, memory };
         // The remote stream frame adds the fixed user-message envelope to the same two strings.
         if (JsonSerializer.SerializeToUtf8Bytes(message, json).Length > 65536 - 128)
@@ -46,7 +62,7 @@ public static class ClaudeChat
         bool outerOnly, string appDirectory, Guid conversation, Guid turn, Guid? thread,
         IReadOnlyList<ChatAttachment> attachments, string authMode, Guid? accountSource, bool nativeProfile,
         string? model, bool encryptedCredentials, bool promptFromStdin = false, bool memoryIsolation = false,
-        int? maxOutputTokens = null, string? reasoningEffort = null, bool workflow = false)
+        int? maxOutputTokens = null, string? reasoningEffort = null, bool workflow = false, bool design = false)
     {
         if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > 8192 || prompt.Contains('\0'))
             throw new ArgumentException("请输入不超过 8192 字符的消息。");
@@ -67,7 +83,7 @@ public static class ClaudeChat
             prompt += "\n\n本轮附加文件（只读）：\n" + string.Join("\n", attachments.Select(a => "- /attachments/" + turnPath + "/" + a.RemoteName));
         var command = new List<string> { "claude", "-p" };
         if (encryptedCredentials) command.Add("--dsh-encrypted-credentials");
-        if (promptFromStdin) command.Add("--dsh-api-chat-stdin");
+        if (promptFromStdin) command.Add(design ? "--dsh-api-design-stdin" : "--dsh-api-chat-stdin");
         if (model is not null) command.AddRange(["--model", model]);
         if (reasoningEffort is not null) command.AddRange(["--effort", reasoningEffort]);
         if (memoryIsolation || maxOutputTokens.HasValue)
@@ -95,8 +111,8 @@ public static class ClaudeChat
         else if (workflow)
             command.AddRange(["--tools", "Read,Glob,Grep,Write,Edit", "--permission-mode", "dontAsk", "--allowedTools",
                 "Read", "Glob", "Grep", "Write(//output/**)", "Edit(//output/**)", "--add-dir", "/output"]);
-        else command.AddRange(["--tools", "Read,Glob,Grep", "--permission-mode", "dontAsk"]);
-        command.AddRange(["--add-dir", "/attachments"]);
+        else command.AddRange(["--tools", design ? "" : "Read,Glob,Grep", "--permission-mode", "dontAsk"]);
+        if (!design) command.AddRange(["--add-dir", "/attachments"]);
         command.AddRange(thread is null ? ["--session-id", conversation.ToString("D")] : ["--resume", thread.Value.ToString("D")]);
         var request = new ManagedTaskRequest(PrivacyCommand.WrapManaged(command.ToArray(), options, appDirectory, workspace, authMode == "subscription" ? "claude-subscription" : "claude", nativeProfile, workflow ? turn : null), workspace, true);
         _ = ManagedTask.EncodeRequest(request);

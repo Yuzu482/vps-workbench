@@ -251,7 +251,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
             .Select(turn => ProjectTurn(turn, record!.Turns[^1], lineage?.Turns[turn.TaskId])).ToArray();
         string title = record is null ? "新对话" : Title(record);
         bool memoryIsolation = record?.MemoryIsolation == true;
-        bool canSend = CanSend(record);
+        bool canSend = CanSend(record, lineage);
         object session = design
             ? new { id = request.SessionId, title, mode = "design", memoryIsolation, turns, canSend,
                 canBranch = record is not null && CanBranch(record) }
@@ -268,7 +268,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
         string state = ProjectState(turn, output);
         bool streaming = IsStreaming(turn.TaskId);
         bool canStop = streaming && turn == last && state is ("pending" or "running" or "unknown");
-        bool canUseControls = design is not null || settings.Provider == "antigravity";
+        bool canUseControls = settings.Provider == "antigravity" || (design is not null && settings.Provider == "codex");
         SteerNote[] steering = canUseControls ? ProjectSteering(turn.TaskId, output) : [];
         bool canSteer = canUseControls && streaming && state == "running" && output.SteerReady &&
             turn == last && steering.Length < BridgeProtocol.MaxSteers;
@@ -278,10 +278,11 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
                 output.FailureCode, output.ExitCode, approvals = settings.Provider == "antigravity" && turn == last ? output.Approvals ?? [] : [] }
             : new { id = turn.TaskId, prompt = turn.Prompt, output.Reply, state, output.Activity,
                 streaming, canStop, canSteer, steering, output.Model, output.Effort, output.ContextUsage, output.SubscriptionLimits,
+                output.FailureCode, output.ExitCode, approvals = settings.Provider == "antigravity" && turn == last ? output.Approvals ?? [] : [],
                 design.ParentTurnId, fork = design.ExplicitBase?.Fork == true, design.Ordinal };
     }
 
-    private bool CanSend(ChatConversationRecord? record)
+    private bool CanSend(ChatConversationRecord? record, DesignLineage? lineage = null)
     {
         if (record is null) return true;
         if (record.MemoryExtraction) return false;
@@ -290,7 +291,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
         return record.Turns.Count < MaxTurns &&
             ((state == "complete" && previous.ThreadId.HasValue) ||
              (state == "stopped" && IsStreaming(previous.TaskId) &&
-              (settings.Provider != "antigravity" || ExpectedThread(record).HasValue)));
+              (settings.Provider != "antigravity" || ExpectedThread(record, lineage).HasValue)));
     }
 
     private Guid? ExpectedThread(ChatConversationRecord record, DesignLineage? lineage = null)
@@ -307,7 +308,6 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
 
     private bool IsDesign(Guid id)
     {
-        if (settings.Provider != "codex") return false;
         string path = DesignPath(id);
         if (!File.Exists(path)) return false;
         using var marker = OpenSnapshot(path, 1);
@@ -481,23 +481,33 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
         }
         else
         {
-            if (!CanSend(record)) throw Blocked();
+            if (!CanSend(record, lineage)) throw Blocked();
             if (request.WorkflowFiles is not null && record is not null)
                 throw new BridgeError("mode_conflict", "工作流阶段需要独立的新会话。");
             thread = record is null ? null : ExpectedThread(record, lineage);
         }
 
+        // Both adapters address native history by a caller-supplied session key. A fork gets its own
+        // key while the local transcript, references and receipt remain in the original session.
+        var nativeSession = input.SessionId;
+        if (input.Design && settings.Provider is ("claude" or "antigravity"))
+        {
+            Guid root = input.DesignBase?.Fork == true || record is null ? input.TurnId :
+                lineage!.Turns[input.DesignBase?.ParentTurnId ?? record.Turns[^1].TaskId].Root;
+            nativeSession = DesignSessionKey(root);
+        }
         bool streaming = SupportsStreaming;
         string? apiMemory = !streaming && input.Extensions is { Memory.Length: > 0 } extension ? extension.FormatMemory() : null;
         byte[] payload;
         try
         {
             payload = streaming
-                ? CodexStream.BuildPayload(input, thread, AppDirectory)
+                ? CodexStream.BuildPayload(input with { SessionId = nativeSession }, thread, AppDirectory)
                 : ClaudeChat.EncodeDshApiTurnRequest(input.Prompt!, settings.Workspace, settings.Egress, AppDirectory,
-                    input.SessionId, input.TurnId, record?.Turns[^1].ThreadId, input.Model, apiMemory, input.MemoryIsolation,
+                    nativeSession, input.TurnId, thread, input.Model, apiMemory, input.MemoryIsolation,
                     input.Advanced?.MaxOutputTokens, input.Advanced?.ReasoningEffort,
-                    input.WorkflowFiles is null ? null : JsonSerializer.SerializeToElement(input.WorkflowFiles, BridgeProtocol.Json));
+                    input.WorkflowFiles is null ? null : JsonSerializer.SerializeToElement(input.WorkflowFiles, BridgeProtocol.Json),
+                    input.Design ? input.Context?.Text ?? "" : null);
         }
         catch (ArgumentException)
         {
@@ -507,7 +517,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
         using var pin = HoldPins(out var connection);
         string receipt = Path.Combine(directory, $"task-{request.TurnId:D}.json");
         var start = Prepare(connection, receipt, ManagedTaskAction.Start, request.TurnId);
-        if (streaming || apiMemory is not null || input.WorkflowFiles is not null) start.ArgumentList.Add("--chat-stream");
+        if (streaming || apiMemory is not null || input.Design || input.WorkflowFiles is not null) start.ArgumentList.Add("--chat-stream");
         record ??= new ChatConversationRecord
         {
             Id = request.SessionId,
@@ -572,6 +582,8 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
             return View(record, lineage);
 
         Guid? expected = ExpectedThread(record, lineage);
+        if (node is not null && settings.Provider is ("antigravity" or "claude"))
+            expected = DesignSessionKey(node.Root);
         Func<Guid, bool>? allowsThread = node is null ? null : thread => lineage!.AllowsThread(node, thread);
 
         using var pin = HoldPins(out var connection);
@@ -581,7 +593,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
         {
             statusStart.ArgumentList.Add("--chat-snapshot");
             var observed = await ManagedTask.RunAsync(statusStart, null, SshTimeout);
-            var update = CodexStream.Read(observed, last.TaskId, settings.Provider == "antigravity" ? record.Id : expected,
+            var update = CodexStream.Read(observed, last.TaskId, settings.Provider == "antigravity" && !design ? record.Id : expected,
                 prior, design, settings.Provider, allowsThread);
             if (update.Thread.HasValue && update.Thread != last.ThreadId)
             {
@@ -620,8 +632,20 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
             string state = status.State == "running" ? "running" :
                 status.ExitCode != 0 ? "failed" : thread.HasValue ? "complete" : "unknown";
             var projection = captured is null ? prior with { State = state } :
-                OutputProjection.Project(settings.Provider, captured, expected, state, allowsThread);
-            SaveOutput(last.TaskId, state == "failed" ? projection with { FailureCode = "remote_exit", ExitCode = status.ExitCode } : projection);
+                OutputProjection.Project(settings.Provider, captured, expected, state, allowsThread, design);
+            if (state == "failed")
+            {
+                projection = projection with { FailureCode = "remote_exit", ExitCode = status.ExitCode };
+                if (design && settings.Provider == "claude" && status.Captured)
+                {
+                    const string storageError = "未启动 Claude API 请求。请挂载该 VPS 用户的 LUKS2 加密家目录，并配置权限为 0600 的 API 凭据。";
+                    var error = await ManagedTask.RunAsync(Prepare(connection, receipt, ManagedTaskAction.ErrorOutput), null, SshTimeout);
+                    if (!error.Uncertain && error.ExitCode == 0 && error.Output.Split('\n').Any(line => line.TrimEnd('\r') == storageError))
+                        projection = projection with { FailureCode = "api_credential_storage",
+                            Activity = [.. projection.Activity.Take(8), new Activity("Claude API 凭据存储", storageError)] };
+                }
+            }
+            SaveOutput(last.TaskId, projection);
             if (thread.HasValue)
             {
                 last.ThreadId = thread;

@@ -5,7 +5,9 @@ import { pathToFileURL } from 'node:url';
 
 const sdkPath = '/opt/dsh-claude-sdk/sdk.mjs';
 const claudePath = '/opt/claude';
-const maxLineBytes = 65536;
+// The transport uses ASCII-escaped JSON. A design frame can include 24k UTF-16
+// units of references in addition to the normal prompt and project memory.
+const maxDesignLineBytes = 256 * 1024;
 const maxRequests = 32;
 const maxText = 8192;
 const maxReferenceBytes = 8448;
@@ -21,7 +23,7 @@ function fields(value, required, optional = []) {
     Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
 }
 
-async function* readPackets(input) {
+async function* readPackets(input, frameLimit) {
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let pending = [], size = 0;
   for await (const chunk of input) {
@@ -30,7 +32,7 @@ async function* readPackets(input) {
       const end = bytes.indexOf(10, offset);
       const part = bytes.subarray(offset, end < 0 ? bytes.length : end);
       size += part.length;
-      if (size > maxLineBytes) throw Error('frame limit');
+      if (size > frameLimit()) throw Error('frame limit');
       pending.push(part);
       if (end < 0) break;
       yield JSON.parse(decoder.decode(Buffer.concat(pending, size)));
@@ -56,12 +58,12 @@ function visibleText(value, limit = maxText) {
   return result;
 }
 
-function assistantText(message) {
+function assistantText(message, limit) {
   if (!Array.isArray(message?.content)) return '';
   let text = '';
   for (const block of message.content.slice(0, 128)) {
-    if (block?.type === 'text') text += visibleText(block.text, maxText - text.length);
-    if (text.length === maxText) break;
+    if (block?.type === 'text') text += visibleText(block.text, limit - text.length);
+    if (text.length === limit) break;
   }
   return text;
 }
@@ -72,26 +74,33 @@ function validModel(params) {
 
 function selectThread(params, resume, workflowFiles) {
   const common = ['cwd', 'approvalPolicy', 'sandbox'];
-  return fields(params, resume ? [...common, 'threadId', 'excludeTurns'] : common, ['model']) &&
+  return fields(params, resume ? [...common, 'threadId', 'excludeTurns'] : common, ['model', 'developerInstructions']) &&
+    (!Object.hasOwn(params, 'developerInstructions') || (!workflowFiles && typeof params.developerInstructions === 'string' &&
+      params.developerInstructions.trim() && params.developerInstructions.length <= 2400 && !params.developerInstructions.includes('\0'))) &&
     params.cwd === '/workspace' && params.approvalPolicy === 'never' &&
     params.sandbox === (workflowFiles ? 'workspace-write' : 'read-only') && (!workflowFiles || !resume) &&
     (!resume || (uuidIsValid(params.threadId) && params.excludeTurns === true)) && validModel(params);
 }
 
-function readTurn(params, threadId) {
+function readTurn(params, thread) {
   if (!fields(params, ['threadId', 'approvalPolicy', 'input'], ['model', 'effort', 'maxOutputTokens']) ||
-      params.threadId !== threadId || params.approvalPolicy !== 'never' || !validModel(params) ||
+      params.threadId !== thread.id || params.approvalPolicy !== 'never' || !validModel(params) ||
       (Object.hasOwn(params, 'effort') && !efforts.has(params.effort)) ||
       (Object.hasOwn(params, 'maxOutputTokens') &&
         (!Number.isInteger(params.maxOutputTokens) || params.maxOutputTokens < 1024 || params.maxOutputTokens > 65536)) ||
-      !Array.isArray(params.input) || params.input.length < 1 || params.input.length > 2) return null;
+      !Array.isArray(params.input) || params.input.length < 1 || params.input.length > (thread.instructions ? 3 : 2)) return null;
   for (const item of params.input) {
     if (!fields(item, ['type', 'text', 'text_elements']) || item.type !== 'text' ||
         !Array.isArray(item.text_elements) || item.text_elements.length !== 0 || typeof item.text !== 'string' ||
         !item.text.trim() || item.text.includes('\0')) return null;
   }
-  const [first, reference] = params.input;
-  if (first.text.length > maxText || (reference && Buffer.byteLength(reference.text) > maxReferenceBytes)) return null;
+  const [first, ...references] = params.input;
+  if (first.text.length > maxText) return null;
+  const prefix = 'DSH Design context selected by the user:\n';
+  if (thread.instructions && references.at(-1)?.text.startsWith(prefix)) {
+    if (references.pop().text.length > prefix.length + 24000) return null;
+  }
+  if (references.length > 1 || (references[0] && Buffer.byteLength(references[0].text) > maxReferenceBytes)) return null;
   return params.input.map(({ text }) => ({ type: 'text', text }));
 }
 
@@ -174,6 +183,7 @@ export async function serve({ input, output, query, cwd = process.cwd(), workflo
   const notify = (method, value) => emitted({ method, params: { threadId: thread.id, turnId, ...value } });
 
   async function drive(content, config) {
+    const replyLimit = thread.instructions ? 16384 : maxText;
     let verified = false, abortedReply = false, accountRejected = false;
     let reply = '', snapshot = '', deltas = 0, outcome;
     function finish() {
@@ -204,6 +214,7 @@ export async function serve({ input, output, query, cwd = process.cwd(), workflo
         options: {
           cwd, pathToClaudeCodeExecutable: claudePath, abortController: controller,
           ...(thread.resume ? { resume: thread.id } : { sessionId: thread.id }),
+          ...(thread.instructions ? { systemPrompt: thread.instructions } : {}),
           ...(config.model ? { model: config.model } : {}),
           ...(config.effort ? { effort: config.effort } : {}),
           ...(config.maxOutputTokens === undefined ? {} : {
@@ -238,7 +249,12 @@ export async function serve({ input, output, query, cwd = process.cwd(), workflo
           // A fulfilled interrupt request alone does not prove an interrupted turn.
           if (abortedReply && !interruptSent) break;
           const status = failure ? 'failed' : abortedReply ? 'interrupted' : 'completed';
-          const text = status === 'completed' ? visibleText(message.result) || reply || snapshot : reply || snapshot;
+          if (thread.instructions && status === 'completed' && message.result.length > replyLimit) {
+            outcome = { status: 'failed', text: '' };
+            releasePrompt();
+            break;
+          }
+          const text = status === 'completed' ? visibleText(message.result, replyLimit) || reply || snapshot : reply || snapshot;
           if (success && interruptSent && !abortedReply && !text) break;
           outcome = { status, text };
           phase = 'finishing';
@@ -264,10 +280,10 @@ export async function serve({ input, output, query, cwd = process.cwd(), workflo
               continue;
             }
             if (message.aborted === true) abortedReply = true;
-            const text = assistantText(message.message);
+            const text = assistantText(message.message, replyLimit);
             if (text) snapshot = text;
           } else if (message.event?.type === 'content_block_delta' && message.event.delta?.type === 'text_delta') {
-            const text = visibleText(message.event.delta.text, maxText - reply.length);
+            const text = visibleText(message.event.delta.text, replyLimit - reply.length);
             if (!text) continue;
             reply += text;
             if (deltas++ < 1024) notify('item/agentMessage/delta', { itemId: turnId, delta: text });
@@ -285,7 +301,7 @@ export async function serve({ input, output, query, cwd = process.cwd(), workflo
   let requests = 0;
   const ids = new Set();
   async function listen() {
-    for await (const packet of readPackets(input)) {
+    for await (const packet of readPackets(input, () => phase === 'thread' && thread.instructions ? maxDesignLineBytes : 65536)) {
       if (++requests > maxRequests) return 1;
       if (!fields(packet, ['method', 'params'], ['id']) || typeof packet.method !== 'string' || !object(packet.params)) return 1;
       const { method, id, params } = packet;
@@ -301,11 +317,11 @@ export async function serve({ input, output, query, cwd = process.cwd(), workflo
       } else if ((method === 'thread/start' || method === 'thread/resume') && phase === 'ready' &&
           selectThread(params, method === 'thread/resume', workflowFiles)) {
         const resume = method === 'thread/resume';
-        thread = { id: resume ? params.threadId : randomUUID(), resume, model: params.model };
+        thread = { id: resume ? params.threadId : randomUUID(), resume, model: params.model, instructions: params.developerInstructions };
         phase = 'thread';
         result(id, { thread: { id: thread.id }, ...(thread.model ? { model: thread.model } : {}) });
       } else if (method === 'turn/start' && phase === 'thread') {
-        const prompt = readTurn(params, thread.id);
+        const prompt = readTurn(params, thread);
         if (prompt === null) { reject(id); continue; }
         turnId = randomUUID();
         phase = 'turn';

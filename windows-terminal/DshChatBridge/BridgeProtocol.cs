@@ -421,15 +421,14 @@ internal static class BridgeProtocol
             throw new BridgeError("invalid_request", "记忆提炼范围无效。");
 
         TargetSettings settings = ParseSettings(value.GetProperty("settings"));
-        if ((design || hasEffort || hasMemoryExtraction || op == "design-history") &&
-            settings.Provider != "codex")
+        if ((hasEffort || hasMemoryExtraction) && settings.Provider != "codex")
             throw new BridgeError("invalid_settings", "这项操作需要使用 Codex 执行端。");
         if ((op == "steer" && settings.Provider is not ("antigravity" or "codex")) ||
             (op == "approval" && settings.Provider != "antigravity"))
             throw new BridgeError("invalid_settings", "当前执行端不支持这项对话操作。");
         if (hasWorkspaceAccess && settings.Provider is not ("codex" or "antigravity"))
             throw new BridgeError("invalid_settings", "此执行端不支持工作区访问策略。");
-        if ((hasModel || op is "models" or "setup-check") && !value.GetProperty("settings").TryGetProperty("provider", out _))
+        if ((hasModel || design || op is "models" or "setup-check" or "design-history") && !value.GetProperty("settings").TryGetProperty("provider", out _))
             throw new BridgeError("invalid_settings", "请明确选择模型对应的执行端。");
         if (settings.Provider is ("claude" or "claude-sdk") && model is not null && !ClaudeChat.ModelAliases.Contains(model))
             throw new BridgeError("invalid_request", "请选择 Claude Code 支持的模型别名。");
@@ -440,6 +439,8 @@ internal static class BridgeProtocol
             throw new BridgeError("target_changed", "VPS 设置或主机指纹已变化，请重新核对。");
 
         var context = hasContext ? DesignContext.Parse(value.GetProperty("designContext")) : null;
+        if (settings.Provider != "codex" && context is { Images.Length: > 0 })
+            throw new BridgeError("invalid_request", "当前 VPS 设计执行端仅支持文字参考。");
         var designBase = hasDesignBase ? DesignBase.Parse(value.GetProperty("designBase")) : null;
         if (designBase is { Fork: true } && string.IsNullOrWhiteSpace(context?.Text))
             throw new BridgeError("invalid_request", "新设计分支需要文字参考资料。");

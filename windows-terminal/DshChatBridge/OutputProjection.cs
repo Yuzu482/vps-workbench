@@ -33,11 +33,11 @@ internal static class OutputProjection
         return new("unknown");
     }
 
-    internal static TurnOutput Project(string provider, string raw, Guid? expected, string state, Func<Guid, bool>? allowsThread = null)
+    internal static TurnOutput Project(string provider, string raw, Guid? expected, string state, Func<Guid, bool>? allowsThread = null, bool design = false)
     {
         // Drop the unfinished line from live captures; only whole CLI events are displayable.
         string output = raw[..(raw.LastIndexOf('\n') + 1)];
-        return provider == "codex" ? ProjectCodex(output, expected, state, allowsThread) : ProjectClaude(output, expected, state);
+        return provider == "codex" ? ProjectCodex(output, expected, state, allowsThread) : ProjectClaude(output, expected, state, design);
     }
 
     private static TurnOutput ProjectCodex(string output, Guid? expected, string state, Func<Guid, bool>? allowsThread)
@@ -76,7 +76,7 @@ internal static class OutputProjection
         return thread.HasValue;
     }
 
-    private static TurnOutput ProjectClaude(string output, Guid? expected, string state)
+    private static TurnOutput ProjectClaude(string output, Guid? expected, string state, bool design)
     {
         var parsed = ChatBackends.Parse("claude", output, complete: true);
         var activity = parsed.Where(item => item.Kind == ChatItemKind.Notice).Take(4)
@@ -84,6 +84,7 @@ internal static class OutputProjection
         var answer = new StringBuilder();
         bool initialized = false;
         string? model = null;
+        string? designResult = null;
         foreach (string line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             if (!line.StartsWith('{')) continue;
@@ -92,6 +93,8 @@ internal static class OutputProjection
                 using var document = JsonDocument.Parse(line);
                 var value = document.RootElement;
                 string? kind = BridgeProtocol.Text(value, "type");
+                if (design && initialized && kind == "result" && state == "complete")
+                    designResult = BridgeProtocol.Text(value, "result");
                 if (kind == "system" && BridgeProtocol.Text(value, "subtype") == "init")
                 {
                     if (initialized || !Guid.TryParse(BridgeProtocol.Text(value, "session_id"), out Guid observed) || observed != expected)
@@ -128,7 +131,10 @@ internal static class OutputProjection
         if (state == "failed") activity.Add(new Activity("VPS 执行失败", "请核对远端运行环境、Claude Code 认证和预期出口。"));
         string reply = state == "complete" && parsed.LastOrDefault(item => item.Kind == ChatItemKind.Assistant) is ChatItem final
             ? final.Text : answer.ToString();
-        return new(state, Visible(reply, CodexStream.MaxChatReply), activity.ToArray(), Model: model);
+        if (design && state == "complete") reply = designResult ?? answer.ToString();
+        if (design && state == "complete" && reply.Length > CodexStream.MaxDesignReply)
+            return new("failed", "", [.. activity, new Activity("设计输出超出上限", "请缩小画板范围后重试。")], Model: model);
+        return new(state, Visible(reply, design ? CodexStream.MaxDesignReply : CodexStream.MaxChatReply), activity.ToArray(), Model: model);
     }
 
     internal static string Visible(string text, int limit)

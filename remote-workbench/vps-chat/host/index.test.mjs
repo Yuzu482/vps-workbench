@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -71,6 +71,8 @@ test('local workbench routes enforce scope and dispatch only the declared JSON o
   assert.equal((await rpc({ op: 'model-options', settings: codex.settings, targetId: codex.targetId })).status, 400);
   const design = { ...codex, mode: 'design' };
   assert.equal((await rpc({ ...payload, mode: 'design' })).status, 400);
+  for (const provider of ['claude', 'claude-sdk', 'antigravity'])
+    assert.equal((await rpc({ ...payload, settings: { ...settings, provider }, mode: 'design' })).status, 400);
   assert.equal((await rpc({ ...codex, mode: 'other' })).status, 400);
   assert.equal((await rpc({ op: 'list', settings, mode: 'design' })).status, 400);
   assert.equal((await rpc(design)).status, 200);
@@ -156,6 +158,20 @@ test('advanced settings choose the current bridge and preserve direct and verifi
   policy = { socksPort: 15301, expectedSshSource: '192.0.2.4' };
   assert.deepEqual(await options(claude), { ok: true, fields: ['maxOutputTokens', 'reasoningEffort'] });
   assert.deepEqual(await bridge.request(claude), { ok: true, request: claude, port: '15301' });
+  const sessionId = '01234567-89ab-4cde-8f01-23456789abc0';
+  const targetId = 'd'.repeat(64);
+  const design = { op: 'send', settings: claude.settings, mode: 'design', sessionId, targetId };
+  assert.equal((await bridge.request(design, { pinnedRelay: 'null' })).code, 'relay_required');
+  policy = null;
+  assert.deepEqual(await bridge.request(design), { ok: true, request: design, port: null });
+  await mkdir(join(root, targetId));
+  await writeFile(join(root, targetId, 'design-' + sessionId), Buffer.from([1]));
+  for (const op of ['get', 'design-history', 'refresh', 'stop', 'send']) {
+    const body = { op, settings: design.settings, sessionId, targetId };
+    assert.deepEqual((await bridge.request(body)).request, body);
+  }
+  const chat = { op: 'send', settings: design.settings, targetId, sessionId: '01234567-89ab-4cde-8f01-23456789abc1' };
+  assert.equal((await bridge.request(chat)).code, 'bridge_not_ready');
 });
 
 test('missing local bridge gives a pre-dispatch error without another execution path', async () => {

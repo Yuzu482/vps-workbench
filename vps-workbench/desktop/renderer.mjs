@@ -185,7 +185,7 @@ try {
   }
   const workbenchOptions = { React, CodeBlock, writeClipboard, subscriptionRequiresRelay: false,
     hostThemeLabel: '跟随系统', parseStreamingMarkdown: createStreamingMarkdownParser(), stabilizeStreamingRecord,
-    sidebarActions: true, ResourceLibrary: createResourceLibrary(React),
+    sidebarActions: true, allowDesignProviders: true, ResourceLibrary: createResourceLibrary(React),
     editText: native.edit, saveConversationPreference: saveLocalPreference, saveModelParameters: saveLocalPreference,
     ExtensionSettings, extensionsForTurn, automaticMemoryPolicy, conversationIsolated, projectMemoryNotes,
     AgentPresetSettings, WorkflowPanel, useWorkflows: useWorkflowControls,

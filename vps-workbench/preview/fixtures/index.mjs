@@ -194,7 +194,8 @@ export function createPreviewFixtures({ backendPlatform, backendFailure } = {}) 
     const { provider } = packet.settings;
     const { sessionId, turnId, prompt, mode = 'chat', advanced, designBase } = packet;
     if (!validId(turnId) || !validPrompt(prompt, 8192) ||
-        (mode !== 'chat' && (mode !== 'design' || provider !== 'codex')) ||
+        (mode !== 'chat' && mode !== 'design') ||
+        (mode === 'design' && provider !== 'codex' && packet.designContext?.images?.length) ||
         (Object.hasOwn(packet, 'advanced') && !validModelParameters(provider, advanced))) return invalidRequest();
     if (session?.mode && session.mode !== mode) return fail('mode_conflict', '这个示例会话采用另一种模式。');
     const explicit = Object.hasOwn(packet, 'designBase');
@@ -225,8 +226,8 @@ export function createPreviewFixtures({ backendPlatform, backendFailure } = {}) 
     const memoryCount = packet.extensions?.memory?.length ?? 0;
     record.turns.push({
       id: turnId, prompt, reply: mode === 'design' ? '正在生成本地示例画板。' : '正在生成本地示例回复。',
-      state: 'running', streaming: true, canStop: true,
-      canSteer: mode === 'design' || (provider === 'antigravity' && !packet.workflowFiles),
+      state: 'running', streaming: mode !== 'design' || provider !== 'claude', canStop: mode !== 'design' || provider !== 'claude',
+      canSteer: mode === 'design' && provider === 'codex' || (provider === 'antigravity' && !packet.workflowFiles),
       ...(explicit ? { ...designBase, explicitBase: designBase, revisionDigest } : {}),
       ...(mode === 'design' ? { layerRevision: previewLayerRevision(packet.designContext) } : {}),
       model: selected?.id, effort: packet.effort ?? advanced?.reasoningEffort ?? selected?.defaultEffort,
@@ -253,7 +254,7 @@ export function createPreviewFixtures({ backendPlatform, backendFailure } = {}) 
         kind: 'read', canAllow: true, state: 'pending', decision: null }];
       return readSession(session);
     }
-    if (session.polls >= (design || acp ? 16 : 4)) {
+    if (session.polls >= (acp || (design && turn.streaming) ? 16 : 4)) {
       if (turn.prompt.includes('交接格式：只返回一个 JSON 对象')) {
         finishTurn(turn, 'complete', JSON.stringify({ conclusion: 'VPS 审校完成。', evidence: '依据本轮证据。', pending: '待汇总。' }));
         return readSession(session);

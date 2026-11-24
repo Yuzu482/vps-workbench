@@ -677,7 +677,7 @@ class Conversation:
         self.turn = None
         self.dispatched = False
         self.reason = "setup"
-        self.steering = SteeringMailbox(reply.directory) if config.get("design") is True else None
+        self.steering = SteeringMailbox(reply.directory) if config.get("design") is True and "sdk" not in config else None
         self.steer_rpc = 100
         self.steer_pending = None
         self.steer_dispatched = set()
@@ -1040,9 +1040,11 @@ def main():
     if "sdk" in config and (
             not expanded or not isinstance(sdk, dict) or set(sdk) != {"launcher", "worker", "safety", "session", "paths"} or
             any(not isinstance(value, str) or not value or len(value) > 65536 for value in sdk.values()) or
-            config.get("design") is not False or config.get("designContext") is not None or "effort" in config or
+            type(config.get("design")) is not bool or "effort" in config or
             ("model" in config and model not in ("sonnet", "opus", "haiku"))):
         raise ValueError("invalid Claude SDK task")
+    if sdk and any(part["type"] != "text" for part in design_inputs(config)):
+        raise ValueError("Claude SDK design supports text references only")
     if (("model" in config and not valid_choice(model, 100, "_.:-")) or
             ("effort" in config and (model is None or not valid_choice(config["effort"], 24, "_-")))):
         raise ValueError("invalid model options")
@@ -1073,7 +1075,7 @@ def main():
         raise ValueError("invalid workflow transport")
     directory = Path.home() / ".local/state/remote-ssh/tasks" / identifier
     design = config.get("design") is True
-    reply = Reply(directory, identifier, MAX_DESIGN_REPLY if design else MAX_REPLY, design)
+    reply = Reply(directory, identifier, MAX_DESIGN_REPLY if design else MAX_REPLY, design and not sdk)
     if sdk:
         launcher = load_helper(sdk["launcher"], "remote_dsh_claude_sdk")
         state, thread, reason = launcher["run"](privacy, isolation, config, reply, globals(), workflow)
@@ -1081,7 +1083,7 @@ def main():
         state, thread, reason = run(privacy, isolation, config, reply, extensions, workflow)
     reply.set_steer_ready(False)
     reply.publish(state, thread, reason)
-    if design:
+    if design and not sdk:
         try:
             SteeringMailbox(directory).close()
         except (OSError, ValueError, KeyError, TypeError):

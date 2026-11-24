@@ -105,6 +105,31 @@ test('preview chat keeps stable receipts and stages local design output', () => 
   assert.equal(createPreviewFixtures().chat({ op: 'get', ...request }).code, 'session_missing');
 });
 
+test('VPS design fixtures keep each provider’s draft and branch in its own target', () => {
+  const { chat } = createPreviewFixtures();
+  const { preset } = chat({ op: 'preset' });
+  for (const provider of ['claude-sdk', 'claude', 'antigravity']) {
+    const settings = { ...preset.settings, provider };
+    const { targetId } = chat({ op: 'list', settings });
+    const scope = { settings, targetId, sessionId };
+    const draft = { ...scope, op: 'send', mode: 'design', turnId, prompt: '生成活动页。' };
+    const running = chat(draft).session.turns[0];
+    assert.equal(running.canStop, provider !== 'claude');
+    assert.equal(running.canSteer, provider === 'antigravity');
+    for (let i = 0; i < 16; i++) chat({ ...scope, op: 'refresh' });
+    const base = chat({ ...scope, op: 'design-history', turnId }).turn;
+    assert.match(base.reply, /^~~~html$/m);
+    const fork = { ...draft, turnId: steerId, prompt: '生成另一版活动页。',
+      designBase: { parentTurnId: turnId, fork: true }, designContext: { text: '以活动首页为基准。', images: [] } };
+    assert.equal(chat(fork).ok, true);
+    for (let i = 0; i < 16; i++) chat({ ...scope, op: 'refresh' });
+    const { history } = chat({ ...scope, op: 'design-history' });
+    assert.deepEqual(history.map(({ id, parentTurnId, fork }) => [id, parentTurnId, fork]),
+      [[turnId, null, false], [steerId, turnId, true]]);
+    assert.equal(chat({ ...scope, op: 'design-history', targetId: preset.targetId }).code, 'invalid_settings');
+  }
+});
+
 test('a historical design can be opened and forked after falling outside recent turns', () => {
   const { chat } = createPreviewFixtures();
   const { preset } = chat({ op: 'preset' });

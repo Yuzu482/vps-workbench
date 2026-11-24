@@ -54,7 +54,7 @@ export function createDesignControls(React) {
         h('p', { className: 'vc-style-scope' }, '用于这段会话的设计指令。')));
   }
 
-  function MaterialsDialog({ project, update, choices, setChoices, close, workflow }) {
+  function MaterialsDialog({ project, update, choices, setChoices, close, workflow, imageReferences = true }) {
     const ref = React.useRef(null);
     const mounted = React.useRef(true);
     const [busy, setBusy] = React.useState(false);
@@ -200,7 +200,7 @@ export function createDesignControls(React) {
     h('div', { className: 'vc-design-imports', role: 'group', 'aria-label': '导入设计资料' },
       fileImport('添加参考图片', 'image', {
         multiple: true, accept: 'image/png,image/jpeg,image/webp',
-        disabled: busy || project.images.length >= 2, onChange: importImages,
+        disabled: busy || !imageReferences || project.images.length >= 2, onChange: importImages,
       }),
       fileImport('导入文字参考', 'file', {
         accept: '.txt,.md,.json,.html,.htm,.css,.js,.jsx,.ts,.tsx,.vue,.svelte', disabled: busy, onChange: importReference,
@@ -208,6 +208,7 @@ export function createDesignControls(React) {
       fileImport('导入 DESIGN.md', 'canvas', {
         accept: '.md,text/markdown,text/plain', disabled: busy, onChange: importSystem,
       })),
+    !imageReferences ? h('p', null, '当前 VPS 执行端支持文字参考。参考图片不会随本轮发送。') : null,
     h('label', null, '设计系统',
       h('textarea', {
         'aria-label': '设计系统', value: project.system, maxLength: 10000, rows: 6, disabled: busy,

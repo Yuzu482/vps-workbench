@@ -336,7 +336,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     port = server.address().port;
     origin = 'http://127.0.0.1:' + port;
     host = createHost({ port, root: workbenchRoot, bridge, accountEnabled: true, allowExtensions: true,
-      allowProjectMemory: Boolean(data), allowModelParameters: true, allowDesignBranches: true,
+      allowProjectMemory: Boolean(data), allowModelParameters: true, allowDesignBranches: true, allowDesignProviders: true,
       allowWorkflowStage: Boolean(data), allowSetupCheck: true, allowWorkflowArtifacts: Boolean(data), allowBackendSetup: true, readRoute,
       authorize: (op) => permitsChat(access(), op) ? null : accessDenied });
     terminal = makeSubscriptionHost({ port, stateRoot: terminalRoot, workbenchRoot,
