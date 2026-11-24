@@ -820,7 +820,7 @@ def run(privacy, isolation, support, config, reply, workflow=None, extensions=No
 
 
 def load_support(encoded):
-    limit = 50 * 1024
+    limit = 56 * 1024  # Match MaxStreamHelper in CodexStream.cs.
     packed = base64.b64decode(encoded, validate=True)
     decoder = zlib.decompressobj()
     code = decoder.decompress(packed, limit + 1)

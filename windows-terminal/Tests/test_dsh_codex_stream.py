@@ -261,10 +261,11 @@ class StreamControlTests(unittest.TestCase):
         bridge = Path(__file__).resolve().parents[1] / "DshChatBridge"
         antigravity = load("chat_antigravity", bridge / "RemoteDshAntigravity.py")
         source = (bridge / "RemoteDshCodexStream.py").read_bytes()
+        self.assertLessEqual(len(source), 56 * 1024)
         support = antigravity.load_support(base64.b64encode(zlib.compress(source)))
         self.assertEqual(support["MAX_REPLY"], 8192)
         with self.assertRaisesRegex(ValueError, "invalid Antigravity helper"):
-            antigravity.load_support(base64.b64encode(zlib.compress(b" " * (50 * 1024 + 1))))
+            antigravity.load_support(base64.b64encode(zlib.compress(b" " * (56 * 1024 + 1))))
 
     def test_sdk_resume_forwards_advanced_options_through_turn_rpc(self):
         driver = self.conversation()
