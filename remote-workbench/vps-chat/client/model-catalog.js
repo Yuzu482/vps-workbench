@@ -6,11 +6,17 @@ export function effortName(value) {
   return Object.hasOwn(effortNames, value) ? effortNames[value] : value;
 }
 
+export function validContextUsage(usage) {
+  return usage && typeof usage === 'object' && !Array.isArray(usage) &&
+    Number.isSafeInteger(usage.usedTokens) && usage.usedTokens >= 0 &&
+    (usage.contextWindow === null || (Number.isSafeInteger(usage.contextWindow) && usage.contextWindow > 0)) &&
+    (usage.kind === undefined || usage.kind === 'request_input' ||
+      (usage.kind === 'turn_input' && usage.contextWindow === null));
+}
+
 export function validTurnMetadata(turn) {
   const { contextUsage, model, effort } = turn;
-  const usage = contextUsage == null || (typeof contextUsage === 'object' && !Array.isArray(contextUsage) &&
-    Number.isSafeInteger(contextUsage.usedTokens) && contextUsage.usedTokens >= 0 &&
-    (contextUsage.contextWindow === null || (Number.isSafeInteger(contextUsage.contextWindow) && contextUsage.contextWindow > 0)));
+  const usage = contextUsage == null || validContextUsage(contextUsage);
   return usage && (model == null || (typeof model === 'string' && modelId.test(model))) &&
     (effort == null || (typeof effort === 'string' && effortId.test(effort)));
 }

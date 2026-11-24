@@ -8,6 +8,13 @@ const failure = (message) => ({ type: 'turn.failed', error: { message } });
 const interrupted = ({ terminal_reason, is_interrupt }) => is_interrupt === true ||
   ['aborted_streaming', 'aborted_tools'].includes(terminal_reason);
 
+function inputTokens(usage) {
+  const amounts = [usage?.input_tokens, usage?.cache_read_input_tokens ?? 0, usage?.cache_creation_input_tokens ?? 0];
+  if (!amounts.every((count) => Number.isSafeInteger(count) && count >= 0)) return null;
+  const total = amounts.reduce((sum, count) => sum + count, 0);
+  return Number.isSafeInteger(total) ? total : null;
+}
+
 function userMessage(session, id, content, supplement) {
   return { type: 'user', uuid: id, session_id: session, parent_tool_use_id: null, message: { role: 'user', content },
     ...(supplement && { priority: 'now', origin: { kind: 'human' } }) };
@@ -69,7 +76,7 @@ export function claudeThread({ query, directory, nativeId, turnId, context, prov
       deadline.unref?.();
       const first = userMessage(session, turnId, contentFor(input), false);
       const messages = [first];
-      let wake, inputClosed = false, pending = null, originalResult = null;
+      let wake, inputClosed = false, pending = null, originalResult = null, latestInput = null;
       function closeInput() { inputClosed = true; wake?.(); }
       async function* stream() {
         while (!inputClosed && !abort.signal.aborted) {
@@ -151,6 +158,12 @@ export function claudeThread({ query, directory, nativeId, turnId, context, prov
               const text = message.message.content.filter((block) => block.type === 'text' && typeof block.text === 'string')
                 .map(({ text }) => text).join('\n');
               completed.add(message.message.id);
+              if (!message.isSynthetic && !message.error && message.message.model && message.message.model !== '<synthetic>') {
+                const usedTokens = inputTokens(message.message.usage);
+                latestInput = usedTokens === null ? null : { usedTokens, model: message.message.model };
+                if (latestInput) yield { type: 'context.usage',
+                  usage: { usedTokens, contextWindow: null, kind: 'request_input' } };
+              }
               if (text) yield item(message.message.id, text, true);
             }
             if (message.type === 'result') {
@@ -175,7 +188,13 @@ export function claudeThread({ query, directory, nativeId, turnId, context, prov
                 yield failure(/oauth|auth|api.key|401|403/i.test(JSON.stringify(originalFailed ? originalResult : message)) ? '401 Unauthorized' : 'Claude turn failed');
               } else {
                 if (!completed.size && !messageId && typeof message.result === 'string') yield item('result', message.result, true);
-                yield { type: 'turn.completed', usage: message.usage };
+                const window = latestInput && Object.hasOwn(message.modelUsage ?? {}, latestInput.model)
+                  ? message.modelUsage[latestInput.model]?.contextWindow : null;
+                const total = inputTokens(message.usage);
+                const contextUsage = latestInput ? { usedTokens: latestInput.usedTokens,
+                  contextWindow: Number.isSafeInteger(window) && window > 0 ? window : null, kind: 'request_input' }
+                  : total === null ? null : { usedTokens: total, contextWindow: null, kind: 'turn_input' };
+                yield { type: 'turn.completed', contextUsage };
               }
               return;
             }

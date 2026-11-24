@@ -1,3 +1,4 @@
+import { validContextUsage } from '../../remote-workbench/vps-chat/client/model-catalog.js';
 import { readSubscriptionLimits } from '../../remote-workbench/vps-chat/client/subscription-limits.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { parameterLevels } from '../../remote-workbench/vps-chat/client/model-parameters.js';
@@ -209,6 +210,12 @@ function validateStore(store, backend) {
         const meta = turn.execution;
         const fields = ['fingerprint', 'model', 'effort', 'workspace'];
         if (Object.hasOwn(meta, 'usedTokens')) fields.push('usedTokens');
+        if (Object.hasOwn(meta, 'contextUsage')) {
+          const usage = meta.contextUsage;
+          if (!validContextUsage(usage) ||
+              !exact(usage, ['usedTokens', 'contextWindow', ...(usage.kind ? ['kind'] : [])])) return false;
+          fields.push('contextUsage');
+        }
         if (Object.hasOwn(meta, 'subscriptionLimits')) {
           if (backend !== 'claude-sdk' || !Object.keys(readSubscriptionLimits(meta.subscriptionLimits)).length) return false;
           fields.push('subscriptionLimits');
@@ -361,11 +368,13 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
 
   function view(profile, session) {
     const turns = session.turns.map(({ execution, ...turn }, index) => {
+      const control = active.get(turn.id);
+      const contextUsage = (pending.has(turn.state) ? control?.contextUsage : null) ?? execution?.contextUsage ??
+        (execution?.usedTokens !== undefined ? { usedTokens: execution.usedTokens, contextWindow: null, kind: 'turn_input' } : null);
       const metadata = execution && { model: execution.model, effort: execution.effort,
         ...(execution.subscriptionLimits && { subscriptionLimits: readSubscriptionLimits(execution.subscriptionLimits) }),
-        ...(execution.usedTokens !== undefined && { contextUsage: { usedTokens: execution.usedTokens, contextWindow: null } }),
+        ...(contextUsage && { contextUsage }),
         ...(execution.branch && { parentTurnId: execution.branch.parentTurnId, fork: execution.branch.fork, ordinal: index + 1 }) };
-      const control = active.get(turn.id);
       const reply = control ? replyFor(control) || turn.reply : turn.reply;
       if (pending.has(turn.state) && (!control || storageFailed)) {
         return { ...turn, ...metadata, ...stateResult('unknown', 'unknown_outcome'), reply, canStop: false };
@@ -599,6 +608,7 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
         if (event.type === 'subscription.limits' && backend === 'claude-sdk' && profile.authMode === 'subscription') {
           Object.assign(subscriptionLimits, readSubscriptionLimits(event.limits));
         }
+        if (event.type === 'context.usage' && validContextUsage(event.usage)) control.contextUsage = event.usage;
         if (event.type === 'turn.completed') {
           control.steer = null;
           if (control.delivery) await control.delivery;
@@ -608,8 +618,10 @@ export async function openLocalSdk({ root, models, createThread, canExecute, cre
           if (!observed) throw new Error('missing native thread');
           const execution = session.turns.find(({ id }) => id === turnId)?.execution;
           const usedTokens = event.usage?.input_tokens;
+          const contextUsage = validContextUsage(event.contextUsage) ? event.contextUsage : control.contextUsage;
           const metadata = {
-            ...(Number.isSafeInteger(usedTokens) && usedTokens >= 0 && { usedTokens }),
+            ...(contextUsage ? { contextUsage } : Number.isSafeInteger(usedTokens) && usedTokens >= 0
+              ? { contextUsage: { usedTokens, contextWindow: null, kind: 'turn_input' } } : {}),
             ...(Object.keys(subscriptionLimits).length && { subscriptionLimits }),
           };
           await finish({ ...stateResult('completed'), ...(execution && { execution: { ...execution, ...metadata } }) });

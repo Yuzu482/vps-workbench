@@ -62,7 +62,7 @@ function seededSession(number, title, prompt, reply, selectedModel, mode = 'chat
     id: fixtureId(number), title, mode,
     turns: [{
       id: fixtureId(100 + number), prompt, reply, state: 'complete', model: selectedModel,
-      contextUsage: { usedTokens: 1840, contextWindow: 32000 },
+      ...(models.codex.some(({ id }) => id === selectedModel) && { contextUsage: { usedTokens: 1840, contextWindow: 32000 } }),
       activity: [{ title: '预览记录', text: '载入内置示例会话。' }],
     }],
   };
@@ -232,7 +232,7 @@ export function createPreviewFixtures({ backendPlatform, backendFailure } = {}) 
       ...(mode === 'design' ? { layerRevision: previewLayerRevision(packet.designContext) } : {}),
       model: selected?.id, effort: packet.effort ?? advanced?.reasoningEffort ?? selected?.defaultEffort,
       ...(advanced ? { advanced } : {}),
-      contextUsage: { usedTokens: 620, contextWindow: 32000 },
+      ...(provider === 'codex' && { contextUsage: { usedTokens: 620, contextWindow: 32000 } }),
       activity: [{ title: '本地预览', text: '正在生成固定示例内容。' },
         ...(memoryCount ? [{ title: '长期记忆', text: `引用了 ${memoryCount} 条示例笔记。` }] : [])],
     });

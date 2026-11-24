@@ -167,6 +167,10 @@ export function antigravityThread({ launch, directory, nativeId, context, bindSe
       const { params } = packet;
       if (!live || packet.method !== 'session/update' || params?.sessionId !== session || !record(params.update)) return;
       const update = params.update;
+      if (update.sessionUpdate === 'usage_update' && Number.isSafeInteger(update.used) && update.used >= 0 &&
+          Number.isSafeInteger(update.size) && update.size > 0) {
+        emit({ type: 'context.usage', usage: { usedTokens: update.used, contextWindow: update.size } });
+      }
       if (['tool_call', 'tool_call_update'].includes(update.sessionUpdate) && validId(update.toolCallId)) {
         const earlier = updates.get(update.toolCallId);
         const waiting = waitingTools.get(update.toolCallId);

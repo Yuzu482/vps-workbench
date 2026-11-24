@@ -197,6 +197,34 @@ test('subscription rings distinguish exhausted, unavailable and weekly-only obse
     .getByRole('group', { name: '每周额度，剩余 0%', exact: true }).getByText('0%', { exact: true }).waitFor();
 });
 
+test('context tooltip distinguishes request occupancy from a turn token total', { timeout: 25_000 }, async (t) => {
+  const page = await openPreview(t);
+  await page.route('**/dsh-vps-chat/api/rpc', async (route) => {
+    if (route.request().postDataJSON().op !== 'get') return route.continue();
+    const response = await route.fetch();
+    const json = await response.json();
+    const turn = json.session?.turns.at(-1);
+    if (turn) turn.contextUsage = json.session.title.includes('发布')
+      ? { usedTokens: 4000, contextWindow: 200000, kind: 'request_input' }
+      : { usedTokens: 4000, contextWindow: null, kind: 'turn_input' };
+    return route.fulfill({ response, json });
+  });
+  await (await sidebarButton(page, '纸间书店')).click();
+  const ring = page.getByRole('img', { name: '上下文用量', exact: true });
+  const tooltip = page.getByRole('tooltip', { name: '上下文用量', exact: true });
+  await (await sidebarButton(page, '纸间书店 · 周末发布清单')).click();
+  await ring.hover();
+  await tooltip.getByText('最近一次模型调用的输入', { exact: true }).waitFor();
+  const progress = tooltip.getByRole('progressbar', { name: '输入占窗口比例' });
+  assert.equal(await progress.getAttribute('value'), '4000');
+  assert.equal(await progress.getAttribute('max'), '200000');
+
+  await (await sidebarButton(page, '纸间书店 · 网站设计，设计会话')).click();
+  await ring.hover();
+  await tooltip.getByText('该轮输入 token 合计', { exact: true }).waitFor();
+  assert.equal(await tooltip.getByRole('progressbar').count(), 0);
+});
+
 test('subscription details fit the narrow view without scrolling and paginate extra profiles', { timeout: 30_000 }, async (t) => {
   const page = await openPreview(t, { viewport: { width: 365, height: 480 } });
   const vpsTrigger = page.getByRole('button', { name: '切换 VPS 执行端', exact: true });

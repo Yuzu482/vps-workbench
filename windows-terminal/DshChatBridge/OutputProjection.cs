@@ -76,6 +76,24 @@ internal static class OutputProjection
         return thread.HasValue;
     }
 
+    private static long? ClaudeInputTokens(JsonElement value)
+    {
+        if (!value.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object) return null;
+        long total = 0;
+        foreach (string key in new[] { "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens" })
+        {
+            if (!usage.TryGetProperty(key, out var count) || count.ValueKind == JsonValueKind.Null)
+            {
+                if (key == "input_tokens") return null;
+                continue;
+            }
+            if (count.ValueKind != JsonValueKind.Number || !count.TryGetInt64(out long tokens) ||
+                tokens < 0 || tokens > 9_007_199_254_740_991 - total) return null;
+            total += tokens;
+        }
+        return total;
+    }
+
     private static TurnOutput ProjectClaude(string output, Guid? expected, string state, bool design)
     {
         var parsed = ChatBackends.Parse("claude", output, complete: true);
@@ -85,6 +103,9 @@ internal static class OutputProjection
         bool initialized = false;
         string? model = null;
         string? designResult = null;
+        Guid? session = null;
+        ContextUsage? usage = null;
+        string? usageModel = null;
         foreach (string line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             if (!line.StartsWith('{')) continue;
@@ -97,17 +118,40 @@ internal static class OutputProjection
                     designResult = BridgeProtocol.Text(value, "result");
                 if (kind == "system" && BridgeProtocol.Text(value, "subtype") == "init")
                 {
-                    if (initialized || !Guid.TryParse(BridgeProtocol.Text(value, "session_id"), out Guid observed) || observed != expected)
+                    if (initialized || !Guid.TryParse(BridgeProtocol.Text(value, "session_id"), out Guid observed) ||
+                        observed == Guid.Empty || observed != expected)
                         return new(state, "", activity.ToArray());
+                    session = observed;
                     initialized = true;
                     string? reportedModel = BridgeProtocol.Text(value, "model");
                     if (BridgeProtocol.IsModelId(reportedModel)) model = reportedModel;
+                }
+                bool matches = initialized && Guid.TryParse(BridgeProtocol.Text(value, "session_id"), out Guid eventSession) &&
+                    eventSession == session;
+                if (matches && kind == "result" && BridgeProtocol.Text(value, "subtype") == "success" &&
+                    value.TryGetProperty("is_error", out var isError) && isError.ValueKind == JsonValueKind.False)
+                {
+                    if (usageModel is not null && usage is not null && value.TryGetProperty("modelUsage", out var models) &&
+                        models.ValueKind == JsonValueKind.Object && models.TryGetProperty(usageModel, out var metrics) &&
+                        metrics.ValueKind == JsonValueKind.Object && metrics.TryGetProperty("contextWindow", out var capacity) &&
+                        capacity.ValueKind == JsonValueKind.Number && capacity.TryGetInt64(out long window) &&
+                        (usage with { ContextWindow = window }).Valid)
+                        usage = usage with { ContextWindow = window };
+                    else if (usage is null && ClaudeInputTokens(value) is long total)
+                        usage = new ContextUsage(total, null, "turn_input");
                 }
                 if (!initialized || kind != "assistant" ||
                     (value.TryGetProperty("parent_tool_use_id", out var parent) && parent.ValueKind != JsonValueKind.Null) ||
                     !value.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object ||
                     !message.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
                     continue;
+                if (matches && BridgeProtocol.Text(message, "model") is string claimedModel && BridgeProtocol.IsModelId(claimedModel) &&
+                    (!value.TryGetProperty("isSynthetic", out var synthetic) || synthetic.ValueKind != JsonValueKind.True) &&
+                    BridgeProtocol.Text(value, "error") is null)
+                {
+                    usageModel = claimedModel;
+                    usage = ClaudeInputTokens(message) is long used ? new ContextUsage(used, null, "request_input") : null;
+                }
                 foreach (var part in content.EnumerateArray())
                 {
                     switch (BridgeProtocol.Text(part, "type"))
@@ -134,7 +178,8 @@ internal static class OutputProjection
         if (design && state == "complete") reply = designResult ?? answer.ToString();
         if (design && state == "complete" && reply.Length > CodexStream.MaxDesignReply)
             return new("failed", "", [.. activity, new Activity("设计输出超出上限", "请缩小画板范围后重试。")], Model: model);
-        return new(state, Visible(reply, design ? CodexStream.MaxDesignReply : CodexStream.MaxChatReply), activity.ToArray(), Model: model);
+        return new(state, Visible(reply, design ? CodexStream.MaxDesignReply : CodexStream.MaxChatReply), activity.ToArray(),
+            Model: model, ContextUsage: usage);
     }
 
     internal static string Visible(string text, int limit)

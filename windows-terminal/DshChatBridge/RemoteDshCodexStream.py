@@ -527,7 +527,7 @@ class Reply:
             self.effort = effort
         self.dirty = True
 
-    def observe_usage(self, value):
+    def observe_usage(self, value, kind=None):
         if not isinstance(value, dict) or not isinstance(value.get("last"), dict):
             return
         used = value["last"].get("totalTokens")
@@ -535,6 +535,8 @@ class Reply:
         maximum = 2**53 - 1
         if type(used) is int and 0 <= used <= maximum and (limit is None or type(limit) is int and 0 < limit <= maximum):
             self.context_usage = {"usedTokens": used, "contextWindow": limit}
+            if kind:
+                self.context_usage["kind"] = kind
             self.dirty = True
 
     def observe_subscription_limit(self, name, used, resets):
@@ -841,6 +843,10 @@ class Conversation:
             return None
         if method == "thread/tokenUsage/updated":
             self.reply.observe_usage(params.get("tokenUsage"))
+        elif method == "dsh/contextInput" and "sdk" in self.config:
+            kind = params.get("kind")
+            if kind == "request_input" or kind == "turn_input" and params.get("window") is None:
+                self.reply.observe_usage({"last": {"totalTokens": params.get("used")}, "modelContextWindow": params.get("window")}, kind)
         elif method == "dsh/subscriptionLimit" and "sdk" in self.config:
             self.reply.observe_subscription_limit(params.get("window"), params.get("usedPercent"), params.get("resetsAt"))
         elif method == "model/rerouted":

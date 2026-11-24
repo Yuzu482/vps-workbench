@@ -175,8 +175,11 @@ test('an opted-in turn uses one official-style input, projects main-session text
       yield delta(options.sessionId, '第一段\u0000');
       yield delta(options.sessionId, 'subagent text', 'tool-fixture');
       yield delta(options.sessionId, '第二段');
-      yield assistant(options.sessionId, '第一段第二段');
-      yield result(options.sessionId, user.uuid, '第一段第二段');
+      const completed = assistant(options.sessionId, '第一段第二段');
+      yield { ...completed, message: { ...completed.message, model: 'claude-fixture',
+        usage: { input_tokens: 20, cache_read_input_tokens: 100, cache_creation_input_tokens: 10 } } };
+      yield { ...result(options.sessionId, user.uuid, '第一段第二段'), usage: { input_tokens: 99999 },
+        modelUsage: { 'different-model': { contextWindow: 20000 }, 'claude-fixture': { contextWindow: 200000 } } };
       cleanInputEnd = (await messages.next()).done;
     }
     return Object.assign(fake(), { close() { closeCalls++; } });
@@ -200,6 +203,10 @@ test('an opted-in turn uses one official-style input, projects main-session text
   assert.equal(worker.packets.find((p) => p.method === 'turn/started').params.turn.id, turnId);
   assert.deepEqual(worker.packets.filter((p) => p.method === 'dsh/subscriptionLimit').map((p) => p.params), [
     { threadId, turnId, window: 'weekly', usedPercent: 25, resetsAt: 2000000000 },
+  ]);
+  assert.deepEqual(worker.packets.filter((p) => p.method === 'dsh/contextInput').map((p) => p.params), [
+    { threadId, turnId, used: 130, window: null, kind: 'request_input' },
+    { threadId, turnId, used: 130, window: 200000, kind: 'request_input' },
   ]);
   const chunks = worker.packets.filter((p) => p.method === 'item/agentMessage/delta').map((p) => p.params);
   assert.deepEqual(chunks, [

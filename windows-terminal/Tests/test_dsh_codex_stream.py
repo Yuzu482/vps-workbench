@@ -520,6 +520,8 @@ class StreamControlTests(unittest.TestCase):
             yield self.acp_answer(" and revised")
             yield {"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}}
             yield self.acp_answer("revised response")
+            yield self.acp_update(sessionUpdate="usage_update", used=718, size=200000)
+            yield self.acp_update(sessionUpdate="usage_update", used=None, size=10000)
             yield {"jsonrpc": "2.0", "id": 5, "result": {"stopReason": "end_turn"}}
 
         support = dict(vars(self.stream), read_frames=frames)
@@ -533,6 +535,7 @@ class StreamControlTests(unittest.TestCase):
         self.assertEqual(self.control("snapshot")["steering"], [
             {"id": first, "state": "submitted"}, {"id": second, "state": "submitted"}])
         self.assertEqual(reply.items, {"antigravity": "revised response"})
+        self.assertEqual(reply.context_usage, {"usedTokens": 718, "contextWindow": 200000})
 
     def test_antigravity_retains_uncertain_supplement_after_superseded_response(self):
         antigravity, process, reply = self.acp_fixture()

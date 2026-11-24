@@ -70,7 +70,7 @@ function fixtureClaude({ prompt, options }) {
   const data = (packet) => ({ ...packet, session_id: native });
   const stream = (event) => data({ type: 'stream_event', event });
   const result = (ids) => data({ type: 'result', subtype: 'success', is_error: false, user_message_uuids: ids,
-    usage: { input_tokens: 12 } });
+    usage: { input_tokens: 12, cache_read_input_tokens: 80 }, modelUsage: { 'claude-fixture': { contextWindow: 200000 } } });
   const stop = Promise.withResolvers();
   const events = (async function* () {
     assert.equal(options.permissionMode, 'default');
@@ -104,7 +104,9 @@ function fixtureClaude({ prompt, options }) {
     assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
     assert.deepEqual(await hooks[0](tool), {});
     assert.equal((await options.canUseTool('Read', inputFile, { toolUseID: 'read-1', signal: options.abortController.signal })).behavior, 'allow');
-    yield data({ type: 'assistant', message: { id: 'test-message', content: [{ type: 'text', text: '已加入证据位置。' }] } });
+    yield data({ type: 'assistant', message: { id: 'test-message', model: 'claude-fixture',
+      usage: { input_tokens: 3, cache_read_input_tokens: 48, cache_creation_input_tokens: 9 },
+      content: [{ type: 'text', text: '已加入证据位置。' }] } });
     yield result([first.uuid, next.uuid]);
   })();
   events.interrupt = async () => { stop.resolve(); };
@@ -134,17 +136,20 @@ test('Claude SDK uses correlated input and permission receipts and resumes only 
   assert.equal((await f.request('claude-sdk', 'approval', decision)).outcome, 'queued');
   const reply = await eventually(async () => { const row = await turn.read(); return row?.state === 'complete' && row; });
   assert.equal(reply.reply, '已加入证据位置。');
+  assert.deepEqual(reply.contextUsage, { usedTokens: 60, contextWindow: 200000, kind: 'request_input' });
   assert.equal(reply.steering[0].state, 'delivered');
   assert.equal((await f.request('claude-sdk', 'approval', decision)).outcome, 'submitted');
   assert.equal((await f.request('claude-sdk', 'approval', { ...decision, decision: 'deny' })).code, 'approval_rejected');
   assert.notEqual(f.profiles.antigravity.accountDirectory, f.profiles['claude-sdk'].accountDirectory);
   await f.restart();
   assert.equal((await turn.read()).steering[0].state, 'delivered');
+  assert.deepEqual((await turn.read()).contextUsage, reply.contextUsage);
   assert.equal((await turn.send()).ok, true);
   assert.equal(f.callbacks.length, 1);
   const resumed = f.turn('claude-sdk', '续聊', turn.sessionId);
   await resumed.send();
-  await eventually(async () => (await resumed.read())?.state === 'complete');
+  const resumedReply = await eventually(async () => { const row = await resumed.read(); return row?.state === 'complete' && row; });
+  assert.deepEqual(resumedReply.contextUsage, { usedTokens: 92, contextWindow: null, kind: 'turn_input' });
   assert.match(f.callbacks[1].nativeId, /^[0-9a-f-]{36}$/u);
   const next = f.turn('claude-sdk', '后续响应');
   await next.send();
@@ -244,7 +249,12 @@ for await (const line of input) {
     }
     if (text === '断线') { chunk('未确认'); process.exit(0); }
     if (text === '续聊') { assert.equal(isLoaded, true); chunk('本机会话已恢复'); reply(id, { stopReason: 'end_turn' }); }
-    else if (!first) { first = id; task = text; chunk('正在处理'); }
+    else if (!first) {
+      first = id; task = text; chunk('正在处理');
+      for (const [sessionId, used, size] of [[session, 503, 131072], ['foreign', 900, 4000], [session, null, 4000]]) {
+        write({ method: 'session/update', params: { sessionId, update: { sessionUpdate: 'usage_update', used, size } } });
+      }
+    }
     else {
       assert.equal(text, '补充位置');
       chunk('收到补充');
@@ -296,7 +306,9 @@ test('Antigravity ACP drives a real local stdio fixture with bound steering, den
   const reply = await eventually(async () => { const row = await turn.read(); return row?.state === 'complete' && row; });
   assert.equal(reply.steering[0].state, 'delivered');
   assert.equal(reply.reply, '正在处理收到补充已拒绝');
+  assert.deepEqual(reply.contextUsage, { usedTokens: 503, contextWindow: 131072 });
   await f.restart();
+  assert.deepEqual((await turn.read()).contextUsage, reply.contextUsage);
   const resumed = f.turn('antigravity', '续聊', turn.sessionId);
   await resumed.send();
   await eventually(async () => (await resumed.read())?.state === 'complete');

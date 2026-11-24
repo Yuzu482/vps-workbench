@@ -39,11 +39,17 @@ else:
     elif "--chat-snapshot" in args:
         thread = config["threadId"] or (task if "sdk" in config else config["sessionId"])
         packet = {"state": "finished", "exit_code": 0, "stream": {
-            "task_id": task, "thread_id": thread, "reply": html, "state": "complete", "checks": []}}
+            "task_id": task, "thread_id": thread, "reply": html, "state": "complete", "checks": [],
+            "context_usage": {"usedTokens": 270, "contextWindow": 200000, "kind": "request_input"}
+              if "sdk" in config else {"usedTokens": 312, "contextWindow": 65536}}}
     elif "--output" in args:
         thread = command[command.index("--chat-session") + 1]
         print(json.dumps({"type": "system", "subtype": "init", "session_id": thread}))
-        print(json.dumps({"type": "result", "subtype": "success", "result": html, "is_error": False, "session_id": thread}))
+        print(json.dumps({"type": "assistant", "session_id": thread, "message": {"content": [],
+            "model": "claude-fixture", "usage": {"input_tokens": 12, "cache_read_input_tokens": 30,
+            "cache_creation_input_tokens": 8}}}))
+        print(json.dumps({"type": "result", "subtype": "success", "result": html, "is_error": False, "session_id": thread,
+            "usage": {"input_tokens": 900}, "modelUsage": {"claude-fixture": {"contextWindow": 200000}}}))
         sys.exit(0)
     else:
         packet = {"state": "finished", "exit_code": 0, "output_captured": True, "output_truncated": False}
@@ -123,6 +129,9 @@ class DesignProviderTests(unittest.TestCase):
             session = self.rpc({**scope, "op": "refresh"})["session"]
             turn = session["turns"][-1]
             self.assertEqual((turn["state"], turn["reply"]), ("complete", HTML))
+            expected_usage = {"usedTokens": 312, "contextWindow": 65536} if provider == "antigravity" else {
+                "usedTokens": 50 if provider == "claude" else 270, "contextWindow": 200000, "kind": "request_input"}
+            self.assertEqual(turn["contextUsage"], expected_usage)
             self.assertEqual(turn["parentTurnId"], ids[parent] if parent is not None else None)
             self.assertEqual(turn["fork"], fork)
             self.assertEqual(self.rpc(send)["session"]["turns"][-1]["id"], task)

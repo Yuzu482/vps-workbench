@@ -543,6 +543,8 @@ class AcpTurn:
             if event in ("tool_call", "tool_call_update") and self.support["valid_id"](tool_id):
                 self.remember_tool(tool_id, update, exact_frame=(
                     frame.keys() == {"jsonrpc", "method", "params"} and params.keys() == {"sessionId", "update"}))
+        if isinstance(update, dict) and update.get("sessionUpdate") == "usage_update" and type(update.get("size")) is int:
+            self.reply.observe_usage({"last": {"totalTokens": update.get("used")}, "modelContextWindow": update["size"]})
         if isinstance(update, dict) and update.get("sessionUpdate") == "agent_message_chunk":
             content = update.get("content")
             if isinstance(content, dict) and content.get("type") == "text" and isinstance(content.get("text"), str):

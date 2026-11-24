@@ -165,6 +165,13 @@ function scopedWorkflowTools(cwd) {
     hooks: { PreToolUse: [{ hooks: [checkTool] }] } };
 }
 
+function inputTokens(usage) {
+  const amounts = [usage?.input_tokens, usage?.cache_read_input_tokens ?? 0, usage?.cache_creation_input_tokens ?? 0];
+  if (!amounts.every((count) => Number.isSafeInteger(count) && count >= 0)) return null;
+  const total = amounts.reduce((sum, count) => sum + count, 0);
+  return Number.isSafeInteger(total) ? total : null;
+}
+
 /** Serve one attached turn over the existing VPS stream driver's stdio protocol. */
 export async function serve({ input, output, query, cwd = process.cwd(), workflowFiles = false }) {
   if (typeof query !== 'function') return 1;
@@ -185,7 +192,7 @@ export async function serve({ input, output, query, cwd = process.cwd(), workflo
   async function drive(content, config) {
     const replyLimit = thread.instructions ? 16384 : maxText;
     let verified = false, abortedReply = false, accountRejected = false;
-    let reply = '', snapshot = '', deltas = 0, outcome;
+    let reply = '', snapshot = '', deltas = 0, outcome, latestInput;
     function finish() {
       if (shuttingDown || settled) return;
       phase = 'done';
@@ -256,6 +263,14 @@ export async function serve({ input, output, query, cwd = process.cwd(), workflo
           }
           const text = status === 'completed' ? visibleText(message.result, replyLimit) || reply || snapshot : reply || snapshot;
           if (success && interruptSent && !abortedReply && !text) break;
+          if (status === 'completed') {
+            const window = latestInput && Object.hasOwn(message.modelUsage ?? {}, latestInput.model)
+              ? message.modelUsage[latestInput.model]?.contextWindow : null;
+            const used = latestInput?.used ?? inputTokens(message.usage);
+            if (used !== null) notify('dsh/contextInput', { used,
+              window: Number.isSafeInteger(window) && window > 0 ? window : null,
+              kind: latestInput ? 'request_input' : 'turn_input' });
+          }
           outcome = { status, text };
           phase = 'finishing';
           // Allow the CLI to finish writing its session before the parent closes stdio.
@@ -280,6 +295,12 @@ export async function serve({ input, output, query, cwd = process.cwd(), workflo
               continue;
             }
             if (message.aborted === true) abortedReply = true;
+            const reported = message.message?.model;
+            if (!message.isSynthetic && typeof reported === 'string' && reported !== '<synthetic>') {
+              const used = inputTokens(message.message.usage);
+              latestInput = used === null ? null : { used, model: reported };
+              if (latestInput) notify('dsh/contextInput', { used, window: null, kind: 'request_input' });
+            }
             const text = assistantText(message.message, replyLimit);
             if (text) snapshot = text;
           } else if (message.event?.type === 'content_block_delta' && message.event.delta?.type === 'text_delta') {

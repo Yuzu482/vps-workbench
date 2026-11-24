@@ -6,11 +6,14 @@ using RemoteSsh;
 namespace DshVpsChat;
 
 internal sealed record StreamReply(TurnOutput Output, Guid? Thread);
-internal sealed record ContextUsage(long UsedTokens, long? ContextWindow)
+internal sealed record ContextUsage(long UsedTokens, long? ContextWindow,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? Kind = null)
 {
     private const long MaxSafeInteger = 9_007_199_254_740_991;
     internal bool Valid => UsedTokens is >= 0 and <= MaxSafeInteger &&
-        (ContextWindow is null or (> 0 and <= MaxSafeInteger));
+        (ContextWindow is null or (> 0 and <= MaxSafeInteger)) &&
+        (Kind is null or "request_input" || Kind == "turn_input" && ContextWindow is null);
 }
 internal sealed record SubscriptionWindow(double UsedPercent, long ResetsAt)
 {
@@ -232,7 +235,8 @@ internal static class CodexStream
     private static ContextUsage? ReadContextUsage(JsonElement stream)
     {
         if (!stream.TryGetProperty("context_usage", out var context) ||
-            !BridgeProtocol.HasFields(context, "usedTokens", "contextWindow") ||
+            (!BridgeProtocol.HasFields(context, "usedTokens", "contextWindow") &&
+             !BridgeProtocol.HasFields(context, "usedTokens", "contextWindow", "kind")) ||
             context.GetProperty("usedTokens").ValueKind != JsonValueKind.Number ||
             !context.GetProperty("usedTokens").TryGetInt64(out long used)) return null;
         var value = context.GetProperty("contextWindow");
@@ -242,7 +246,9 @@ internal static class CodexStream
             if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt64(out long reported)) return null;
             window = reported;
         }
-        var usage = new ContextUsage(used, window);
+        string? kind = BridgeProtocol.Text(context, "kind");
+        if (context.TryGetProperty("kind", out _) && kind is null) return null;
+        var usage = new ContextUsage(used, window, kind);
         return usage.Valid ? usage : null;
     }
 

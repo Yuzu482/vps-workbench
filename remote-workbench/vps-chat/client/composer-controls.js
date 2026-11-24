@@ -247,6 +247,12 @@ function occupancy(usage) {
   return value > 0 && value < 0.001 ? '<0.1%' : percentages.format(value);
 }
 
+function contextMetric(usage) {
+  if (usage.kind === 'request_input') return '最近一次模型调用的输入';
+  if (usage.kind === 'turn_input') return '该轮输入 token 合计';
+  return '已用';
+}
+
 function panelBoundary(anchor) {
   return anchor.closest('.vc-canvas') ?? anchor.closest('.vc-conversation');
 }
@@ -318,7 +324,7 @@ export function createComposerControls(React) {
 
     const { usage } = report;
     const contextTitle = usage
-      ? `${report.earlierUsage ? t('上次上下文用量') : t('上下文')} ${occupancy(usage) ?? `${numbers.format(usage.usedTokens)} tokens`}` : undefined;
+      ? `${report.earlierUsage ? t('上次上下文用量') : contextMetric(usage)} ${occupancy(usage) ?? `${numbers.format(usage.usedTokens)} tokens`}` : undefined;
     const used = usage?.contextWindow ? Math.min(100, usage.usedTokens * 100 / usage.contextWindow) : 0;
     const chosen = catalog?.models?.find((entry) => entry.id === selection?.id);
     const reported = catalog?.models?.find((entry) => entry.id === report.model);
@@ -374,12 +380,12 @@ export function createComposerControls(React) {
       usage ? h(React.Fragment, null,
         h('dl', null,
           h('dt', null, '数据来源'), h('dd', null, (earlierUsage ? '较早轮次的 ' : '当前轮次的 ') + source + ' 报告'),
-          h('dt', null, '已用'), h('dd', null, `${numbers.format(usage.usedTokens)} tokens`),
+          h('dt', null, contextMetric(usage)), h('dd', null, `${numbers.format(usage.usedTokens)} tokens`),
           h('dt', null, '上下文窗口'), h('dd', null, usage.contextWindow === null ? source + ' 尚未报告' : `${numbers.format(usage.contextWindow)} tokens`),
-          percent ? h(React.Fragment, null, h('dt', null, '占用比例'), h('dd', null, percent)) : null,
-          usageModel ? h(React.Fragment, null, h('dt', null, '报告模型'), h('dd', null, usageModel)) : null),
+          percent ? h(React.Fragment, null, h('dt', null, usage.kind === 'request_input' ? '输入占窗口比例' : '占用比例'), h('dd', null, percent)) : null,
+          !usage.kind && usageModel ? h(React.Fragment, null, h('dt', null, '报告模型'), h('dd', null, usageModel)) : null),
         percent ? h('progress', {
-          'aria-label': '上下文占用', max: usage.contextWindow, value: Math.min(usage.usedTokens, usage.contextWindow),
+          'aria-label': usage.kind === 'request_input' ? '输入占窗口比例' : '上下文占用', max: usage.contextWindow, value: Math.min(usage.usedTokens, usage.contextWindow),
           'aria-valuetext': `${numbers.format(usage.usedTokens)} / ${numbers.format(usage.contextWindow)} tokens`,
         }) : null,
         earlierUsage ? h('p', null, '当前轮次尚未报告用量。') : null) : h('p', null, '尚无 ' + source + ' 上下文用量报告。'),
