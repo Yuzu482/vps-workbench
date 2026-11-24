@@ -92,7 +92,7 @@ function createDisclosure(React) {
 export function createConnectionFields(React) {
   const h = React.createElement;
   const Disclosure = createDisclosure(React);
-  return function ConnectionSettings({ form, edit, busy, desktop = false }) {
+  return function ConnectionSettings({ form, edit, busy, desktop = false, connectionProviders }) {
     function field(key) {
       const { label, optional, ...attributes } = fields[key];
       return h('label', { key, className: 'vc-field' }, desktop && key === 'workspace' ? t('工作目录') : t(label), h('input', {
@@ -103,7 +103,10 @@ export function createConnectionFields(React) {
     return h(React.Fragment, null,
       h('section', { className: 'vc-settings-group' }, h('h4', null, t('服务器')),
         h('div', { className: 'vc-settings-address' }, field('host'), field('port')),
-        field('user'), desktop ? null : field('workspace')),
+        field('user'), desktop ? null : field('workspace'),
+        connectionProviders?.length ? h('label', { className: 'vc-field' }, t('连接默认执行端'),
+          h('select', { value: form.provider, disabled: busy, onChange: (event) => edit('provider', event.target.value) },
+            ...connectionProviders.map(({ id, label }) => h('option', { key: id, value: id }, t(label))))) : null),
       desktop ? h('section', { className: 'vc-settings-group' }, h('h4', null, t('VPS 工作区')), field('workspace')) : null,
       h('section', { className: 'vc-settings-group' }, h('h4', null, t('SSH 验证')),
         field('identityPath'), field('knownHostsPath'),
@@ -330,7 +333,7 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
   return function SettingsDialog({ settings, tab: openTab, visit, scope, setTab, ready, name, tools = noTools, activeTool, savedTools = noTools,
     toolKey, error, busy, close, openSetup,
     saveConnection, saveTools, preferences, updatePreferences, profiles, updateTool, readModels, modelTools, openAccount,
-    remoteEnabled = true, extensionSettings, agentSettings, VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired,
+    remoteEnabled = true, extensionSettings, agentSettings, VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired, connectionProviders,
     navigateLocation, localPanels, language, changeLanguage, settingsLabel = t('VPS 设置'), focusFallback, restoreFocus }) {
     const dialog = React.useRef(null);
     const confirmDialog = React.useRef(null);
@@ -606,14 +609,14 @@ export function createSettingsDialog(React, { hostThemeLabel = '跟随 DSH' } = 
             localPanels?.[tab] ?? null,
             !localPanels && tab === 'connection' ? h(React.Fragment, null,
               VpsConnectionChecks && h('p', { className: 'vc-settings-current', role: 'status' },
-                connectionDirty ? t('连接配置未保存') : !ready ? t('连接尚未保存') :
+                connectionDirty ? t('连接配置未保存') : !ready && settings ? t('连接已保存，待核验') : !ready ? t('连接尚未保存') :
                   name === '本机保存的 VPS' ? t('连接配置已保存') : t('已载入 VPS 预设')),
               pinChanged && !form.hostKeyConfirmed ? h('p', { className: 'vc-feedback', role: 'alert' },
                 t('请重新核对 SSH 主机指纹并保存连接。')) : null,
               VpsConnectionChecks && h(VpsConnectionChecks, { diagnostics: connectionDiagnostics, ready, dirty: connectionDirty,
                 busy: locked, remoteEnabled, provider: form.provider, openAccount: guardedAccount,
                 openTools: () => setTab('tools'), focusField }),
-              h(ConnectionSettings, { form, edit, busy: locked, desktop: grouped })) : null,
+              h(ConnectionSettings, { form, edit, busy: locked, desktop: grouped, connectionProviders })) : null,
             !localPanels && tab === 'tools' ? ready ? h(ToolSettings, {
               tools, configured, setConfigured, profiles, preferences, updateTool, readModels, modelTools, activeTool, busy: locked,
               diagnostics: connectionDiagnostics, scope: origin,

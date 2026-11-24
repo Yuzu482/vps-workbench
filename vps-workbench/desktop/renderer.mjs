@@ -192,7 +192,13 @@ try {
     onThemeReveal: (element, progress) => element.dispatchEvent(
       new CustomEvent('workbench:theme-reveal', { detail: progress })),
   };
-  const Workbench = createWorkbench({ ...workbenchOptions, SetupGuide, setupConnectionKey, VpsConnectionChecks, useVpsConnectionChecks });
+  const Workbench = createWorkbench({ ...workbenchOptions, SetupGuide, setupConnectionKey, VpsConnectionChecks, useVpsConnectionChecks,
+    async saveSetupConnection(value, toolKey, tools) {
+      await native.saveSetupConnection(value, toolKey, tools);
+      values.set(setupConnectionKey, value);
+      values.set(toolKey, tools);
+    },
+  });
   const LocalWorkspace = createLocalWorkspace(React, createWorkbench({ ...workbenchOptions, localSdk: true }));
   const noTerminal = { subscribe: () => () => {}, getSnapshot: () => null };
   function DesktopApp() {

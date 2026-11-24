@@ -20,7 +20,7 @@ import { decodeWorkflowAttachments } from './workflow-attachments.mjs';
 import { readWorkflowArtifacts } from './workflow-artifacts.mjs';
 import { createPreviewLocalSdk } from '../preview/fixtures/local-sdk.mjs';
 import { localBackends } from '../local-sdk/providers.mjs';
-import { readSetupPreset, setupConnectionKey } from './setup-state.mjs';
+import { readSetupPreset, setupConnectionChanges, setupConnectionKey } from './setup-state.mjs';
 import { runSetupTrial } from './setup-trial.mjs';
 import { componentCatalog } from './component-catalog.mjs';
 import { validComponentSelection } from './component-install.mjs';
@@ -347,11 +347,12 @@ export async function startPreview({ localAgents = false, localComponents = fals
     }
     if (method === 'POST' && url === previewPrefix + 'connection' && request.headers.origin === origin) {
       try {
-        const { op, value } = await readPacket(request);
+        const { op, value, toolKey, tools } = await readPacket(request);
         if (op !== 'save-connection') throw new Error('invalid_preview_connection');
         const saved = await readSetupPreset(value, (settings) => fixtures.chat({ op: 'configuration', settings }));
         if (!saved.ok) throw new Error('invalid_preview_connection');
-        await data.setPreference(setupConnectionKey, value);
+        await data.setPreferences(toolKey === undefined ? { [setupConnectionKey]: value } :
+          setupConnectionChanges(value, toolKey, tools));
         return json(response, { ok: true });
       } catch { return json(response, { ok: false, code: 'invalid_preview_connection' }, 400); }
     }

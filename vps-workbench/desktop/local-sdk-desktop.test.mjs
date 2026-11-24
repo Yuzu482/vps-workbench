@@ -207,7 +207,9 @@ test('staged Windows app loads the pinned native files and restores local record
     } finally { await store.close(); }
     assert.equal(calls, 1);
     page = await boot();
-    await page.getByRole('button', { name: '包内历史', exact: true }).click();
+    const historyEntry = page.getByRole('button', { name: '包内历史', exact: true });
+    if (!await historyEntry.isVisible()) await page.getByRole('button', { name: '展开会话侧栏', exact: true }).click();
+    await historyEntry.click();
     await page.getByRole('heading', { name: '重新打开的历史' }).waitFor();
     await browseLocally(page);
     assert.equal((await dispatch({ ...turn, turnId: randomUUID() })).code, 'browse_only');

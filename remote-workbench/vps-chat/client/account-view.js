@@ -208,4 +208,6 @@ export const accountDialogCss = `
     background:var(--vc-stage); color:var(--vc-ink); border:1px solid var(--vc-line); border-radius:5px}
   [data-vps-chat] .vc-account-clipboard small {color:var(--vc-muted)}
   [data-vps-chat] .vc-account-screen {min-height:0; flex:1; overflow:hidden; background:var(--vc-stage); border-radius:8px}
+  /* Keep the local pointer visible even when the remote session replaces its cursor with a blank image. */
+  [data-vps-chat] .vc-account-screen canvas {cursor:default !important}
 `;

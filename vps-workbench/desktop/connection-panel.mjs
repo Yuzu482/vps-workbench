@@ -10,6 +10,23 @@ export const setupAccountActions = {
 export const checkLabels = { waiting: '待检查', checking: '检查中', passed: '已通过', failed: '失败', confirm: '待确认',
   configured: '密钥已配置', confirmed: '已人工确认' };
 
+export function PythonRepair({ busy }) {
+  const choose = window.vpsWorkbench?.chooseVpsPython;
+  const [status, setStatus] = React.useState('');
+  async function pick() {
+    setStatus('checking');
+    try { setStatus((await choose()).status); }
+    catch { setStatus('unavailable'); }
+  }
+  if (!choose) return null;
+  return h('div', { className: 'vc-setup-actions' },
+    h('button', { type: 'button', className: 'vc-button vc-settings-outline',
+      disabled: busy || status === 'checking', onClick: pick }, t('选择本机 Python')),
+    status === 'saved' && h('small', { role: 'status' }, t('Python 已保存。请重新检查连接。')),
+    status === 'invalid' && h('small', { role: 'alert' }, t('请选择 Python 3.11 或更新的 Python 3 解释器。')),
+    status === 'unavailable' && h('small', { role: 'alert' }, t('无法验证或保存该解释器。请检查本机安装。')));
+}
+
 export function ConnectionResult({ id, label, detail, result, children }) {
   const state = result?.state ?? 'waiting';
   return h('li', { className: 'vc-setup-step', 'data-state': state, 'aria-label': t(label) },
@@ -40,9 +57,10 @@ export function useVpsConnectionChecks({ rpc, readList, connection, scope, memor
       try {
         const reply = await rpc('setup-trial', { kind, settings, targetId, sessionId, turnId,
           ...(kind === 'start' && model) }, AbortSignal.timeout(115000));
-        return reply.targetId === targetId && reply.sessionId === sessionId && reply.turnId === turnId ? reply.status : 'unknown';
+        return reply.targetId === targetId && reply.sessionId === sessionId && reply.turnId === turnId ? reply : 'unknown';
       } catch (error) {
-        if (kind === 'start' && ['workbench_browse_only', 'invalid_request'].includes(error.code)) return 'failed';
+        if (kind === 'start' && ['workbench_browse_only', 'invalid_request'].includes(error.code)) return { status: 'failed', code: error.code };
+        if (error.name === 'TimeoutError' || error.cause?.name === 'TimeoutError') return { status: 'unknown', code: 'timeout' };
         throw error;
       }
     },
@@ -118,7 +136,9 @@ export function VpsConnectionChecks({ diagnostics, ready, dirty, busy, remoteEna
     h('ol', { className: 'vc-setup-steps' }, setupChecks.map(([id, label, detail]) => {
       const result = id === 'response' ? trialResult(trial, !dirty && trialTarget) : current?.results[id];
       let repair = null;
-      if (result?.state === 'failed' && id === 'ssh') {
+      if (id === 'ssh' && result?.code === 'vps_python_missing') {
+        repair = h(PythonRepair, { busy });
+      } else if (result?.state === 'failed' && id === 'ssh') {
         const field = result.code === 'setup_workspace_unavailable' ? 'workspace' :
           result.code === 'target_changed' ? 'knownHostsPath' : 'host';
         repair = action('检查 SSH 配置', () => focusField(field), busy);

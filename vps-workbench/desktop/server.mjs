@@ -9,6 +9,7 @@ import { createStandaloneSubscriptionHost, SUBSCRIPTION_PREFIX } from '../termin
 import { accessDenied, defaultAccess, permitsChat, permitsTerminal, withWorkspaceAccess } from './access.mjs';
 import { createProjectMemoryBridge } from './project-memory.mjs';
 import { readSetupPreset, setupConnectionKey } from './setup-state.mjs';
+export { setupConnectionChanges } from './setup-state.mjs';
 import { runSetupTrial } from './setup-trial.mjs';
 import { readLegacyWorkflowRun } from '../workflow-engine/runner.mjs';
 import { workflowRunKey } from '../workflow-engine/state.mjs';
@@ -55,7 +56,7 @@ function hasSession(header, ticket) {
     timingSafeEqual(Buffer.from(values[0]), Buffer.from(ticket));
 }
 
-export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoot, runtimeRoot, pythonPath,
+export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoot, runtimeRoot, pythonPath, resolvePython,
   makeBridge = createBridge, makeSubscriptionHost = createStandaloneSubscriptionHost, access = () => defaultAccess,
   data, onMemoryChanged, onMemoryError, localStateRoot, localApiKey, localAgentOptions, localCredentials,
   componentRoot, componentMode = 'bundled', makeComponentInstaller = createComponentInstaller, personalClaudeSubscription = false,
@@ -179,7 +180,7 @@ export async function startWorkbenchServer({ webRoot, workbenchRoot, terminalRoo
     for (const { workbench } of local.values()) workbench.dispose();
     await Promise.allSettled([...local.values()].map(({ service }) => service.close()));
   }
-  const bridgeOptions = { pythonPath, executable: join(runtimeRoot, 'DshVpsChatBridge.exe'),
+  const bridgeOptions = { pythonPath, resolvePython, executable: join(runtimeRoot, 'DshVpsChatBridge.exe'),
     compatibilityDirectory: join(runtimeRoot, 'compat'), useCurrentAntigravity: true, readRoute };
   const backend = makeBridge({ ...bridgeOptions, root: workbenchRoot });
   const chat = data ? createProjectMemoryBridge({ data, backend, access, onChange: onMemoryChanged, onError: onMemoryError,

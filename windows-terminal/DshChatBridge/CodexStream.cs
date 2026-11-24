@@ -271,7 +271,7 @@ internal static class CodexStream
         var root = packet.RootElement;
         string? remoteState = BridgeProtocol.Text(root, "state");
         if (remoteState == "launch_failed")
-            return new(Failed(prior), null);
+            return new(Failed(prior with { FailureCode = "launch_failed", ExitCode = null }), null);
         if (remoteState is not ("pending" or "running" or "finished")) return Unknown();
 
         bool stopping = root.TryGetProperty("stop_requested", out var stop) && stop.ValueKind == JsonValueKind.True;
@@ -316,6 +316,18 @@ internal static class CodexStream
         if (!root.TryGetProperty("exit_code", out var code) || code.ValueKind != JsonValueKind.Number || !code.TryGetInt32(out int exit))
             return Unknown();
         string? reason = BridgeProtocol.Text(stream, "reason");
+        if (outcome == "failed" && exit != 0)
+        {
+            string failure = reason switch
+            {
+                "oauth_org_not_allowed" or "sdk_setup" when provider == "claude-sdk" => reason,
+                "egress" => reason,
+                "agy_auth" or "agy_setup" or "agy_acp" or "agy_options" when provider == "antigravity" => reason,
+                "mcp_setup" => reason,
+                _ => "remote_exit"
+            };
+            current = current with { FailureCode = failure, ExitCode = exit };
+        }
         return outcome switch
         {
             "complete" when exit == 0 && thread.HasValue => new(current with { State = "complete" }, thread),

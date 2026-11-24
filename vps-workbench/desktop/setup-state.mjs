@@ -1,6 +1,13 @@
 import { readModelCatalog } from '../../remote-workbench/vps-chat/client/model-catalog.js';
 
 export const setupConnectionKey = 'dsh-vps-chat:setup-connection:v1';
+export function setupConnectionChanges(value, toolKey, tools) {
+  if (typeof value !== 'string' || typeof tools !== 'string' || !/^dsh-vps-chat-tools:v1:[a-f0-9]{64}$/.test(toolKey)) {
+    throw new Error('invalid_connection_preferences');
+  }
+  return { [setupConnectionKey]: value, [toolKey]: tools };
+}
+
 export const setupChecks = [
   ['ssh', 'SSH 连接与主机指纹', '核对主机指纹、SSH 登录和VPS 工作目录。'],
   ['egress', '预期 VPS 出口', '核对 IPv4、已配置的 IPv6 和执行端的服务路由。'],

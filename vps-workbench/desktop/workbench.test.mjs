@@ -15,7 +15,8 @@ import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
 import { importWorkbenchSnapshot } from './migrate.mjs';
 import { startWorkbenchServer } from './server.mjs';
 import { createSetupExample, setupConnectionKey, setupExampleTask } from './setup-state.mjs';
-import { trialPrompt, trialState } from './setup-trial.mjs';
+import { createBridge } from '../../remote-workbench/vps-chat/host/index.js';
+import { runSetupTrial, trialPrompt, trialState } from './setup-trial.mjs';
 import { createStreamingMarkdownParser, stabilizeStreamingRecord } from './streaming-render.mjs';
 import {
   buildDesignContext, designStyleLevels, maxDesignContextText, readDesignProject, saveDesignProject, setDesignBoard,
@@ -29,6 +30,52 @@ async function fixture(t) {
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
+
+test('the desktop bridge distinguishes a missing Python interpreter from a missing helper', async (t) => {
+  const root = await fixture(t);
+  const executable = join(root, 'bridge.exe');
+  const python = join(root, 'python.exe');
+  const bridge = createBridge({ root, executable, resolvePython: () => python });
+  t.after(() => bridge.dispose());
+  const check = { op: 'setup-check', settings: { provider: 'codex' } };
+  assert.equal((await bridge.request(check)).code, 'bridge_not_ready');
+  await writeFile(executable, '');
+  assert.equal((await bridge.request(check)).code, 'vps_python_missing');
+  const shared = createBridge({ root, executable, pythonPath: python });
+  t.after(() => shared.dispose());
+  assert.equal((await shared.request(check)).code, 'bridge_not_ready');
+});
+
+test('setup trial reports bounded diagnostics from the original receipt without replaying', async () => {
+  const request = { kind: 'inspect', settings: { provider: 'claude-sdk' }, targetId: 'a'.repeat(64),
+    sessionId: randomUUID(), turnId: randomUUID() };
+  const calls = [];
+  const bridge = { async request({ op, sessionId }) {
+    calls.push(op);
+    return { ok: true, session: { id: sessionId, turns: [{ id: request.turnId, prompt: trialPrompt,
+      state: 'failed', failureCode: 'oauth_org_not_allowed', exitCode: 42, stderr: 'fixture credential' }] } };
+  } };
+  const result = await runSetupTrial(request, bridge, () => true);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.code, 'oauth_org_not_allowed');
+  assert.equal(result.exitCode, 42);
+  assert.equal(JSON.stringify(result).includes('fixture credential'), false);
+  assert.deepEqual(calls, ['get']);
+  const unrelated = await runSetupTrial({ ...request, turnId: randomUUID() }, bridge, () => true);
+  assert.equal(unrelated.status, 'unknown');
+  assert.equal(unrelated.code, undefined);
+  assert.deepEqual(calls, ['get', 'get']);
+  const timedOut = await runSetupTrial({ ...request, kind: 'start' }, {
+    async request(packet, options) {
+      assert.equal(packet.op, 'send');
+      assert.equal(options.reportTimeout, true);
+      return { ok: false, code: 'timeout' };
+    },
+  }, () => true);
+  assert.equal(timedOut.status, 'unknown');
+  assert.equal(timedOut.code, 'timeout');
+  assert.equal(timedOut.turnId, request.turnId);
+});
 
 test('design brief and style persist in their own conversation and apply only to design workflow', (t) => {
   const stored = new Map([['design-one', JSON.stringify({ system: '青色组品牌', references: '一次性截图说明' })]]);
@@ -334,6 +381,20 @@ test('recovers the latest committed preferences and projects and preserves corru
     assert.equal(await readFile(join(root, name), 'utf8'), await readFile(join(root, name + '.bak'), 'utf8'));
   }
   assert.deepEqual((await openAppData(root)).notices(), []);
+});
+
+test('recovers the saved VPS route and tool selection from the same preferences backup', async (t) => {
+  const root = await fixture(t);
+  const { preset } = createPreviewFixtures().chat({ op: 'preset' });
+  const binding = JSON.stringify({ settings: preset.settings, targetId: preset.targetId });
+  const toolKey = 'dsh-vps-chat-tools:v1:' + 'f'.repeat(64);
+  const main = join(root, 'preferences.json');
+  await writeFile(main, '{"broken":');
+  await writeFile(main + '.bak', JSON.stringify({ [setupConnectionKey]: binding, [toolKey]: '["codex"]' }));
+  const restored = await openAppData(root);
+  assert.equal(restored.preference(setupConnectionKey), binding);
+  assert.equal(restored.preference(toolKey), '["codex"]');
+  assert.deepEqual(restored.notices(), ['已从本机备份恢复设置。']);
 });
 
 test('keeps a corrupt primary intact when no backup can be verified', async (t) => {

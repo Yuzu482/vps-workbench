@@ -15,6 +15,81 @@ const { version } = require('../package.json');
 const executable = resolve(process.env.VPS_WORKBENCH_TEST_EXE ||
   `dist/VPS-Workbench-${version}-win-x64/VPS Workbench.exe`);
 
+test('the desktop can select and persist Python when the default installation path is missing', {
+  skip: !process.env.VPS_WORKBENCH_TEST_PYTHON, timeout: 45_000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'vps-python-desktop-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const preferencesFile = join(root, 'preferences.json');
+  const localAppData = join(root, 'local');
+  const fixture = createPreviewFixtures();
+  const { preset } = fixture.chat({ op: 'preset' });
+  // The missing pins make an actual SSH attempt impossible after the local Python preflight passes.
+  const settingsFixture = { ...preset.settings, identityPath: join(root, 'absent-key'), knownHostsPath: join(root, 'absent-known-hosts') };
+  const connection = fixture.chat({ op: 'configuration', settings: settingsFixture });
+  const savedPreset = { ...connection, settings: settingsFixture, name: '本机保存的 VPS' };
+  await mkdir(localAppData);
+  await writeFile(preferencesFile, JSON.stringify({
+    'dsh-vps-chat:component-welcome:v1': 'seen',
+    [setupConnectionKey]: JSON.stringify({ settings: settingsFixture, targetId: connection.targetId }),
+  }));
+  let app;
+  async function open() {
+    app = await _electron.launch({ executablePath: executable, cwd: root, timeout: 15_000,
+      env: { ...process.env, APPDATA: localAppData, LOCALAPPDATA: localAppData,
+        VPS_WORKBENCH_DATA_DIR: root, VPS_WORKBENCH_PYTHON: '' } });
+    const page = await app.firstWindow({ timeout: 10_000 });
+    page.setDefaultTimeout(10_000);
+
+    const selection = process.env.VPS_WORKBENCH_TEST_PYTHON;
+    await page.waitForURL(/^http:\/\/127\.0\.0\.1:\d+\/$/u, { waitUntil: 'domcontentloaded' });
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] });
+    }, selection);
+    await page.route('**/dsh-vps-chat/api/rpc', (route) => {
+      const body = route.request().postDataJSON();
+      if (body?.op === 'setup-check' && body.kind === 'ssh') return route.continue();
+      if (body?.op === 'preset') return route.fulfill({ json: { ok: true, preset: savedPreset } });
+      return route.fulfill({ json: fixture.chat(body) });
+    });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: '设置', exact: true }).click();
+    const settings = page.getByRole('dialog', { name: '设置', exact: true });
+    await settings.getByRole('button', { name: '连接', exact: true }).click();
+    return { page, settings };
+  }
+  async function close() {
+    if (!app) return;
+    const current = app;
+    app = null;
+    const timer = setTimeout(() => current.process().kill(), 5000);
+    try { await current.close(); }
+    finally { clearTimeout(timer); }
+  }
+  try {
+    const { settings } = await open();
+    await settings.getByRole('button', { name: '测试连接', exact: true }).click();
+    await settings.getByRole('alert').filter({ hasText: '本机找不到 Python' }).waitFor();
+
+    await settings.getByRole('button', { name: '选择本机 Python', exact: true }).click();
+    await settings.getByText('Python 已保存。请重新检查连接。', { exact: true }).waitFor();
+    const saved = JSON.parse(await readFile(preferencesFile, 'utf8'));
+    assert.equal(saved['dsh-vps-chat:windows-python:v1'].toLowerCase(), process.env.VPS_WORKBENCH_TEST_PYTHON.toLowerCase());
+    assert.equal(JSON.parse(saved[setupConnectionKey]).targetId, connection.targetId);
+    await close();
+
+    const restarted = await open();
+    const response = restarted.page.waitForResponse((reply) => reply.url().endsWith('/dsh-vps-chat/api/rpc') &&
+      reply.request().postDataJSON()?.op === 'setup-check');
+    await restarted.settings.getByRole('button', { name: '测试连接', exact: true }).click();
+    const check = await (await response).json();
+    assert.equal(check.code, 'invalid_settings');
+    assert.equal(await restarted.settings.getByRole('button', { name: '选择本机 Python', exact: true }).count(), 0);
+  } finally {
+    await close();
+  }
+});
+
 test('a fresh desktop connection diagnoses each setup step and runs the sample on the checked VPS route', { timeout: 65_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'vps-setup-desktop-'));
   const fixture = createPreviewFixtures();

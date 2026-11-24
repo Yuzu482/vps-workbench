@@ -286,6 +286,7 @@ export function createBridge({
   root,
   pythonPath = join(process.env.LOCALAPPDATA ?? '', 'Programs/Python/Python311/python.exe'),
   executable = join(helperDirectory, 'DshVpsChatBridge.exe'),
+  resolvePython,
   compatibilityDirectory,
   useCurrentAntigravity = false,
   readRoute = () => readAccountRoute(root, true),
@@ -293,9 +294,10 @@ export function createBridge({
   let disposed = false;
   let active = 0;
   return {
-    async request(body, { current = false, pinnedRelay } = {}) {
-      if (disposed || typeof root !== 'string' || !isAbsolute(root) ||
-          (body.op !== 'configuration' && (!isAbsolute(pythonPath) || !existsSync(pythonPath)))) return notReady;
+    async request(body, { current = false, pinnedRelay, reportTimeout = false } = {}) {
+      if (disposed || typeof root !== 'string' || !isAbsolute(root)) return notReady;
+      const python = resolvePython?.() || pythonPath;
+      if (!resolvePython && body.op !== 'configuration' && (!isAbsolute(python) || !existsSync(python))) return notReady;
       const provider = body.settings?.provider;
       if (['configuration', 'setup-check', 'setup-backend', 'workflow-artifacts', 'approval'].includes(body.op) ||
           (provider === 'antigravity' && useCurrentAntigravity)) current = true;
@@ -325,7 +327,11 @@ export function createBridge({
       const helper = useCompatibility
         ? join(compatibilityDirectory, variant, 'DshVpsChatBridge.exe')
         : executable;
-      if (!existsSync(helper)) return notReady;
+      if (!existsSync(helper)) return resolvePython
+        ? { ...notReady, message: '本机 VPS 桥接组件缺失。请修复工作台安装。' } : notReady;
+      if (!localOnly && (!isAbsolute(python) || !existsSync(python))) return resolvePython
+        ? { ok: false, code: 'vps_python_missing', message: '本机找不到 Python 3.11 或更新的 Python 3。请选择已安装的 python.exe 后重试。' }
+        : notReady;
       if (provider === 'claude-sdk' &&
           !existsSync(join(dirname(helper), 'dsh-claude-sdk-worker.mjs'))) {
         return { ...notReady, message: '当前插件包未包含 Claude SDK 执行组件。' };
@@ -345,7 +351,7 @@ export function createBridge({
         try {
           child = spawn(helper, [root], {
             cwd: dirname(helper), shell: false, windowsHide: true,
-            env: { ...windowsEnvironment(pythonPath), ...relay }, stdio: ['pipe', 'pipe', 'ignore'],
+            env: { ...windowsEnvironment(python), ...relay }, stdio: ['pipe', 'pipe', 'ignore'],
           });
         } catch {
           active--;
@@ -355,7 +361,7 @@ export function createBridge({
         let size = 0;
         let chunks = [];
         let stdinFailed = false;
-        const timer = setTimeout(() => resolve(uncertain), 65_000);
+        const timer = setTimeout(() => resolve(reportTimeout ? { ...uncertain, code: 'timeout' } : uncertain), 65_000);
         timer.unref();
         child.stdout.on('data', chunk => {
           size += chunk.length;

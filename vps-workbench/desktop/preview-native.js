@@ -98,6 +98,14 @@
       await fetch('/__preview/local-components', { method: 'POST',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'cancel' }) });
     },
+    async saveSetupConnection(value, toolKey, tools) {
+      const response = await fetch('/__preview/connection', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ op: 'save-connection', value, toolKey, tools }) });
+      if (!response.ok) throw new Error('preview_connection_unavailable');
+      state.preferences['dsh-vps-chat:setup-connection:v1'] = value;
+      state.preferences[toolKey] = tools;
+      save();
+    },
     async setPreference(name, value) {
       if (name === 'dsh-vps-chat:workflows:v1') {
         const result = await mixedWorkflow({ op: 'save-definitions', value });

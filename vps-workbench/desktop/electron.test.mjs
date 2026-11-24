@@ -201,11 +201,12 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await chooser.press('ArrowDown');
       const palette = page.getByRole('listbox', { name: '已配置的 VPS 执行端', exact: true });
       await palette.waitFor();
-      assert.ok(await palette.evaluate((element) => {
-        const box = element.getBoundingClientRect();
-        const trigger = element.previousElementSibling.getBoundingClientRect();
-        return box.bottom < trigger.top && box.left >= 0 && box.right <= innerWidth;
-      }));
+      const menu = page.getByRole('dialog', { name: '执行端与订阅额度', exact: true });
+      const menuBounds = await menu.boundingBox();
+      const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+      assert.ok(menuBounds.x >= 0 && menuBounds.x + menuBounds.width <= viewport.width);
+      assert.ok(menuBounds.y >= 0 && menuBounds.y + menuBounds.height <= viewport.height);
+      assert.equal(await palette.getByRole('option').first().getAttribute('aria-selected'), 'true');
       await page.keyboard.press('Escape');
       await palette.waitFor({ state: 'hidden' });
       assert.equal(await chooser.evaluate((element) => element === document.activeElement), true);
@@ -241,7 +242,8 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
     await appMenu.focus();
     await page.keyboard.press('ArrowDown');
     const importItem = page.getByRole('menuitem', { name: '导入 DSH 对话数据…', exact: true });
-    assert.equal(await importItem.evaluate((item) => item === document.activeElement), true);
+    const firstFileItem = legacyBaseline ? importItem : page.getByRole('menuitem', { name: '打开对话链接…', exact: true });
+    assert.equal(await firstFileItem.evaluate((item) => item === document.activeElement), true);
     await page.keyboard.press('End');
     assert.equal(await page.getByRole('menuitem', { name: /退出工作台/ })
       .evaluate((item) => item === document.activeElement), true);
@@ -285,9 +287,9 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
     const final = ['## 独立对话测试已返回', '', fence + 'js', code, fence].join('\n');
     const designs = ['独立海报画板', '第二张海报画板'].map((title) =>
       [fence + 'html', `<!doctype html><html><body><h1>${title}</h1></body></html>`, fence].join('\n')).join('\n\n');
-    const variant = [fence + 'html', '<!doctype html><html><title>青色变体</title><body><h1>青色变体</h1></body></html>', fence].join('\n');
+    const variant = [fence + 'html', '<!doctype html><html><title>青色变体</title><body><h1 id="variant-title">青色变体</h1></body></html>', fence].join('\n');
     const forkBoard = [fence + 'html', '<title>红色分支</title><h1>红色分支</h1>', fence].join('\n');
-    const updatedBoard = [fence + 'html', '<title>青色后续</title><h1>青色后续</h1>', fence].join('\n');
+    const updatedBoard = [fence + 'html', '<title>青色后续</title><h1 id="variant-title">青色后续</h1>', fence].join('\n');
     const unusableBoard = [fence + 'html', '<html><head><title>空稿</title></head><body></body></html>', fence].join('\n');
     let finishVariant = false;
     function reply(packet, text, state) {
@@ -619,11 +621,11 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       const materials = page.getByRole('dialog', { name: '设计资料', exact: true });
       await materials.getByLabel('目标与使用者', { exact: true }).fill('让新玩家能快速找到蓝色购买入口');
       await materials.getByLabel('画板与关键状态', { exact: true }).fill('首页和购买确认');
-      await materials.getByRole('checkbox', { name: '后续设计轮次附带简报', exact: true }).check();
+      await materials.getByRole('switch', { name: '后续设计轮次附带简报', exact: true }).check();
       await materials.getByRole('textbox', { name: '设计系统', exact: true }).fill('购买入口用品牌青色');
-      await materials.getByRole('checkbox', { name: '后续设计轮次应用设计系统', exact: true }).check();
+      await materials.getByRole('switch', { name: '后续设计轮次应用设计系统', exact: true }).check();
       await materials.getByRole('textbox', { name: '文字参考', exact: true }).fill('只用于首轮的纸样参考');
-      await materials.getByRole('checkbox', { name: '参考资料', exact: true }).check();
+      await materials.getByRole('switch', { name: '参考资料', exact: true }).check();
       await materials.getByRole('button', { name: '完成', exact: true }).click();
       await materials.waitFor({ state: 'hidden' });
     }
@@ -1036,9 +1038,9 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await revision(after[4]).click({ button: 'right' });
       await versionMenu.getByRole('menuitem', { name: '对比来源版本', exact: true }).click();
       const comparison = page.getByRole('dialog', { name: '对比来源版本', exact: true });
-      await comparison.frameLocator('iframe[title="来源画板预览"]')
+      await comparison.frameLocator('iframe[title="父版画板预览"]')
         .getByRole('heading', { name: '青色变体', exact: true }).waitFor();
-      await comparison.frameLocator('iframe[title="当前画板预览"]')
+      await comparison.frameLocator('iframe[title="子版画板预览"]')
         .getByRole('heading', { name: '青色后续', exact: true }).waitFor();
       await comparison.getByRole('button', { name: '完成', exact: true }).click();
       await comparison.waitFor({ state: 'hidden' });
@@ -1078,9 +1080,11 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       await page.getByRole('button', { name: '返回设计对话', exact: true }).click();
 
       await page.getByRole('combobox', { name: '归入本地项目', exact: true }).selectOption(localState.projects()[0].workspaceId);
+      await openHistory();
       const folder = sidebar.getByRole('group', { name: '测试美术项目', exact: true });
-      await folder.getByRole('button', { name: '测试独立画布，设计会话', exact: true }).waitFor();
       const folderTrigger = sidebar.getByRole('button', { name: '测试美术项目', exact: true });
+      if (await folderTrigger.getAttribute('aria-expanded') !== 'true') await folderTrigger.click();
+      await folder.getByRole('button', { name: '测试独立画布，设计会话', exact: true }).waitFor();
       await folderTrigger.click();
       await folder.waitFor({ state: 'hidden' });
       await folderTrigger.click();
@@ -1402,7 +1406,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       assert.ok(frames.some((color) => color !== darkColors.borderColor && color !== subscriptionColors.borderColor),
         JSON.stringify(frames));
     }
-    assert.equal(await titleBar.getByRole('button', { name: /会话侧栏/ }).isDisabled(), true);
+    assert.equal(await titleBar.getByRole('button', { name: /会话侧栏/ }).isDisabled(), legacyBaseline);
     await desktop.close();
     desktop = undefined;
     const stored = JSON.parse(await readFile(join(browserData, 'preferences.json'), 'utf8'));

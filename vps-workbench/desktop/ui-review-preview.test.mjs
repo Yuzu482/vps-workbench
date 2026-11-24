@@ -9,6 +9,7 @@ import { agentPresetKey, applyAgentPresetChange } from '../agent-presets/state.m
 import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
 import { designExportMenu } from '../../remote-workbench/vps-chat/client/design-export-menu.js';
 import { setupConnectionKey } from './setup-state.mjs';
+import { readToolPreferences } from '../../remote-workbench/vps-chat/client/tool-preferences.js';
 import { extensionPreferenceKey, readExtensions } from '../extensions/state.mjs';
 import { conversationLink, parseConversationLink, readQuotedPrompt } from '../../remote-workbench/vps-chat/client/chat-reference.js';
 
@@ -382,6 +383,62 @@ async function openVpsSetup(page) {
   await page.getByRole('button', { name: '接入向导', exact: true }).click();
   return page.getByRole('dialog', { name: 'VPS 接入向导', exact: true });
 }
+
+test('restarts retain the saved SSH form even when the bridge is unavailable', { timeout: 30_000 }, async (t) => {
+  const { preset } = createPreviewFixtures().chat({ op: 'preset' });
+  const page = await openPreview(t, { seed(state) {
+    state.preferences[setupConnectionKey] = JSON.stringify({ settings: preset.settings, targetId: preset.targetId });
+  } });
+  await page.route('**/dsh-vps-chat/api/rpc', (route) => {
+    const { op } = route.request().postDataJSON();
+    return ['preset', 'configuration'].includes(op) ? route.fulfill({ json: {
+      ok: false, code: 'bridge_not_ready', message: 'fixture bridge unavailable',
+    } }) : route.continue();
+  });
+  await page.reload();
+  await page.getByText('已保留保存的 VPS 配置。连接暂未核验。', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await settings.getByRole('button', { name: '连接', exact: true }).click();
+  await settings.getByText('连接已保存，待核验', { exact: true }).waitFor();
+  assert.equal(await settings.getByLabel('VPS 主机', { exact: true }).inputValue(), preset.settings.host);
+  assert.equal(await settings.getByLabel('SSH 用户名', { exact: true }).inputValue(), preset.settings.user);
+  assert.equal(await settings.getByLabel('工作目录', { exact: true }).inputValue(), preset.settings.workspace);
+  assert.equal(await settings.getByRole('button', { name: '测试连接', exact: true }).isDisabled(), true);
+});
+
+test('the VPS guide persists the explicitly enabled provider on an existing connection', { timeout: 30_000 }, async (t) => {
+  const { preset } = createPreviewFixtures().chat({ op: 'preset' });
+  const { key } = await readToolPreferences(preset.settings, ['codex', 'claude-sdk'], () => null);
+  const page = await openPreview(t, { seed(state) { state.preferences[key] = '["codex"]'; } });
+  const guide = await openVpsSetup(page);
+  await guide.locator('input[type=radio][value="claude-sdk"]').check();
+  const check = guide.getByRole('button', { name: /^(开始检查|重新检查)$/u });
+  await check.click();
+  const enable = guide.getByRole('button', { name: '启用此执行端', exact: true });
+  await enable.click();
+  await guide.getByText('执行端已启用。请重新检查 VPS 登录。', { exact: true }).waitFor();
+  let rejectSave = true;
+  await page.route('**/__preview/connection', (route) => rejectSave ? route.fulfill({ status: 500 }) : route.continue());
+  await check.click();
+  await guide.getByRole('alert').filter({ hasText: '连接与执行端设置未能保存到本机' }).waitFor();
+  assert.equal(await page.evaluate(({ storage, key }) => JSON.parse(sessionStorage.getItem(storage))?.preferences?.[key],
+    { storage: previewStorageKey, key: setupConnectionKey }), undefined);
+  rejectSave = false;
+  await check.click();
+  await page.waitForFunction(({ storage, key }) => {
+    const preferences = JSON.parse(sessionStorage.getItem(storage))?.preferences;
+    return JSON.parse(preferences?.[key] || 'null')?.settings.provider === 'claude-sdk' &&
+      Object.entries(preferences).some(([name, value]) => name.startsWith('dsh-vps-chat-tools:v1:') &&
+        JSON.parse(value).includes('claude-sdk'));
+  }, { storage: previewStorageKey, key: setupConnectionKey });
+  await page.reload();
+  await page.getByText('本机保存的 VPS · VPS 已配置', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '设置', exact: true });
+  await settings.getByRole('button', { name: '连接', exact: true }).click();
+  assert.equal(await settings.getByRole('combobox', { name: /连接默认执行端/u }).inputValue(), 'claude-sdk');
+});
 
 test('VPS backend probe is automatic and a lost install reply resumes the original receipt after reload', { timeout: 35_000 }, async (t) => {
   const page = await openPreview(t, { viewport: { width: 420, height: 640 },
@@ -2358,7 +2415,7 @@ test('VPS OAuth clipboard transfers only on request and the cursor has a fallbac
   assert.deepEqual(attempts, ['claude-login', 'claude-login', 'claude-api-key']);
 });
 
-test('the bundled noVNC client renders a visible fallback for a zero-size remote cursor', { timeout: 30_000 }, async (t) => {
+test('the bundled noVNC client keeps a local cursor after reopening with a zero-size remote cursor', { timeout: 30_000 }, async (t) => {
   const { build } = await import('esbuild');
   const { fileURLToPath } = await import('node:url');
   const player = await build({
@@ -2414,16 +2471,15 @@ test('the bundled noVNC client renders a visible fallback for a zero-size remote
     .getByRole('button', { name: '设置', exact: true }).click();
   const settings = page.getByRole('dialog', { name: '设置', exact: true });
   await openSettingsSection(settings, '账号');
-  await settings.getByRole('button', { name: 'VPS 登录 Claude', exact: true }).click();
   const viewer = page.getByRole('dialog', { name: 'Claude Code 订阅登录' });
-  await viewer.getByText('已连接 VPS 账号操作窗口', { exact: true }).waitFor();
-  await viewer.locator('canvas').hover();
-  await page.waitForFunction(() => {
-    const canvas = document.querySelector('.vc-account-screen canvas');
-    if (canvas?.style.cursor.includes('data:image/png')) return true;
-    return [...document.querySelectorAll('body > canvas')].some((cursor) =>
-      cursor.width > 0 && cursor.height > 0 && cursor.style.visibility !== 'hidden' &&
-      cursor.getContext('2d').getImageData(0, 0, cursor.width, cursor.height).data.some((value, index) =>
-        index % 4 === 3 && value > 0));
-  });
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 420, height: 640 }, { width: 1280, height: 720 }]) {
+    await page.setViewportSize(viewport);
+    await settings.getByRole('button', { name: 'VPS 登录 Claude', exact: true }).click();
+    await viewer.getByText('已连接 VPS 账号操作窗口', { exact: true }).waitFor();
+    const canvas = viewer.locator('canvas');
+    await canvas.hover();
+    assert.equal(await canvas.evaluate((element) => getComputedStyle(element).cursor), 'default');
+    await viewer.getByRole('button', { name: '关闭账号窗口' }).click();
+    await viewer.waitFor({ state: 'hidden' });
+  }
 });

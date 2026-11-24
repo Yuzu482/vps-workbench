@@ -1,7 +1,9 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, safeStorage, shell } from 'electron';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { lstat, mkdir, readFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { memoryJournalKey, openAppData } from './data.mjs';
 import { extensionPreferenceKey } from '../extensions/state.mjs';
@@ -10,13 +12,18 @@ import { agentPresetKey, legacyAgentPresetKey } from '../agent-presets/state.mjs
 import { accessPreference, readAccess, validAccess } from './access.mjs';
 import { importWorkbenchSnapshot } from './migrate.mjs';
 import { agyHashVariable, agyPathVariable, canonicalLocalDirectory, claudeKeyVariable, localCredentialVariable,
-  localMemoryJournalKey, openLocalCredentials, parseConversationLink, readLegacyWorkflowRun, searchArtifactsKey, startWorkbenchServer } from './server.mjs';
+  localMemoryJournalKey, openLocalCredentials, parseConversationLink, readLegacyWorkflowRun, searchArtifactsKey,
+  setupConnectionChanges, startWorkbenchServer } from './server.mjs';
 
 const localApiKey = process.env[localCredentialVariable];
 const localAgentOptions = { claudeKey: process.env[claudeKeyVariable], agyPath: process.env[agyPathVariable], agyHash: process.env[agyHashVariable] };
 for (const name of [localCredentialVariable, claudeKeyVariable, agyPathVariable, agyHashVariable]) delete process.env[name];
 
 const directory = dirname(fileURLToPath(import.meta.url));
+const pythonPreference = 'dsh-vps-chat:windows-python:v1';
+const runExecutable = promisify(execFile);
+const validPythonPath = (path) => typeof path === 'string' && isAbsolute(path) &&
+  /^[a-z]:[\\/]/i.test(path) && /^python(?:3(?:\.\d+)?)?\.exe$/i.test(basename(path));
 const linkFromArguments = (args) => args.find((arg) => parseConversationLink(arg)) ?? null;
 let pendingChatLink = linkFromArguments(process.argv.slice(1));
 const title = 'VPS 工作台';
@@ -123,10 +130,14 @@ async function start() {
   }
   data = await openAppData(root, { onBackupFailure: () => publishStatus('本机数据已保存，备份暂时无法更新。') });
   const pythonPath = process.env.VPS_WORKBENCH_PYTHON;
-  if (pythonPath && !isAbsolute(pythonPath)) throw new Error('python_must_be_absolute');
+  const resolvePython = () => {
+    const saved = data.preference(pythonPreference);
+    if (validPythonPath(saved)) return saved;
+    return pythonPath && isAbsolute(pythonPath) ? pythonPath : undefined;
+  };
   runtime = await startWorkbenchServer({
     webRoot: join(directory, 'web'), workbenchRoot, terminalRoot,
-    runtimeRoot: join(directory, '../helper'), pythonPath, access: () => readAccess(data.preference(accessPreference)),
+    runtimeRoot: join(directory, '../helper'), resolvePython, access: () => readAccess(data.preference(accessPreference)),
     localStateRoot: join(root, 'local-sdk'), localApiKey, localAgentOptions,
     componentRoot: join(root, 'components'), componentMode: buildMetadata.componentMode, personalClaudeSubscription,
     localCredentials: openLocalCredentials({ root: join(root, 'local-credentials'), encryption: safeStorage }),
@@ -187,6 +198,7 @@ async function start() {
     const preferences = data.preferences();
     delete preferences[mixedWorkflowHistoryKey];
     delete preferences[searchArtifactsKey];
+    delete preferences[pythonPreference];
     return { preferences, projects: data.projects(), access: readAccess(data.preference(accessPreference)),
       dataNotices: data.notices(), localComponents: runtime.localComponentsStatus() };
   });
@@ -206,12 +218,36 @@ async function start() {
   });
   ipcMain.handle('workbench:set-preference', (event, key, value) => {
     trustedRenderer(event);
-    if ([accessPreference, extensionPreferenceKey, memoryJournalKey, localMemoryJournalKey, workflowKey, agentPresetKey,
+    if ([pythonPreference, accessPreference, extensionPreferenceKey, memoryJournalKey, localMemoryJournalKey, workflowKey, agentPresetKey,
       legacyAgentPresetKey, mixedWorkflowRunKey, mixedWorkflowHistoryKey, searchArtifactsKey].includes(key)) {
       throw new Error('use_dedicated_settings');
     }
     if ([localWorkflowRunKey, workflowRunKey].includes(key)) readLegacyWorkflowRun(value);
     return data.setPreference(key, value);
+  });
+  ipcMain.handle('workbench:save-setup-connection', (event, value, toolKey, tools) => {
+    trustedRenderer(event);
+    return data.setPreferences(setupConnectionChanges(value, toolKey, tools));
+  });
+  ipcMain.handle('workbench:choose-vps-python', async (event) => {
+    trustedRenderer(event);
+    const selection = await dialog.showOpenDialog(window, { title: '选择本机 Python 解释器',
+      properties: ['openFile'], filters: [{ name: 'Python', extensions: ['exe'] }] });
+    if (selection.canceled) return { status: 'canceled' };
+    try {
+      const [selected] = selection.filePaths;
+      if (!validPythonPath(selected)) return { status: 'invalid' };
+      const executable = realpathSync(selected);
+      if (!validPythonPath(executable) || !(await lstat(executable)).isFile()) return { status: 'invalid' };
+      const { stdout } = await runExecutable(executable, ['-I', '-S', '--version'], {
+        cwd: dirname(executable), windowsHide: true, timeout: 5000, maxBuffer: 4096,
+        env: { SystemRoot: process.env.SystemRoot, PATH: join(process.env.SystemRoot || 'C:/Windows', 'System32') },
+      });
+      const match = /^Python 3\.(\d+)\.\d+\s*$/.exec(stdout);
+      if (!match || Number(match[1]) < 11) return { status: 'invalid' };
+      await data.setPreference(pythonPreference, executable);
+      return { status: 'saved' };
+    } catch { return { status: 'unavailable' }; }
   });
   ipcMain.handle('workbench:workflows', (event, change) => {
     trustedRenderer(event);

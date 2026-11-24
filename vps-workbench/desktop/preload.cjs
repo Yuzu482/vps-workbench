@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('vpsWorkbench', {
   bootstrap: () => ipcRenderer.invoke('workbench:bootstrap'),
   mixedWorkflow: (body) => ipcRenderer.invoke('workbench:mixed-workflow', body),
   setPreference: (key, value) => ipcRenderer.invoke('workbench:set-preference', key, value),
+  saveSetupConnection: (value, toolKey, tools) => ipcRenderer.invoke('workbench:save-setup-connection', value, toolKey, tools),
+  chooseVpsPython: () => ipcRenderer.invoke('workbench:choose-vps-python'),
   setAccess: (access) => ipcRenderer.invoke('workbench:set-access', access),
   localSdkStatus: () => ipcRenderer.invoke('workbench:local-sdk-status'),
   localComponentsStatus: () => ipcRenderer.invoke('workbench:local-components-status'),

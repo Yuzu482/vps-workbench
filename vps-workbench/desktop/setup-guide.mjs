@@ -8,7 +8,7 @@ import { automaticMemoryPolicy } from '../extensions/state.mjs';
 import { workflowProviders } from '../workflow-engine/state.mjs';
 import { checkStageResources } from './workflow-stage.mjs';
 import { checkVpsConnection, selectSetupModel, setupChecks } from './setup-state.mjs';
-import { ConnectionResult, setupAccountActions, vpsTrialTarget } from './connection-panel.mjs';
+import { ConnectionResult, PythonRepair, setupAccountActions, vpsTrialTarget } from './connection-panel.mjs';
 import { TrialActions, trialResult } from './connection-trial.mjs';
 import { useVpsBackendSetup, VpsBackendSetup } from './vps-backend-setup.mjs';
 
@@ -30,7 +30,7 @@ const initialDetail = {
 };
 const button = (text, onClick, extra) => h('button', { type: 'button', className: 'vc-button vc-settings-outline', onClick, ...extra }, text);
 
-export function SetupGuide({ connection, connectionName, scope, memoryTargetId, tools, toolIds, toolProfiles, rpc, readList,
+export function SetupGuide({ connection, connectionName, scope, memoryTargetId, unverified, tools, toolIds, toolProfiles, rpc, readList,
   remoteEnabled, accessPending, applyConnection, enableTool, onEnableExecution, extensions, agentPresets,
   selectedProject, openAccount, openSettings, onClose, workflow, trial }) {
   const title = React.useId();
@@ -144,12 +144,13 @@ export function SetupGuide({ connection, connectionName, scope, memoryTargetId, 
     try {
       const settings = editing ? connectionSettings(form, provider) : { ...connection, provider };
       const checked = await checkVpsConnection({ rpc, readList, settings, signal, updateStep,
-        expectedTargetId: !editing && provider === connection?.provider ? scope : undefined,
+        expectedTargetId: !editing && (provider === connection?.provider || unverified) && scope ? scope : undefined,
         expectedMemoryTargetId: !editing ? memoryTargetId : undefined,
         accountConfirmedFor: confirmedTarget,
         afterConfiguration(list) { void backend.detect(settings, list.memoryTargetId ?? (provider === 'codex' ? list.targetId : null)); },
         async prepareAccount(list) {
-          if (!editing) return toolIds.includes(provider);
+          if (!editing && !toolIds.includes(provider)) return false;
+          if (!editing && !unverified && provider === connection.provider) return true;
           await applyConnection(settings, list, signal);
           setEditing(false);
           return true;
@@ -182,8 +183,8 @@ export function SetupGuide({ connection, connectionName, scope, memoryTargetId, 
     try {
       await enableTool(provider);
       updateStep('account', 'waiting', '执行端已启用。请重新检查 VPS 登录。');
-    } catch {
-      updateStep('account', 'failed', '本机未能保存执行端设置。请重试。', 'tool_disabled');
+    } catch (error) {
+      updateStep('account', 'failed', error?.message || '本机未能保存执行端设置。请重试。', 'tool_disabled');
     } finally {
       enableRequest.current = false;
       setEnabling(false);
@@ -234,6 +235,7 @@ export function SetupGuide({ connection, connectionName, scope, memoryTargetId, 
           h('div', { className: 'vc-setup-overview' }, h('h3', null, t('基础接入检查')),
             h('span', { role: 'status' }, ready && passedCount < steps.length ? t('基础预检完成') : t('{passed} / {total} 项通过', { passed: passedCount, total: steps.length }))),
           h('ol', { className: 'vc-setup-steps' }, setupChecks.flatMap(([id, label]) => [stepCard(id, label,
+            id === 'ssh' && results.ssh?.code === 'vps_python_missing' ? h(PythonRepair, { busy: disabled }) : null,
             id === 'ssh' && editing ? h('div', { className: 'vc-setup-fields' }, h(ConnectionFields, {
               form, desktop: true, busy: disabled, edit(key, value) { setForm((previous) => editConnectionForm(previous, key, value)); reset(); },
             }), connectionName && button(t('取消修改'), () => { setEditing(false); reset(); }, { disabled })) : null,

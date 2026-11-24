@@ -32,7 +32,7 @@ import { conversationLink, maxQuoteLength, quotedPrompt, readQuotedPrompt } from
 
 export function createWorkbench({ React, CodeBlock, writeClipboard, subscriptionRequiresRelay = true, hostThemeLabel,
   parseStreamingMarkdown, stabilizeStreamingRecord, sidebarActions = false, ResourceLibrary, onThemeReveal,
-  editText, saveConversationPreference, saveModelParameters,
+  editText, saveConversationPreference, saveSetupConnection, saveModelParameters,
   ExtensionSettings, extensionsForTurn, automaticMemoryPolicy, conversationIsolated, projectMemoryNotes,
   AgentPresetSettings, WorkflowPanel, useWorkflows = () => null, SetupGuide, setupConnectionKey,
   VpsConnectionChecks, useVpsConnectionChecks = () => null, localSdk = false }) {
@@ -304,6 +304,23 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     return error?.code && typeof error.message === 'string' ? error.message : fallback;
   }
 
+  function validSavedVpsSettings(settings) {
+    return settings?.hostKeyConfirmed === true && typeof settings.provider === 'string' &&
+      Object.hasOwn(providers, settings.provider) &&
+      settingFields.every(({ key }) => key === 'port' ? Number.isInteger(settings.port) : typeof settings[key] === 'string');
+  }
+
+  async function recoverSavedVps(toolIds) {
+    if (!setupConnectionKey) return null;
+    try {
+      const { settings, targetId } = JSON.parse(workbenchStorage.getItem(setupConnectionKey)) ?? {};
+      if (!validSavedVpsSettings(settings) || !/^[a-f0-9]{64}$/.test(targetId ?? '')) return null;
+      const tools = await readToolPreferences(settings, toolIds);
+      return { settings, savedTargetId: targetId, name: '本机保存的 VPS',
+        tools: { ...tools, ids: tools.ids ?? [settings.provider] }, profiles: readToolProfiles(tools.key, toolIds) };
+    } catch { return null; }
+  }
+
   function readPreset({ preset }) {
     if (preset === null) return null;
     const { settings, name } = preset ?? {};
@@ -315,9 +332,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       return { name, settings, ...readList(preset) };
     }
     if (typeof name !== 'string' || !name.trim() || name.length > 64 ||
-        settings?.hostKeyConfirmed !== true || typeof settings.provider !== 'string' ||
-        !Object.hasOwn(providers, settings.provider) ||
-        !settingFields.every(({ key }) => key === 'port' ? Number.isInteger(settings.port) : typeof settings[key] === 'string')) {
+        !validSavedVpsSettings(settings)) {
       throw new Error('VPS 预设暂不可用。');
     }
     return { name, settings, ...readList(preset) };
@@ -880,10 +895,16 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           setSavedConfiguration(null);
           activateConnection(preset.settings, preset, preset.name);
         } catch (error) {
+          const saved = !localSdk && await recoverSavedVps(toolIds);
           if (!controller.signal.aborted) {
+            if (saved) {
+              setSavedConfiguration(saved);
+              if (error.code === 'target_changed') setPinConfirmationRequired(true);
+            }
             setFeedback(localSdk ? '无法读取本机配置，请检查设置。' : error.code === 'target_changed'
               ? `VPS 预设的主机指纹需要重新核对。请打开「${settingsLabel}」。`
-              : `无法读取 VPS 预设。请在「${settingsLabel}」中手动配置。`);
+              : saved ? '已保留保存的 VPS 配置。连接暂未核验。' :
+                `无法读取 VPS 预设。请在「${settingsLabel}」中手动配置。`);
           }
         } finally {
           if (!controller.signal.aborted) {
@@ -913,8 +934,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           setSavedConfiguration({ ...preset, tools: { ...tools, ids: tools.ids ?? [preset.settings.provider] },
             profiles: readToolProfiles(tools.key, toolIds) });
         } catch (error) {
+          const saved = await recoverSavedVps(toolIds);
           if (!signal.aborted) {
-            setSavedConfiguration({ tools: { key: '', ids: [] }, profiles: {} });
+            setSavedConfiguration(saved ?? { tools: { key: '', ids: [] }, profiles: {} });
+            if (saved && error.code === 'target_changed') setPinConfirmationRequired(true);
             setSettingsError(errorText(error, 'VPS 配置无法读取。'));
           }
         }
@@ -1551,9 +1574,11 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       const saved = await readToolPreferences(settings, toolIds);
       const ids = toolIds.filter((id) => id === settings.provider || saved.ids?.includes(id));
       signal.throwIfAborted();
-      await saveConversationPreference(saved.key, JSON.stringify(ids));
-      signal.throwIfAborted();
-      await saveConversationPreference(setupConnectionKey, JSON.stringify({ settings, targetId: list.targetId }));
+      try {
+        await saveSetupConnection(JSON.stringify({ settings, targetId: list.targetId }), saved.key, JSON.stringify(ids));
+      } catch {
+        throw Object.assign(new Error('连接与执行端设置未能保存到本机。请检查存储后重试。'), { code: 'setup_connection_write_failed' });
+      }
       signal.throwIfAborted();
       setPinConfirmationRequired(false);
       applySavedConfiguration(settings, list, { ...saved, ids });
@@ -1561,7 +1586,9 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
 
     async function enableSetupTool(id) {
       const ids = toolIds.filter((tool) => tool === id || configuration.tools.ids.includes(tool));
-      if (!await saveTools(ids, configuration.tools.key)) throw new Error('tool_preferences_unavailable');
+      if (providerSwitchLocked) throw new Error('当前会话正在执行。请结束后再启用执行端。');
+      if (!configuration.tools.key || (!configurationReady && !configuration.savedTargetId)) throw new Error('请先保存当前 VPS 的连接配置。');
+      if (!await saveTools(ids, configuration.tools.key)) throw new Error('执行端配置未能保存到本机。请检查存储后重试。');
     }
 
     function activateConnection(settings, { targetId: route, sessions: list, memoryTargetId: memoryRoute }, name = '') {
@@ -1594,10 +1621,11 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           const op = settingsSurface ? 'configuration' : 'list';
           const list = readList(await rpc(op, { settings }, signal));
           signal.throwIfAborted();
-          if (setupConnectionKey && configurationReady && !pinConfirmedAgain) {
+          const priorTarget = configuration.targetId || configuration.savedTargetId;
+          if (setupConnectionKey && priorTarget && !pinConfirmedAgain) {
             const previous = readList(await rpc(op, { settings: configuration.settings }, signal));
             signal.throwIfAborted();
-            if (previous.targetId !== configuration.targetId) {
+            if (previous.targetId !== priorTarget) {
               setPinConfirmationRequired(true);
               throw Object.assign(new Error('SSH 主机指纹已变化。请重新核对并确认后保存。'), { code: 'target_changed' });
             }
@@ -1605,6 +1633,10 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
           const preferences = await readToolPreferences(settings, toolIds);
           signal.throwIfAborted();
           if (setupConnectionKey) {
+            if (settings.provider !== configuration.settings?.provider) {
+              await applySetupConnection(settings, list, signal);
+              return true;
+            }
             await saveConversationPreference(setupConnectionKey, JSON.stringify({ settings, targetId: list.targetId }));
             signal.throwIfAborted();
             setPinConfirmationRequired(false);
@@ -1629,7 +1661,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     }
 
     async function saveTools(ids, key) {
-      if (!key || !configurationReady || providerSwitchLocked || key !== configuration.tools.key) return false;
+      if (!key || (!configurationReady && !configuration.savedTargetId) || providerSwitchLocked || key !== configuration.tools.key) return false;
       const next = toolIds.filter((id) => ids.includes(id));
       setSettingsError('');
       try {
@@ -2768,13 +2800,13 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         } : undefined,
       }) : null,
       showSettingsOverlay(h(SettingsDialog, {
-        scope: configuration.targetId, settings: configuration.settings, visit: settingsView.visit,
+        scope: configuration.targetId || configuration.savedTargetId, settings: configuration.settings, visit: settingsView.visit,
         tab: settingsTab, ready: configurationReady, name: configuration.name, tools, activeTool: visible ? activeTool : undefined,
         savedTools: configuration.tools.ids, toolKey: configuration.tools.key,
         setTab: (tab) => { setSettingsError(''); setSettingsOpen(tab); },
         error: settingsError, busy: providerSwitchLocked || readingConfiguration || (visible && loadingPreset) || local?.registerBusy,
         close: () => setSettingsOpen(false), saveConnection: saveSettings, saveTools,
-        VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired,
+        VpsConnectionChecks, connectionDiagnostics, pinConfirmationRequired, connectionProviders: setupConnectionKey ? chatTools : undefined,
         navigateLocation: settingsSurface?.navigate, settingsLabel, localPanels,
         language: applicationPreferences?.language, changeLanguage: applicationPreferences?.changeLanguage,
         restoreFocus: settingsSurface?.restoreFocus,
@@ -2805,7 +2837,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
         } } : null,
       })),
       SetupGuide && setupOpen ? showSettingsOverlay(h(SetupGuide, {
-        connection: configuration.settings, connectionName: configuration.name, scope: configuration.targetId,
+        connection: configuration.settings, connectionName: configuration.name, scope: configuration.targetId || configuration.savedTargetId,
+        unverified: Boolean(configuration.savedTargetId),
         memoryTargetId: configuration.memoryTargetId, tools: chatTools, toolIds: configuration.tools.ids, toolProfiles: configuration.profiles,
         trial: connectionDiagnostics?.trial,
         rpc, readList, remoteEnabled, accessPending, applyConnection: applySetupConnection, enableTool: enableSetupTool,

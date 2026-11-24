@@ -1,4 +1,5 @@
 import React from 'react';
+import { boundedTrialDiagnostic, trialDiagnostics } from './setup-trial.mjs';
 import { workbenchStorage } from '../../remote-workbench/vps-chat/client/workbench-storage.js';
 
 const h = React.createElement;
@@ -47,12 +48,15 @@ export function useConnectionTrial({ storageKey, savePreference, request }) {
         await save({ target, sessionId: prefix + crypto.randomUUID(), turnId: crypto.randomUUID(), state: 'unknown' });
       }
       const sent = last.current;
-      let state = await request(kind, sent);
-      for (let remaining = 3; state === 'pending' && remaining > 0; remaining--) {
+      const status = (result) => typeof result === 'string' ? result : result?.status;
+      let result = await request(kind, sent);
+      for (let remaining = 3; status(result) === 'pending' && remaining > 0; remaining--) {
         await new Promise((resolve) => setTimeout(resolve, 900));
-        state = await request('inspect', sent);
+        result = await request('inspect', sent);
       }
-      await save({ ...sent, state: states.includes(state) ? state : 'unknown' });
+      const state = status(result);
+      await save({ target: sent.target, sessionId: sent.sessionId, turnId: sent.turnId,
+        state: states.includes(state) ? state : 'unknown', ...boundedTrialDiagnostic(result?.code, result?.exitCode) });
       if (startedIn === generation.current) setFresh(true);
     } catch {
       setError(outstanding(last.current) ? '试跑结果待确认。请查询原回执。' :
@@ -83,10 +87,12 @@ export function trialResult(trial, target) {
   if (!same) return outstanding(trial.receipt)
     ? { state: 'confirm', detail: '上一次试跑待确认。可查询发起试跑时的原回执。' } : null;
   if (trial.busy) return { state: 'checking', detail: '正在检查试跑回执…' };
+  const { code, exitCode } = boundedTrialDiagnostic(trial.receipt.code, trial.receipt.exitCode);
+  const detail = code ? trialDiagnostics[code] + (exitCode ? ` 退出码 ${exitCode}。` : '') : '';
   switch (trial.receipt.state) {
     case 'passed': return trial.fresh ? { state: 'passed', detail: '试跑已收到完整模型回复。' } :
       { state: 'confirm', detail: '上次试跑已收到回复。可重新试跑以确认当前状态。' };
-    case 'failed': return { state: 'failed', detail: '试跑未收到完整回复。请核对账号额度、模型选项和网络。' };
-    default: return { state: 'confirm', detail: '尚未收到完整回复。请查询原回执。' };
+    case 'failed': return { state: 'failed', detail: detail || '原试跑已失败，执行端未提供可核实的错误详情。' };
+    default: return { state: 'confirm', detail: detail || '尚未收到完整回复。请查询原回执。' };
   }
 }

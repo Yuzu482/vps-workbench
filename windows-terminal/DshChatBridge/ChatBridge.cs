@@ -21,7 +21,7 @@ internal sealed record ApprovalNote(Guid Id, string Title, string Detail, string
 internal sealed record TurnOutput(string State, string Reply, Activity[] Activity,
     bool SteerReady = false, SteerObservation[]? Steering = null,
     string? Model = null, string? Effort = null, ContextUsage? ContextUsage = null, ApprovalNote[]? Approvals = null,
-    SubscriptionLimits? SubscriptionLimits = null)
+    SubscriptionLimits? SubscriptionLimits = null, string? FailureCode = null, int? ExitCode = null)
 {
     internal static readonly TurnOutput Unobserved = new("unknown", "", []);
 }
@@ -275,7 +275,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
         return design is null
             ? new { id = turn.TaskId, prompt = turn.Prompt, output.Reply, state, output.Activity,
                 streaming, canStop, canSteer, steering, output.Model, output.Effort, output.ContextUsage, output.SubscriptionLimits,
-                approvals = settings.Provider == "antigravity" && turn == last ? output.Approvals ?? [] : [] }
+                output.FailureCode, output.ExitCode, approvals = settings.Provider == "antigravity" && turn == last ? output.Approvals ?? [] : [] }
             : new { id = turn.TaskId, prompt = turn.Prompt, output.Reply, state, output.Activity,
                 streaming, canStop, canSteer, steering, output.Model, output.Effort, output.ContextUsage, output.SubscriptionLimits,
                 design.ParentTurnId, fork = design.ExplicitBase?.Fork == true, design.Ordinal };
@@ -593,6 +593,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
                 !SameSteering(update.Output.Steering, prior.Steering) || update.Output.Model != prior.Model ||
                  update.Output.Effort != prior.Effort || update.Output.ContextUsage != prior.ContextUsage ||
                  update.Output.SubscriptionLimits != prior.SubscriptionLimits ||
+                 update.Output.FailureCode != prior.FailureCode || update.Output.ExitCode != prior.ExitCode ||
                  !(update.Output.Approvals ?? []).SequenceEqual(prior.Approvals ?? []))
                 SaveOutput(last.TaskId, update.Output);
             return View(record, lineage);
@@ -620,7 +621,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
                 status.ExitCode != 0 ? "failed" : thread.HasValue ? "complete" : "unknown";
             var projection = captured is null ? prior with { State = state } :
                 OutputProjection.Project(settings.Provider, captured, expected, state, allowsThread);
-            SaveOutput(last.TaskId, projection);
+            SaveOutput(last.TaskId, state == "failed" ? projection with { FailureCode = "remote_exit", ExitCode = status.ExitCode } : projection);
             if (thread.HasValue)
             {
                 last.ThreadId = thread;
@@ -630,7 +631,7 @@ internal sealed partial class ChatBridge(string stateRoot, BridgeRequest request
         else
         {
             string state = status.State == "launch_failed" ? "failed" : "unknown";
-            SaveOutput(last.TaskId, prior with { State = state });
+            SaveOutput(last.TaskId, prior with { State = state, FailureCode = state == "failed" ? "launch_failed" : null });
         }
         return View(record, lineage);
     }
