@@ -10,6 +10,7 @@ import { createPreviewFixtures } from '../preview/fixtures/index.mjs';
 import { designExportMenu } from '../../remote-workbench/vps-chat/client/design-export-menu.js';
 import { setupConnectionKey } from './setup-state.mjs';
 import { readToolPreferences } from '../../remote-workbench/vps-chat/client/tool-preferences.js';
+import { currentModelContext } from '../../remote-workbench/vps-chat/client/model-catalog.js';
 import { extensionPreferenceKey, readExtensions } from '../extensions/state.mjs';
 import { conversationLink, parseConversationLink, readQuotedPrompt } from '../../remote-workbench/vps-chat/client/chat-reference.js';
 
@@ -195,6 +196,62 @@ test('subscription rings distinguish exhausted, unavailable and weekly-only obse
   await summary.press('Enter');
   await page.getByRole('region', { name: 'Codex', exact: true })
     .getByRole('group', { name: '每周额度，剩余 0%', exact: true }).getByText('0%', { exact: true }).waitFor();
+});
+
+test('model window prefers matching runtime data or a catalog and otherwise labels published limits', () => {
+  const report = { model: 'gpt-6.2-sol', usageModel: 'gpt-6.2-sol', effort: 'medium',
+    usage: { usedTokens: 10000, contextWindow: 258400 } };
+  const measured = (overrides = {}) => currentModelContext({ provider: 'codex', report, ...overrides });
+  assert.equal(measured().limit, 258400);
+  assert.equal(measured().source, 'runtime');
+  assert.equal(measured().published, 1050000);
+  assert.equal(measured({ selection: { id: 'gpt-5.4-mini' } }).limit, 400000);
+  assert.equal(measured({ selection: { id: 'gpt-5.4-mini' } }).source, 'published');
+  assert.equal(measured({ selection: { id: 'gpt-6.1-sol' } }).limit, 500000);
+  assert.equal(measured({ selection: { id: 'gpt-6.1-sol' } }).source, 'codex-default');
+  assert.equal(measured({ selection: { id: 'gpt-6.2-sol', effort: 'high' } }).source, 'published');
+  assert.equal(measured({ selection: { id: 'custom' }, catalog: { models: [{ id: 'custom', contextWindow: 64000 }] } }).limit, 64000);
+  assert.equal(measured({ provider: 'claude-sdk', selection: { id: 'sonnet' } }).limit, undefined);
+  assert.equal(measured({ provider: 'antigravity', report: { usage: { contextWindow: 64000 } } }).limit, 64000);
+});
+
+test('context tooltip shows the selected model limit before sending and separates older usage', { timeout: 30_000 }, async (t) => {
+  const page = await openPreview(t);
+  const calls = [];
+  await page.route('**/dsh-vps-chat/api/rpc', async (route) => {
+    const { op } = route.request().postDataJSON();
+    calls.push(op);
+    if (op !== 'models') return route.continue();
+    const response = await route.fetch();
+    const json = await response.json();
+    for (const model of json.models) model.contextWindow = model.isDefault ? 64000 : 128000;
+    return route.fulfill({ response, json });
+  });
+  const ring = page.getByRole('img', { name: '上下文用量', exact: true });
+  const tooltip = page.getByRole('tooltip', { name: '上下文用量', exact: true });
+  await ring.hover();
+  await tooltip.getByText('64,000 tokens', { exact: true }).waitFor();
+  await tooltip.getByText('执行端目录', { exact: true }).waitFor();
+  assert.equal(await tooltip.getByRole('progressbar').count(), 0);
+
+  await (await sidebarButton(page, '纸间书店')).click();
+  await (await sidebarButton(page, '纸间书店 · 周末发布清单')).click();
+  await ring.hover();
+  await tooltip.getByText('32,000 tokens', { exact: true }).waitFor();
+  await tooltip.getByText('执行端报告', { exact: true }).waitFor();
+
+  await page.getByRole('button', { name: '模型', exact: true }).click();
+  const modelPanel = page.getByRole('dialog', { name: '模型', exact: true });
+  await modelPanel.getByRole('button', { name: /^切换模型，/ }).click();
+  await modelPanel.getByText('Codex Mini · 示例模型', { exact: true }).click();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await modelPanel.waitFor({ state: 'hidden' });
+  await ring.hover();
+  await tooltip.getByText('128,000 tokens', { exact: true }).waitFor();
+  await tooltip.getByText('32,000 tokens', { exact: true }).waitFor();
+  assert.equal(await ring.locator('.vc-context-meter').evaluate((el) => el.style.getPropertyValue('--vc-used')), '0%');
+  assert.equal(calls.filter((op) => op === 'send').length, 0);
 });
 
 test('context tooltip distinguishes request occupancy from a turn token total', { timeout: 25_000 }, async (t) => {

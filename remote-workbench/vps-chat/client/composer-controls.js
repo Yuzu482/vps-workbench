@@ -2,7 +2,7 @@ import { t } from './interface-language.js';
 import { menuIcon } from './menu-icons.js';
 import { afterPopupMotion } from './menu-motion.js';
 import { createAdvancedModelOptions } from './advanced-model-options.js';
-import { effortName } from './model-catalog.js';
+import { currentModelContext, effortName } from './model-catalog.js';
 
 export { effortName, readModelCatalog, validTurnMetadata } from './model-catalog.js';
 
@@ -287,7 +287,8 @@ export function createComposerControls(React) {
   }
 
   function Toolbar({ panel, open, openMaterials, materialsDisabled, available, mode, report, attached, selection, catalog,
-    wideActions, showModeIcon, accessButton, hasPluginPrompts, templateLabel, memoryMode, historyButton, children, localSdk }) {
+    wideActions, showModeIcon, accessButton, hasPluginPrompts, templateLabel, memoryMode, historyButton, children, localSdk,
+    provider, loadContextCatalog }) {
     const tooltipId = React.useId();
     const tooltipRef = React.useRef(null);
     const dismissTimer = React.useRef(0);
@@ -308,6 +309,7 @@ export function createComposerControls(React) {
       setContextAnchor(anchor);
       const tooltip = tooltipRef.current;
       if (tooltip && !tooltip.matches(':popover-open')) tooltip.showPopover({ source: anchor });
+      if (!current.limit && !catalog?.models && !catalog?.loading && !catalog?.error) void loadContextCatalog?.();
     }
 
     function hideTooltip() {
@@ -323,9 +325,12 @@ export function createComposerControls(React) {
     }
 
     const { usage } = report;
-    const contextTitle = usage
-      ? `${report.earlierUsage ? t('上次上下文用量') : contextMetric(usage)} ${occupancy(usage) ?? `${numbers.format(usage.usedTokens)} tokens`}` : undefined;
-    const used = usage?.contextWindow ? Math.min(100, usage.usedTokens * 100 / usage.contextWindow) : 0;
+    const current = currentModelContext({ provider, selection, catalog, report });
+    const limitLabel = current.source === 'published' ? '上下文窗口上限（公开规格）' : '上下文窗口上限';
+    const contextTitle = current.limit ? `${limitLabel} ${numbers.format(current.limit)} tokens` : undefined;
+    const sameModel = !current.id || report.usageModel === current.id;
+    const used = sameModel && usage?.contextWindow && (!current.limit || current.limit === usage.contextWindow)
+      ? Math.min(100, usage.usedTokens * 100 / usage.contextWindow) : 0;
     const chosen = catalog?.models?.find((entry) => entry.id === selection?.id);
     const reported = catalog?.models?.find((entry) => entry.id === report.model);
     const modeName = mode === 'design' ? t('设计') : t('对话');
@@ -367,23 +372,33 @@ export function createComposerControls(React) {
         children),
       showTooltip ? h(Panel, {
         kind: 'context', tooltip: true, id: tooltipId, anchor: contextAnchor, close: clearTooltip, report, attached, mode, localSdk,
-        surfaceRef: tooltipRef,
+        surfaceRef: tooltipRef, current, catalog, limitLabel,
         onPointerEnter: keepTooltip, onPointerLeave: dismissTooltipSoon,
       }) : null);
   }
 
-  function ContextDetails({ report, attached, design, localSdk }) {
+  function ContextDetails({ report, attached, design, localSdk, current, catalog, limitLabel }) {
     const { usage, usageModel, earlierUsage } = report;
     const percent = occupancy(usage);
     const source = localSdk ? t('本机执行端') : 'VPS';
+    const limitSource = { runtime: '执行端报告', catalog: '执行端目录', published: '厂商公开规格', 'codex-default': 'Codex 公开默认值' }[current.source];
+    const separateWindow = usage?.contextWindow !== current.limit || report.usageModel !== current.id;
     return h(React.Fragment, null,
+      h('dl', null,
+        h('dt', null, '当前模型'), h('dd', null, current.id ?? (current.limit ? '执行端当前模型' : '执行端默认')),
+        h('dt', null, limitLabel), h('dd', null, current.limit ? `${numbers.format(current.limit)} tokens`
+          : catalog?.loading ? '正在读取模型目录…' : '执行端尚未确认'),
+        limitSource ? h(React.Fragment, null, h('dt', null, '上限来源'), h('dd', null, limitSource)) : null,
+        current.published && current.published !== current.limit ? h(React.Fragment, null,
+          h('dt', null, '厂商公开规格'), h('dd', null, `${numbers.format(current.published)} tokens`)) : null),
       usage ? h(React.Fragment, null,
         h('dl', null,
           h('dt', null, '数据来源'), h('dd', null, (earlierUsage ? '较早轮次的 ' : '当前轮次的 ') + source + ' 报告'),
           h('dt', null, contextMetric(usage)), h('dd', null, `${numbers.format(usage.usedTokens)} tokens`),
-          h('dt', null, '上下文窗口'), h('dd', null, usage.contextWindow === null ? source + ' 尚未报告' : `${numbers.format(usage.contextWindow)} tokens`),
+          separateWindow && usage.contextWindow ? h(React.Fragment, null, h('dt', null, '该读数的窗口'),
+            h('dd', null, `${numbers.format(usage.contextWindow)} tokens`)) : null,
           percent ? h(React.Fragment, null, h('dt', null, usage.kind === 'request_input' ? '输入占窗口比例' : '占用比例'), h('dd', null, percent)) : null,
-          !usage.kind && usageModel ? h(React.Fragment, null, h('dt', null, '报告模型'), h('dd', null, usageModel)) : null),
+          !usage.kind && usageModel && usageModel !== current.id ? h(React.Fragment, null, h('dt', null, '报告模型'), h('dd', null, usageModel)) : null),
         percent ? h('progress', {
           'aria-label': usage.kind === 'request_input' ? '输入占窗口比例' : '上下文占用', max: usage.contextWindow, value: Math.min(usage.usedTokens, usage.contextWindow),
           'aria-valuetext': `${numbers.format(usage.usedTokens)} / ${numbers.format(usage.contextWindow)} tokens`,
@@ -547,7 +562,7 @@ export function createComposerControls(React) {
     modelAllowed, catalog, selection, toolDefault, followsTool, chooseModel, retryModels, advanced,
     access, accessProvider, accessBusy, changeAccess, pluginPrompts, insertPluginPrompt, templateLabel,
     memoryIsolated, automaticMemory, projectMemorySuppressed, memoryBusy, memoryStartsNew, changeMemoryMode, openMemorySettings,
-    tooltip = false, id, surfaceRef, onPointerEnter, onPointerLeave, localSdk }) {
+    tooltip = false, id, surfaceRef, onPointerEnter, onPointerLeave, localSdk, current, limitLabel }) {
     const localRef = React.useRef(null);
     const ref = surfaceRef ?? localRef;
     React.useLayoutEffect(() => {
@@ -622,7 +637,7 @@ export function createComposerControls(React) {
     }) : h(React.Fragment, null,
       h('div', { className: 'vc-composer-panel-heading' },
         h('h2', { className: 'vc-menu-label' }, menuIcon(h, kind === 'mode' ? 'effort' : ['plugins', 'memory'].includes(kind) ? 'library' : kind), name), closeButton),
-      tooltip ? h(ContextDetails, { report, attached, design: mode === 'design', localSdk })
+      tooltip ? h(ContextDetails, { report, attached, design: mode === 'design', localSdk, current, catalog, limitLabel })
         : kind === 'access' ? h(AccessChoices, { access, provider: accessProvider, busy: accessBusy, change: changeAccess, localSdk })
           : kind === 'memory' ? h(MemoryChoices, { isolated: memoryIsolated, automatic: automaticMemory,
             projectMemorySuppressed, busy: memoryBusy,
