@@ -118,7 +118,11 @@ export const composerControlsCss = `
     padding:14px; border-radius:14px; box-shadow:var(--vc-shadow); overscroll-behavior:contain;
   }
   [data-vps-chat] .vc-composer-panel.vc-context-tooltip {width:306px; padding:11px 12px}
-  [data-vps-chat] .vc-context-reading {display:block; margin:0 0 7px; font-variant-numeric:tabular-nums}
+  [data-vps-chat] .vc-context-reading {
+    display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 10px;
+    margin:0 0 7px; font-variant-numeric:tabular-nums;
+  }
+  [data-vps-chat] .vc-context-reading > span {color:var(--vc-accent); font-weight:600}
   [data-vps-chat] .vc-settings.vc-composer-panel[data-kind=model] {width:300px; padding:10px 12px}
   [data-vps-chat] .vc-composer-panel-heading {display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:9px}
   [data-vps-chat] .vc-composer-panel::backdrop {background:transparent; pointer-events:none}
@@ -390,19 +394,22 @@ export function createComposerControls(React) {
     const separateWindow = usage?.contextWindow !== current.limit || report.usageModel !== current.id;
     return h(React.Fragment, null,
       usage ? h(React.Fragment, null,
-        reading ? h('strong', { className: 'vc-context-reading' }, reading) : null,
+        reading ? h('div', { className: 'vc-context-reading' }, h('strong', null, reading), h('span', null, percent)) : null,
         h('dl', null,
           h('dt', null, '数据来源'), h('dd', null, (earlierUsage ? '较早轮次的 ' : '当前轮次的 ') + source + ' 报告'),
           h('dt', null, contextMetric(usage)), h('dd', null, `${numbers.format(usage.usedTokens)} tokens`),
           separateWindow && usage.contextWindow ? h(React.Fragment, null, h('dt', null, '该读数的窗口'),
             h('dd', null, `${numbers.format(usage.contextWindow)} tokens`)) : null,
-          percent ? h(React.Fragment, null, h('dt', null, usage.kind === 'request_input' ? '输入占窗口比例' : '占用比例'), h('dd', null, percent)) : null,
+          reading ? h(React.Fragment, null,
+            h('dt', null, usage.kind === 'request_input' ? '扣除最近一次输入后' : '剩余窗口'),
+            h('dd', null, `${numbers.format(Math.max(0, usage.contextWindow - usage.usedTokens))} tokens`)) : null,
           !usage.kind && usageModel && usageModel !== current.id ? h(React.Fragment, null, h('dt', null, '报告模型'), h('dd', null, usageModel)) : null),
         percent ? h('progress', {
           'aria-label': usage.kind === 'request_input' ? '输入占窗口比例' : '上下文占用', max: usage.contextWindow, value: Math.min(usage.usedTokens, usage.contextWindow),
           'aria-valuetext': reading,
         }) : null,
-        earlierUsage ? h('p', null, '当前轮次尚未报告用量。') : null) : h('p', null, '尚无 ' + source + ' 上下文用量报告。'),
+        earlierUsage ? h('p', null, '当前轮次尚未报告用量。') : null,
+        !reading ? h('p', null, '执行端尚未同时报告会话占用和窗口容量。') : null) : h('p', null, '尚无 ' + source + ' 上下文用量报告。'),
       h('dl', null,
         h('dt', null, '当前模型'), h('dd', null, current.id ?? (current.limit ? '执行端当前模型' : '执行端默认')),
         h('dt', null, limitLabel), h('dd', null, current.limit ? `${numbers.format(current.limit)} tokens`

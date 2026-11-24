@@ -300,10 +300,12 @@ test('context ring updates during streaming, decreases when compacted and resets
   assert.equal(await ring.locator('.vc-context-meter').evaluate((el) => el.style.getPropertyValue('--vc-used')), '5%');
   usedTokens = 10000;
   await tooltip.getByText('10,000 / 20,000 tokens', { exact: true }).waitFor();
+  await tooltip.getByText('50%', { exact: true }).waitFor();
   assert.equal(await ring.locator('.vc-context-meter').evaluate((el) => el.style.getPropertyValue('--vc-used')), '50%');
   usedTokens = 2000;
   completed = true;
   await tooltip.getByText('2,000 / 20,000 tokens', { exact: true }).waitFor();
+  await tooltip.getByText('18,000 tokens', { exact: true }).waitFor();
   assert.equal(await ring.locator('.vc-context-meter').evaluate((el) => el.style.getPropertyValue('--vc-used')), '10%');
   await page.getByRole('button', { name: '新建对话', exact: true }).click();
   await ring.hover();

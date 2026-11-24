@@ -298,6 +298,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
         canSend: state !== 'running', turns: [{
           id: packet.turnId, prompt: packet.prompt, state, activity: [], reply: text,
           streaming: mode === 'chat', canStop: state === 'running',
+          ...(mode === 'chat' && { contextUsage: { usedTokens: text === opening ? 1000 : 6000, contextWindow: 20000 } }),
         }] } };
     }
     await page.evaluate(() => {
@@ -501,6 +502,16 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
     await page.getByRole('heading', { name: '正在生成的长回复', exact: true }).waitFor();
     await page.getByRole('heading', { name: '新到的流式段落', exact: true }).waitFor();
     if (!legacyBaseline) {
+      const ring = page.getByRole('img', { name: '上下文用量', exact: true });
+      const hoverCard = page.getByRole('tooltip', { name: '上下文用量', exact: true });
+      await ring.hover();
+      for (const text of ['6,000 / 20,000 tokens', '30%', '剩余窗口', '14,000 tokens']) {
+        await hoverCard.getByText(text, { exact: true }).waitFor();
+      }
+      await hoverCard.hover();
+      assert.equal(await hoverCard.isVisible(), true);
+      await page.mouse.move(4, 4);
+      await hoverCard.waitFor({ state: 'hidden' });
       assert.equal(transientRefreshFailure, true);
       assert.equal(after.length, 1);
       t.diagnostic('Automatic status recovery resumed the original stream without repeating its send.');
