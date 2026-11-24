@@ -22,7 +22,7 @@ export function readClaudeLimits(info) {
     })));
 }
 
-export function subscriptionWindows(limits) {
+export function subscriptionWindows(limits, unavailableCaption = '暂无数据') {
   const now = Date.now();
   return windows.map(([key, label]) => {
     const sample = limits?.[key];
@@ -30,15 +30,15 @@ export function subscriptionWindows(limits) {
     const remaining = available ? 100 - sample.usedPercent : 0;
     const percentage = Math.floor(remaining);
     const value = available ? (remaining > 0 && percentage === 0 ? '<1%' : `${percentage}%`) : '—';
-    const caption = available ? `剩余 ${value}` : '暂无数据';
+    const caption = available ? `剩余 ${value}` : unavailableCaption;
     const reset = available ? new Date(sample.resetsAt * 1000).toLocaleString('zh-CN') : '';
     const title = reset ? `${label} · ${caption} · ${reset} 重置` : `${label} · ${caption}`;
     return { key, label, available, remaining, value, caption, title };
   });
 }
 
-export function subscriptionMeter(h, limits, icon) {
-  const readings = subscriptionWindows(limits);
+export function subscriptionMeter(h, limits, icon, unavailableCaption) {
+  const readings = subscriptionWindows(limits, unavailableCaption);
   return h('span', { className: 'vc-quota-meter', title: readings.map(({ title }) => title).join('\n') },
     ...readings.map(({ key, label, available, remaining, caption }) =>
       h('span', { key, className: 'vc-quota-ring', 'data-window': key, 'data-available': available,

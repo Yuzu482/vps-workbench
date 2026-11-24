@@ -534,6 +534,17 @@ test('after restart a reserved request reconciles its original receipt without r
   assert.equal(f.catalogCalls.length, 2);
 });
 
+test('ordinary VPS subscription turns use the bridge that records quota', async (t) => {
+  const f = fixture(t);
+  const bridge = f.start();
+  for (const provider of ['codex', 'claude-sdk', 'claude']) {
+    const { projectMemory, ...request } = f.send(provider, '普通消息', null);
+    assert.equal((await bridge.request(request)).ok, true);
+  }
+  assert.deepEqual(f.sends.map(({ settings, current }) => [settings.provider, current]),
+    [['codex', true], ['claude-sdk', true], ['claude', false]]);
+});
+
 test('one opt-in learns and recalls personal preferences in uncategorized ordinary chats', async (t) => {
   const f = fixture(t);
   const bridge = f.start();

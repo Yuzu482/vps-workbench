@@ -119,6 +119,25 @@ class StreamControlTests(unittest.TestCase):
         yield {"id": 2, "result": {"thread": {"id": self.thread}}}
         yield {"id": 3, "result": {"turn": {"id": self.turn}}}
 
+    def test_codex_reads_subscription_windows_without_waiting_for_a_notification(self):
+        def frames(_):
+            yield {"id": 1, "result": {}}
+            yield {"id": 5, "result": {"rateLimits": {"limitId": "other"}, "rateLimitsByLimitId": {
+                "codex": {"limitId": "codex", "secondary": {
+                    "windowDurationMins": 10080, "usedPercent": 35, "resetsAt": 2000000000
+                }}
+            }}}
+            yield {"id": 2, "result": {"thread": {"id": self.thread}}}
+            yield {"id": 3, "result": {"turn": {"id": self.turn}}}
+            yield {"method": "turn/completed", "params": {"threadId": self.thread,
+                   "turn": {"id": self.turn, "status": "completed"}}}
+
+        driver = self.conversation()
+        with patch.object(self.stream, "send") as writes, patch.object(self.stream, "read_frames", frames):
+            self.assertEqual(driver.drive(object()), "complete")
+        self.assertEqual([call.args[1] for call in writes.call_args_list].count("account/rateLimits/read"), 1)
+        self.assertEqual(driver.reply.subscription_limits, {"weekly": {"usedPercent": 35, "resetsAt": 2000000000}})
+
     def test_stop_before_dispatch_never_starts_turn(self):
         def frames(_):
             yield {"id": 1, "result": {}}

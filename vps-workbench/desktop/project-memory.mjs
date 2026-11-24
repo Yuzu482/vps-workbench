@@ -379,7 +379,7 @@ export function createProjectMemoryBridge({ data, backend, extractor, access, on
         return { ok: false, code: 'invalid_request', message: 'Antigravity 的 MCP 服务须由工作流阶段授权。' };
       }
       let current = ['get', 'refresh', 'stop', 'steer', 'approval', 'design-history'].includes(body.op) ||
-        body.op === 'send' && body.mode === 'design';
+        body.op === 'send' && (body.mode === 'design' || ['codex', 'claude-sdk'].includes(body.settings?.provider));
       let staged;
       if (body.op === 'send' && !projectMemory && body.extensions?.memory?.length) {
         const assignment = readMembership(body);

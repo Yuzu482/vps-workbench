@@ -372,6 +372,9 @@ html[data-theme="dark"] body { color: #e6e3df; background: #25211e; }
 }
 .vc-quota-subscriptions h2 > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vc-quota-value { color: var(--vc-ink); font-variant-numeric: tabular-nums; }
+.vc-quota-source {
+  grid-column: 2 / -1; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .vc-quota-pages {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   font-variant-numeric: tabular-nums;

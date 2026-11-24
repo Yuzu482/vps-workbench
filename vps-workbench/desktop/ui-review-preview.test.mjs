@@ -172,11 +172,19 @@ test('subscription rings distinguish exhausted, unavailable and weekly-only obse
     if (route.request().postDataJSON().op !== 'get') return route.continue();
     const response = await route.fetch();
     const json = await response.json();
-    const turn = json.session?.turns.at(-1);
-    if (turn) turn.subscriptionLimits = {
-      fiveHour: { usedPercent: 92, resetsAt: 1 },
-      weekly: { usedPercent: 100, resetsAt: Math.floor(Date.now() / 1000) + 3600 },
-    };
+    const turns = json.session?.turns;
+    const turn = turns?.at(-1);
+    if (turn) {
+      const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+      const later = structuredClone(turn);
+      later.id = crypto.randomUUID();
+      later.subscriptionLimits = { weekly: { usedPercent: 5, resetsAt } };
+      turn.subscriptionLimits = {
+        fiveHour: { usedPercent: 92, resetsAt: 1 },
+        weekly: { usedPercent: 100, resetsAt },
+      };
+      turns.push(later);
+    }
     return route.fulfill({ response, json });
   });
   await (await sidebarButton(page, '纸间书店')).click();
@@ -198,6 +206,7 @@ test('subscription details fit the narrow view without scrolling and paginate ex
     getComputedStyle(element).overflowY === 'clip');
   await vpsTrigger.click();
   await details.getByRole('region', { name: 'Codex', exact: true }).waitFor();
+  await details.getByRole('region', { name: 'Antigravity', exact: true }).getByText('请在 CLI 查看 /usage').waitFor();
   assert.equal(await details.getByRole('region').count(), 4);
   assert.equal(await fits(), true);
   await page.keyboard.press('Escape');
@@ -215,6 +224,7 @@ test('subscription details fit the narrow view without scrolling and paginate ex
   await page.getByRole('button', { name: '本机 SDK', exact: true }).click();
   await localTrigger.click();
   await details.getByText('1 / 2', { exact: true }).waitFor();
+  await details.getByRole('region', { name: /配置 1/ }).getByText('API 按量计费').waitFor();
   assert.equal(await details.getByRole('region').count(), 4);
   assert.equal(await fits(), true);
   const next = details.getByRole('button', { name: '下一页', exact: true });

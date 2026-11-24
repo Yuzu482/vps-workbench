@@ -731,6 +731,8 @@ class Conversation:
                 if integer_id(identifier, 1) and self.reason == "initialize":
                     self.require_result(packet)
                     send(process, "initialized", {})
+                    if not self.extraction and "sdk" not in self.config:
+                        send(process, "account/rateLimits/read", {}, 5)
                     params = {"cwd": "/workspace", "approvalPolicy": "never", "sandbox": "read-only"}
                     if "workflowFiles" in self.config:
                         params["sandbox"] = "workspace-write"
@@ -773,6 +775,12 @@ class Conversation:
                 elif integer_id(identifier, 3) and self.dispatched:
                     self.turn = turn_identity(self.require_result(packet)["turn"]["id"], self.turn)
                     self.reply.observe_options(None, self.config.get("effort"))
+                elif integer_id(identifier, 5) and not self.extraction and "sdk" not in self.config:
+                    result = packet.get("result")
+                    if isinstance(result, dict) and "error" not in packet:
+                        buckets = result.get("rateLimitsByLimitId")
+                        codex = buckets.get("codex") if isinstance(buckets, dict) else None
+                        self.reply.observe_codex_limits(codex or result.get("rateLimits"))
                 elif integer_id(identifier, 4) and interrupted:
                     # Wait for queued completion. Never retry the write.
                     continue

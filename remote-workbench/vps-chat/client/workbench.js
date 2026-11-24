@@ -60,12 +60,16 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       'aria-label': '已配置的订阅额度' },
       entries.length ? h('div', { className: 'vc-quota-columns', 'aria-hidden': true },
         h('span', null, '剩余额度'), h('span', null, '5 小时'), h('span', null, '每周')) : null,
-      ...entries.slice(currentPage * perPage, (currentPage + 1) * perPage).map(({ target, label, icon }) =>
-        h('section', { key: target, 'aria-label': label },
+      ...entries.slice(currentPage * perPage, (currentPage + 1) * perPage).map(({ target, label, icon, unavailable }) => {
+        const readings = subscriptionWindows(samples[`${scope}:${target}`], unavailable);
+        return h('section', { key: target, 'aria-label': label },
           h('h2', null, menuIcon(h, icon), h('span', { title: label }, label)),
-          ...subscriptionWindows(samples[`${scope}:${target}`]).map(({ key, label: windowLabel, value, caption, title }) =>
-            h('span', { key, className: 'vc-quota-value', title, role: 'group',
-              'aria-label': `${windowLabel}额度，${caption}` }, value)))),
+          unavailable && readings.every(({ available }) => !available)
+            ? h('span', { className: 'vc-quota-source', title: unavailable }, unavailable)
+            : readings.map(({ key, label: windowLabel, value, caption, title }) =>
+              h('span', { key, className: 'vc-quota-value', title, role: 'group',
+                'aria-label': `${windowLabel}额度，${caption}` }, value)));
+      }),
       entries.length === 0 ? h('p', null, '尚未配置订阅执行端。') : null,
       totalPages > 1 ? h('div', { className: 'vc-quota-pages' },
         h('button', { type: 'button', className: 'vc-button', disabled: currentPage === 0,
@@ -701,28 +705,35 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
     const [subscriptionClock, setSubscriptionClock] = React.useState(Date.now);
     const subscriptionScope = localSdk ? 'local' : toolPreferences.key;
     const subscriptionKey = `${subscriptionScope}:${localSdk ? scope : providerId}`;
+    const unavailableQuota = (provider) => provider === 'claude' || (localSdk && (provider === 'codex' ||
+      (provider === 'claude-sdk' && local.profiles?.find(({ targetId }) => targetId === scope)?.authMode !== 'subscription')))
+      ? 'API 按量计费' : provider === 'antigravity' ? '请在 CLI 查看 /usage'
+        : provider === subscriptionProvider ? '请在终端查看 /usage' : undefined;
+    const activeQuotaNote = unavailableQuota(activeTool);
     const subscriptionEntries = localSdk
       ? (local.profiles ?? []).flatMap((profile) => {
         const backend = profile.backend ?? 'codex';
         if (backend === 'claude-sdk' && profile.authMode !== 'subscription') return [];
         const tool = tools.find(({ id }) => id === backend);
-        return tool ? [{ target: profile.targetId, label: `${tool.label} · ${profile.name}`, icon: tool.icon }] : [];
+        return tool ? [{ target: profile.targetId, label: `${tool.label} · ${profile.name}`, icon: tool.icon, unavailable: unavailableQuota(backend) }] : [];
       })
-      : configuredTools.filter(({ id }) => id !== 'claude').map(({ id, label, icon }) => ({ target: id, label, icon }));
+      : configuredTools.filter(({ id }) => id !== 'claude').map(({ id, label, icon }) => ({ target: id, label, icon, unavailable: unavailableQuota(id) }));
     React.useEffect(() => {
-      if (!scope || !subscriptionScope || !turns.some((turn) => turn.subscriptionLimits)) return;
-      const observed = Object.assign({}, ...turns.map((turn) => readSubscriptionLimits(turn.subscriptionLimits)));
-      if (!Object.keys(observed).length) return;
+      if (!scope || !subscriptionScope || activeQuotaNote || !turns.some((turn) => turn.subscriptionLimits)) return;
       setSubscriptionSamples((previous) => {
-        const merged = { ...previous[subscriptionKey] };
-        for (const [key, sample] of Object.entries(observed)) {
-          const before = merged[key];
-          if (!before || sample.resetsAt > before.resetsAt ||
-              (sample.resetsAt === before.resetsAt && sample.usedPercent >= before.usedPercent)) merged[key] = sample;
+        const prior = previous[subscriptionKey] ?? {};
+        const merged = { ...prior };
+        for (const turn of turns) {
+          for (const [key, sample] of Object.entries(readSubscriptionLimits(turn.subscriptionLimits))) {
+            const before = merged[key];
+            if (!before || sample.resetsAt > before.resetsAt ||
+                (sample.resetsAt === before.resetsAt && sample.usedPercent > before.usedPercent)) merged[key] = sample;
+          }
         }
+        if (Object.keys(merged).every((key) => merged[key] === prior[key])) return previous;
         return { ...previous, [subscriptionKey]: merged };
       });
-    }, [scope, subscriptionScope, subscriptionKey, turns]);
+    }, [scope, subscriptionScope, subscriptionKey, activeQuotaNote, turns]);
     React.useEffect(() => {
       const now = Date.now();
       const reset = Math.min(...Object.values(subscriptionSamples).flatMap((limits) =>
@@ -2348,7 +2359,8 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
       ariaLabel: localSdk ? t('切换本机执行端') : undefined,
       select: changeProvider, closeOnSelect: crossesSubscriptionView, docked: sidebarActions,
       decorateIcon: sidebarActions ? (icon) => subscriptionMeter(h,
-        activeTool && subscriptionSamples[`${subscriptionScope}:${localSdk ? scope : activeTool}`], icon) : undefined,
+        activeTool && !activeQuotaNote && subscriptionSamples[`${subscriptionScope}:${localSdk ? scope : activeTool}`],
+        icon, activeQuotaNote) : undefined,
       details: sidebarActions ? h(SubscriptionDetails, { key: subscriptionScope, entries: subscriptionEntries,
         samples: subscriptionSamples, scope: subscriptionScope }) : null,
     }) : null;
