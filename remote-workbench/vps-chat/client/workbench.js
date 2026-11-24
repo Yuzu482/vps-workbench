@@ -2551,7 +2551,7 @@ export function createWorkbench({ React, CodeBlock, writeClipboard, subscription
             openMaterials: design && chatEnabled && snapshot ? () => setMaterialsOpen(true) : undefined,
             materialsDisabled: waitingForReceipt, wideActions: Boolean(steerOffered || supplementDraft),
             mode, report, attached, selection: modelSelection, catalog, showModeIcon: sidebarActions, localSdk,
-            provider: connection?.provider, loadContextCatalog: sidebarActions ? loadModels : undefined,
+            provider: connection?.provider,
             accessButton: showingSubscription ? null : accessButton,
             memoryMode: memoryAvailable ? memoryIsolated ? t('独立上下文')
               : projectMemorySuppressed ? '项目记忆关闭' : automaticMemory ? automaticMemoryLabel : t('记忆') : null,

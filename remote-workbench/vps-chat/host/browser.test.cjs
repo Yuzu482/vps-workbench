@@ -1036,8 +1036,8 @@ test('VPS chat renders session history and recovers an uncertain send without re
 
     async function checkContextReport() {
       await contextControl.hover();
-      await contextTooltip.getByText('当前轮次的 VPS 报告', { exact: true }).waitFor();
-      for (const value of ['12,345 tokens', '128,000 tokens', '9.6%', 'fixture-visual'])
+      await contextTooltip.getByText('12,345 / 128,000 tokens', { exact: true }).waitFor();
+      for (const value of ['9.6%', '剩余 115,655 tokens'])
         assert.equal(await contextTooltip.getByText(value, { exact: true }).count(), 1);
       assert.equal(await contextTooltip.getByRole('progressbar', { name: '上下文占用' }).getAttribute('value'), '12345');
       await page.mouse.move(4, 4);
@@ -1098,8 +1098,8 @@ test('VPS chat renders session history and recovers an uncertain send without re
     assert.equal(composerFits, true);
     assert.equal(await contextControl.textContent(), '');
     await contextControl.hover();
-    await contextTooltip.getByText('较早轮次的 VPS 报告', { exact: true }).waitFor();
-    for (const value of ['12,345 tokens', '128,000 tokens', '9.6%'])
+    await contextTooltip.getByText('上一轮读数，等待本轮更新。', { exact: true }).waitFor();
+    for (const value of ['12,345 / 128,000 tokens', '9.6%'])
       assert.equal(await contextTooltip.getByText(value, { exact: true }).isVisible(), true);
     const tooltip = await contextTooltip.boundingBox();
     assert.ok(tooltip.x >= 0 && tooltip.x + tooltip.width <= 360, JSON.stringify(tooltip));

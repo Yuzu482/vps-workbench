@@ -215,7 +215,7 @@ test('model window prefers matching runtime data or a catalog and otherwise labe
   assert.equal(measured({ provider: 'antigravity', report: { usage: { contextWindow: 64000 } } }).limit, 64000);
 });
 
-test('context tooltip shows the selected model limit before sending and separates older usage', { timeout: 30_000 }, async (t) => {
+test('hover reads the current conversation without requests and keeps its reading when changing models', { timeout: 30_000 }, async (t) => {
   const page = await openPreview(t);
   const calls = [];
   await page.route('**/dsh-vps-chat/api/rpc', async (route) => {
@@ -230,15 +230,14 @@ test('context tooltip shows the selected model limit before sending and separate
   const ring = page.getByRole('img', { name: '上下文用量', exact: true });
   const tooltip = page.getByRole('tooltip', { name: '上下文用量', exact: true });
   await ring.hover();
-  await tooltip.getByText('64,000 tokens', { exact: true }).waitFor();
-  await tooltip.getByText('执行端目录', { exact: true }).waitFor();
+  await tooltip.getByText('尚无 VPS 上下文用量报告。', { exact: true }).waitFor();
+  assert.equal(calls.filter((op) => op === 'models').length, 0);
   assert.equal(await tooltip.getByRole('progressbar').count(), 0);
 
   await (await sidebarButton(page, '纸间书店')).click();
   await (await sidebarButton(page, '纸间书店 · 周末发布清单')).click();
   await ring.hover();
-  await tooltip.getByText('32,000 tokens', { exact: true }).waitFor();
-  await tooltip.getByText('执行端报告', { exact: true }).waitFor();
+  await tooltip.getByText('1,840 / 32,000 tokens', { exact: true }).waitFor();
 
   await page.getByRole('button', { name: '模型', exact: true }).click();
   const modelPanel = page.getByRole('dialog', { name: '模型', exact: true });
@@ -248,9 +247,8 @@ test('context tooltip shows the selected model limit before sending and separate
   await page.keyboard.press('Escape');
   await modelPanel.waitFor({ state: 'hidden' });
   await ring.hover();
-  await tooltip.getByText('128,000 tokens', { exact: true }).waitFor();
-  await tooltip.getByText('32,000 tokens', { exact: true }).waitFor();
   await tooltip.getByText('1,840 / 32,000 tokens', { exact: true }).waitFor();
+  await tooltip.getByText('沿用切换模型前的最后一次读数。', { exact: true }).waitFor();
   assert.equal(await ring.locator('.vc-context-meter').evaluate((el) => el.style.getPropertyValue('--vc-used')), '5.75%');
   assert.equal(calls.filter((op) => op === 'send').length, 0);
 });
@@ -305,7 +303,7 @@ test('context ring updates during streaming, decreases when compacted and resets
   usedTokens = 2000;
   completed = true;
   await tooltip.getByText('2,000 / 20,000 tokens', { exact: true }).waitFor();
-  await tooltip.getByText('18,000 tokens', { exact: true }).waitFor();
+  await tooltip.getByText('剩余 18,000 tokens', { exact: true }).waitFor();
   assert.equal(await ring.locator('.vc-context-meter').evaluate((el) => el.style.getPropertyValue('--vc-used')), '10%');
   await page.getByRole('button', { name: '新建对话', exact: true }).click();
   await ring.hover();
@@ -331,14 +329,14 @@ test('context tooltip distinguishes request occupancy from a turn token total', 
   const tooltip = page.getByRole('tooltip', { name: '上下文用量', exact: true });
   await (await sidebarButton(page, '纸间书店 · 周末发布清单')).click();
   await ring.hover();
-  await tooltip.getByText('最近一次模型调用的输入', { exact: true }).waitFor();
+  await tooltip.getByText('最近一次模型调用的输入 · 剩余 196,000 tokens', { exact: true }).waitFor();
   const progress = tooltip.getByRole('progressbar', { name: '输入占窗口比例' });
   assert.equal(await progress.getAttribute('value'), '4000');
   assert.equal(await progress.getAttribute('max'), '200000');
 
   await (await sidebarButton(page, '纸间书店 · 网站设计，设计会话')).click();
   await ring.hover();
-  await tooltip.getByText('该轮输入 token 合计', { exact: true }).waitFor();
+  await tooltip.getByText('该轮输入 token 合计 · 4,000 tokens', { exact: true }).waitFor();
   assert.equal(await tooltip.getByRole('progressbar').count(), 0);
 });
 

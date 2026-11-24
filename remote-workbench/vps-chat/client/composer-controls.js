@@ -38,6 +38,7 @@ export function reportedTurnSettings(turns, submitting, design = false) {
 }
 
 export const composerControlsCss = `
+  @property --vc-context-fill {syntax:"<percentage>"; inherits:false; initial-value:0%}
   [data-vps-chat] :is(.vc-composer,.vc-composer-panel,.vc-design-materials) {
     --vc-surface:#252d2a; --vc-canvas:#1d2521; --vc-ink:#e9eeeb; --vc-muted:#acbbb3;
     --vc-line:#3b4942; --vc-line-strong:#667970; --vc-hover:#33413a; --vc-tint:#374d42;
@@ -84,8 +85,10 @@ export const composerControlsCss = `
   [data-vps-chat] .vc-composer-add {font-size:19px; line-height:1; font-weight:500}
   [data-vps-chat] .vc-context-meter {
     width:13px; height:13px; flex:none; border-radius:50%;
-    background:conic-gradient(var(--vc-accent) var(--vc-used),var(--vc-line-strong) 0);
+    --vc-context-fill:var(--vc-used);
+    background:conic-gradient(var(--vc-accent) var(--vc-context-fill),var(--vc-line-strong) 0);
     mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 1px));
+    transition:--vc-context-fill var(--vc-popup-duration, 0ms) var(--vc-motion-curve, ease);
   }
   [data-vps-chat] .vc-option-effort {flex:none; color:var(--vc-muted); font-size:11px; font-weight:500}
   [data-vps-chat] .vc-compose-buttons {display:flex; flex:none; align-items:center; gap:5px; margin-inline-start:4px}
@@ -117,12 +120,14 @@ export const composerControlsCss = `
     position:fixed; inset:auto; margin:0; width:354px; max-width:calc(100vw - 20px);
     padding:14px; border-radius:14px; box-shadow:var(--vc-shadow); overscroll-behavior:contain;
   }
-  [data-vps-chat] .vc-composer-panel.vc-context-tooltip {width:306px; padding:11px 12px}
+  [data-vps-chat] .vc-composer-panel.vc-context-tooltip {width:244px; padding:11px 12px}
+  [data-vps-chat] .vc-context-tooltip .vc-composer-panel-heading {margin-bottom:8px}
   [data-vps-chat] .vc-context-reading {
-    display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 10px;
-    margin:0 0 7px; font-variant-numeric:tabular-nums;
+    display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:4px 8px;
+    margin:0 0 5px; font-variant-numeric:tabular-nums;
   }
   [data-vps-chat] .vc-context-reading > span {color:var(--vc-accent); font-weight:600}
+  [data-vps-chat] .vc-context-tooltip .vc-context-footnote {color:var(--vc-muted); font-size:11px; margin:5px 0 0}
   [data-vps-chat] .vc-settings.vc-composer-panel[data-kind=model] {width:300px; padding:10px 12px}
   [data-vps-chat] .vc-composer-panel-heading {display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:9px}
   [data-vps-chat] .vc-composer-panel::backdrop {background:transparent; pointer-events:none}
@@ -297,7 +302,7 @@ export function createComposerControls(React) {
 
   function Toolbar({ panel, open, openMaterials, materialsDisabled, available, mode, report, attached, selection, catalog,
     wideActions, showModeIcon, accessButton, hasPluginPrompts, templateLabel, memoryMode, historyButton, children, localSdk,
-    provider, loadContextCatalog }) {
+    provider }) {
     const tooltipId = React.useId();
     const tooltipRef = React.useRef(null);
     const dismissTimer = React.useRef(0);
@@ -318,7 +323,6 @@ export function createComposerControls(React) {
       setContextAnchor(anchor);
       const tooltip = tooltipRef.current;
       if (tooltip && !tooltip.matches(':popover-open')) tooltip.showPopover({ source: anchor });
-      if (!current.limit && !catalog?.models && !catalog?.loading && !catalog?.error) void loadContextCatalog?.();
     }
 
     function hideTooltip() {
@@ -335,7 +339,6 @@ export function createComposerControls(React) {
 
     const { usage } = report;
     const current = currentModelContext({ provider, selection, catalog, report });
-    const limitLabel = current.source === 'published' ? '上下文窗口上限（公开规格）' : '上下文窗口上限';
     const reading = usage?.contextWindow ? `${numbers.format(usage.usedTokens)} / ${numbers.format(usage.contextWindow)} tokens` : null;
     const contextTitle = reading ? `${reading} · ${occupancy(usage)}` : undefined;
     const used = usage?.contextWindow ? Math.min(100, usage.usedTokens * 100 / usage.contextWindow) : 0;
@@ -381,44 +384,33 @@ export function createComposerControls(React) {
         children),
       showTooltip ? h(Panel, {
         kind: 'context', tooltip: true, id: tooltipId, anchor: contextAnchor, close: clearTooltip, report, attached, mode, localSdk,
-        surfaceRef: tooltipRef, current, catalog, limitLabel, reading,
+        surfaceRef: tooltipRef, current, reading, changedModel: selection?.id && report.usageModel && selection.id !== report.usageModel,
         onPointerEnter: keepTooltip, onPointerLeave: dismissTooltipSoon,
       }) : null);
   }
 
-  function ContextDetails({ report, attached, design, localSdk, current, catalog, limitLabel, reading }) {
-    const { usage, usageModel, earlierUsage } = report;
+  function ContextDetails({ report, attached, design, localSdk, current, reading, changedModel }) {
+    const { usage, earlierUsage } = report;
     const percent = occupancy(usage);
     const source = localSdk ? t('本机执行端') : 'VPS';
     const limitSource = { runtime: '执行端报告', catalog: '执行端目录', published: '厂商公开规格', 'codex-default': 'Codex 公开默认值' }[current.source];
-    const separateWindow = usage?.contextWindow !== current.limit || report.usageModel !== current.id;
     return h(React.Fragment, null,
-      usage ? h(React.Fragment, null,
-        reading ? h('div', { className: 'vc-context-reading' }, h('strong', null, reading), h('span', null, percent)) : null,
-        h('dl', null,
-          h('dt', null, '数据来源'), h('dd', null, (earlierUsage ? '较早轮次的 ' : '当前轮次的 ') + source + ' 报告'),
-          h('dt', null, contextMetric(usage)), h('dd', null, `${numbers.format(usage.usedTokens)} tokens`),
-          separateWindow && usage.contextWindow ? h(React.Fragment, null, h('dt', null, '该读数的窗口'),
-            h('dd', null, `${numbers.format(usage.contextWindow)} tokens`)) : null,
-          reading ? h(React.Fragment, null,
-            h('dt', null, usage.kind === 'request_input' ? '扣除最近一次输入后' : '剩余窗口'),
-            h('dd', null, `${numbers.format(Math.max(0, usage.contextWindow - usage.usedTokens))} tokens`)) : null,
-          !usage.kind && usageModel && usageModel !== current.id ? h(React.Fragment, null, h('dt', null, '报告模型'), h('dd', null, usageModel)) : null),
-        percent ? h('progress', {
+      reading ? h(React.Fragment, null,
+        h('div', { className: 'vc-context-reading' }, h('strong', null, reading), h('span', null, percent)),
+        h('progress', {
           'aria-label': usage.kind === 'request_input' ? '输入占窗口比例' : '上下文占用', max: usage.contextWindow, value: Math.min(usage.usedTokens, usage.contextWindow),
           'aria-valuetext': reading,
-        }) : null,
-        earlierUsage ? h('p', null, '当前轮次尚未报告用量。') : null,
-        !reading ? h('p', null, '执行端尚未同时报告会话占用和窗口容量。') : null) : h('p', null, '尚无 ' + source + ' 上下文用量报告。'),
-      h('dl', null,
-        h('dt', null, '当前模型'), h('dd', null, current.id ?? (current.limit ? '执行端当前模型' : '执行端默认')),
-        h('dt', null, limitLabel), h('dd', null, current.limit ? `${numbers.format(current.limit)} tokens`
-          : catalog?.loading ? '正在读取模型目录…' : '执行端尚未确认'),
-        limitSource ? h(React.Fragment, null, h('dt', null, '上限来源'), h('dd', null, limitSource)) : null,
-        current.published && current.published !== current.limit ? h(React.Fragment, null,
-          h('dt', null, '厂商公开规格'), h('dd', null, `${numbers.format(current.published)} tokens`)) : null),
-      design ? h('dl', null, h('dt', null, '待发送设计资料'),
-        h('dd', null, attached?.error || (attached?.labels?.length ? attached.labels.join('、') : '未选中'))) : null);
+        }),
+        h('p', { className: 'vc-context-footnote' }, `${usage.kind === 'request_input' ? '最近一次模型调用的输入 · ' : ''}剩余 ${numbers.format(Math.max(0, usage.contextWindow - usage.usedTokens))} tokens`),
+        changedModel ? h('p', { className: 'vc-context-footnote' }, '沿用切换模型前的最后一次读数。')
+          : earlierUsage ? h('p', { className: 'vc-context-footnote' }, '上一轮读数，等待本轮更新。') : null)
+        : h(React.Fragment, null,
+          h('p', null, '尚无 ' + source + ' 上下文用量报告。'),
+          usage ? h('p', { className: 'vc-context-footnote' }, `${contextMetric(usage)} · ${numbers.format(usage.usedTokens)} tokens`) : null,
+          current.limit ? h('p', { className: 'vc-context-footnote' },
+            `${limitSource} · 窗口上限 ${numbers.format(current.limit)} tokens`) : null),
+      design && (attached?.error || attached?.labels?.length) ? h('p', { className: 'vc-context-footnote' },
+        attached.error || `待发送设计资料 · ${attached.labels.join('、')}`) : null);
   }
 
   function ModeChoices({ mode, designAvailable, canChangeMode, empty, change }) {
@@ -575,7 +567,7 @@ export function createComposerControls(React) {
     modelAllowed, catalog, selection, toolDefault, followsTool, chooseModel, retryModels, advanced,
     access, accessProvider, accessBusy, changeAccess, pluginPrompts, insertPluginPrompt, templateLabel,
     memoryIsolated, automaticMemory, projectMemorySuppressed, memoryBusy, memoryStartsNew, changeMemoryMode, openMemorySettings,
-    tooltip = false, id, surfaceRef, onPointerEnter, onPointerLeave, localSdk, current, limitLabel, reading }) {
+    tooltip = false, id, surfaceRef, onPointerEnter, onPointerLeave, localSdk, current, reading, changedModel }) {
     const localRef = React.useRef(null);
     const ref = surfaceRef ?? localRef;
     React.useLayoutEffect(() => {
@@ -650,7 +642,7 @@ export function createComposerControls(React) {
     }) : h(React.Fragment, null,
       h('div', { className: 'vc-composer-panel-heading' },
         h('h2', { className: 'vc-menu-label' }, menuIcon(h, kind === 'mode' ? 'effort' : ['plugins', 'memory'].includes(kind) ? 'library' : kind), name), closeButton),
-      tooltip ? h(ContextDetails, { report, attached, design: mode === 'design', localSdk, current, catalog, limitLabel, reading })
+      tooltip ? h(ContextDetails, { report, attached, design: mode === 'design', localSdk, current, reading, changedModel })
         : kind === 'access' ? h(AccessChoices, { access, provider: accessProvider, busy: accessBusy, change: changeAccess, localSdk })
           : kind === 'memory' ? h(MemoryChoices, { isolated: memoryIsolated, automatic: automaticMemory,
             projectMemorySuppressed, busy: memoryBusy,

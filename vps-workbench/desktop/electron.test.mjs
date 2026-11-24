@@ -505,7 +505,7 @@ test('packaged Windows workbench loads independently, runs the UI, and restores 
       const ring = page.getByRole('img', { name: '上下文用量', exact: true });
       const hoverCard = page.getByRole('tooltip', { name: '上下文用量', exact: true });
       await ring.hover();
-      for (const text of ['6,000 / 20,000 tokens', '30%', '剩余窗口', '14,000 tokens']) {
+      for (const text of ['6,000 / 20,000 tokens', '30%', '剩余 14,000 tokens']) {
         await hoverCard.getByText(text, { exact: true }).waitFor();
       }
       await hoverCard.hover();
